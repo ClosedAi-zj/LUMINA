@@ -1,0 +1,118 @@
+%% LUMINA 关键调用时序图（与架构设计文档 §6 同步维护）
+
+%% ---------- 1. 启动与握手 ----------
+sequenceDiagram
+    autonumber
+    participant U as Electron 主进程
+    participant B as EngineBridge
+    participant E as lumina-engine.exe
+    participant DB as SQLite
+    participant X as XmpService
+
+    U->>B: app 启动
+    B->>E: spawn（stdin/stdout 管道，--home 参数）
+    E->>E: 初始化日志/配置/线程池
+    E->>DB: 打开 lumina.db（WAL，schema 迁移检查）
+    U->>B: initialize(uiVersion)
+    B->>E: {"id":1,"method":"system.initialize"}
+    E-->>B: result{protocolVersion, capabilities, homeDir}
+    U->>E: library.getStats / xmp.migrationStatus
+    E-->>U: 图库概览 + SchemaVersion 分布
+    E->>X: 启动兜底：全库 mtime 扫描（后台 job）
+    E->>DB: health.scanFull（后台，结果写 health 表）
+    E-->>U: event.fs.changed / event.health.issue（如有异常，UI 红点）
+    U->>E: library.queryPhotos(首屏 200 张)
+    E-->>U: QueryResult
+    U->>E: thumb.ensureBatch(ids, 320)
+    E-->>U: {state:"pending"} → 逐张 event.thumb.ready{path}
+    Note over U,E: 引擎崩溃时：B 检测 exit → 自动重启 → 重放 initialize → UI 从 sidecar 重读参数
+
+%% ---------- 2. 导入流程 ----------
+sequenceDiagram
+    autonumber
+    participant UI as 导入向导 UI
+    participant E as 引擎
+    participant F as 文件系统
+    participant DB as SQLite
+
+    UI->>E: system.listVolumes()
+    E-->>UI: 可移动卷列表（SD 卡卡）
+    UI->>E: import.scanSource(source)
+    E-->>UI: {jobId}
+    loop 扫描中
+        E->>F: 枚举文件 + 存在性预检 + MD5 预重 + RAW/JPG 配对
+        E-->>UI: event.job.progress{progress, detail}
+    end
+    E-->>UI: event.job.completed{totalFiles, byFormat, duplicates, unreadable[]}
+    UI->>E: import.checkTarget(targetPath, requiredBytes)
+    E-->>UI: {freeBytes, warning}（<110% 黄条预警）
+    UI->>E: import.start(重命名模板/双备份/MD5/去重/RAW+JPG 配对/导入后动作)
+    E-->>UI: {jobId}
+    loop 逐文件
+        E->>F: copy → temp+rename → NAS 第二目录备份 → MD5 校验
+        E->>DB: INSERT photos + folders + FTS5 索引
+        E-->>UI: event.import.fileResult{status: ok|duplicate|failed}
+        E-->>UI: event.job.progress{当前文件/速率/ETA}
+    end
+    E-->>UI: event.job.completed{成功 N · 跳过重复 N · 失败 N}
+    Note over E,DB: 单文件失败不中断整批；源整夹不可读 → 1003/4003 → UI 出「重定位/孤儿/回填」三选项
+    opt postActions
+        UI->>E: presets.apply(风光·基础) / 跳转精选模式
+    end
+
+%% ---------- 3. 修图参数变更 → 重渲染 ----------
+sequenceDiagram
+    autonumber
+    participant DV as 修图台 UI
+    participant GL as WebGL 近似渲染器
+    participant E as 引擎
+    participant S as EditSession（内存）
+    participant X as sidecar 文件
+
+    DV->>E: edit.beginSession(photoId)
+    E->>S: 创建会话（从 xmp.read 载入 params）
+    E-->>DV: {sessionId, params, revision}
+    DV->>E: preview.getBase(photoId)
+    E-->>DV: {path(解码底图), source:"libraw"}
+    loop 每次滑块拖动
+        DV->>GL: patch 参数 → GPU 逐项近似重渲染（不重新解码）
+        DV->>E: edit.setParams{patch, commitHistory:false}
+        E-->>DV: {params, revision}
+    end
+    DV->>E: edit.setParams{commitHistory:true}（松手/段结束）
+    E->>S: push 历史栈
+    Note over E,X: 500ms 防抖后落盘（per-photo 写队列）
+    E->>X: 原子写：temp + rename（只改本次编辑字段，他方命名空间字节保留）
+    X-->>E: 新 mtime
+    E-->>DV: （无事件；UI 顶栏「参数已写入 XMP」指示灯由写响应驱动）
+    DV->>E: edit.undo / edit.redo（历史逐级回退）
+    DV->>E: edit.endSession{flush:true}（切图/关图强制 flush）
+    Note over DV: 切换 快速↔专业 不调引擎：同一 params，仅控件呈现变化
+
+%% ---------- 4. 导出流程 ----------
+sequenceDiagram
+    autonumber
+    participant UI as 导出中心 UI
+    participant E as 引擎
+    participant R as 渲染管线
+    participant F as 文件系统
+
+    UI->>E: export.createJob{photoIds, spec(格式/长边/色彩空间/水印/命名模板)}
+    E-->>UI: {jobId}
+    loop 每张照片
+        E->>R: raw.decode(full) → LibRaw 解码 → sRGB 线性像素
+        R->>R: 应用 EditParams 烧录（曝光/曲线/蒙版/降噪…）
+        R->>R: 水印合成 + 命名模板 + 格式编码（stb: jpg/png/tiff；psd 带图层写分层结构）
+        R->>F: 原子写产物
+        E-->>UI: event.job.progress{progress, etaMs}
+    end
+    E-->>UI: event.job.completed{outputs:[{photoId, path}]}
+    opt 失败重试
+        UI->>E: export.retryJob{jobId}
+    end
+    opt Web 画廊交付
+        UI->>E: gallery.publish{albumId, password, 30 天}
+        E->>F: 生成静态画廊站点 {home}/gallery/{token}/
+        E-->>UI: {token, previewUrl(localhost), expiresAt}
+        Note over UI: 客户收藏回传 = gallery.importFeedback(收藏 JSON 数据包)
+    end

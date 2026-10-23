@@ -1,0 +1,273 @@
+// LUMINA 引擎入口：组装服务 → 注册方法 → 握手 → 进入 stdio JSON-RPC 主循环
+// 启动即握手、无残留状态（被 kill 后由外部重启，参数以 sidecar 为准天然可恢复）
+#include <atomic>
+#include <cstdio>
+#include <cstring>
+#include <chrono>
+#include <exception>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include "core/config.h"
+#include "core/job_manager.h"
+#include "core/logger.h"
+#include "core/str_util.h"
+#include "core/thread_pool.h"
+#include "db/album_dao.h"
+#include "db/database.h"
+#include "db/fts_indexer.h"
+#include "db/health_dao.h"
+#include "db/photo_dao.h"
+#include "edit/edit_session.h"
+#include "edit/virtual_copy.h"
+#include "health/backup.h"
+#include "health/db_backup.h"
+#include "health/scanner.h"
+#include "health/watcher.h"
+#include "import/importer.h"
+#include "library/query_engine.h"
+#include "mock/generator.h"
+#include "raw/raw_decoder.h"
+#include "rpc/methods.h"
+#include "rpc/rpc_server.h"
+#include "rpc/version.h"
+#include "thumb/thumbnail_service.h"
+#include "xmp/migrator.h"
+#include "xmp/xmp_service.h"
+
+using namespace lumina;
+
+namespace {
+
+void printUsage() {
+  fprintf(stderr,
+          "LUMINA engine %s (protocol %s)\n"
+          "usage: lumina-engine [--home <dir>] [--help]\n"
+          "  --home <dir>   运行时主目录（db/cache/logs 均在其下），默认 %%USERPROFILE%%/.lumina\n"
+          "  --version      打印版本\n",
+          kEngineVersion, kProtocolVersion);
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  std::string home;
+  for (int i = 1; i < argc; ++i) {
+    std::string arg = argv[i];
+    if (arg == "--help" || arg == "-h") {
+      printUsage();
+      return 0;
+    }
+    if (arg == "--version" || arg == "-v") {
+      printf("lumina-engine %s (protocol %s)\n", kEngineVersion, kProtocolVersion);
+      return 0;
+    }
+    if (arg == "--home" && i + 1 < argc) {
+      home = argv[++i];
+    } else if (arg.rfind("--home=", 0) == 0) {
+      home = arg.substr(7);
+    }
+  }
+  if (home.empty()) {
+    const char* profile = getenv("USERPROFILE");
+    home = profile ? std::string(profile) + "/.lumina" : std::string("./lumina-home");
+  }
+  home = normalizePath(home);
+
+  // ---- 1. 配置与日志 ----
+  core::Config config;
+  std::string initErr;
+  if (!config.init(home, &initErr)) {
+    fprintf(stderr, "[engine] fatal: %s\n", initErr.c_str());
+    return 2;
+  }
+  Logger::instance().init(config.logsDir(), LogLevel::kInfo);
+  logInfo("main", "LUMINA engine " + std::string(kEngineVersion) + " starting, home=" + home);
+  logInfo("main", "protocol " + std::string(kProtocolVersion) + ", sqlite " +
+                      std::string(sqlite3_libversion()));
+
+  // ---- 2. 单实例锁（同 home 只允许一个引擎） ----
+  std::string lockErr;
+  if (!config.acquireLock(&lockErr)) {
+    logError("main", lockErr);
+    return 3;
+  }
+
+  // ---- 3. 数据库（WP-A2：打开前自愈——主库损坏则从最新备份恢复） ----
+  {
+    bool recovered = false;
+    std::string recErr;
+    if (!health::DbBackupService::recoverIfCorrupt(
+            config.dbPath(), config.backupsDir(), &recovered, &recErr)) {
+      // 损坏且无备份：不吞，记日志后照常走 open，让 open 给出原始错误（零静默）
+      logError("main", "db recovery failed: " + recErr);
+    } else if (recovered) {
+      logWarn("main", "db was corrupt and has been restored from backup, continuing startup");
+    }
+  }
+  db::Database database;
+  std::string dbErr;
+  if (!database.open(config.dbPath(), &dbErr)) {
+    logError("main", "database open failed: " + dbErr);
+    config.releaseLock();
+    return 4;
+  }
+  if (!database.runMigrations(&dbErr)) {
+    logError("main", "schema migration failed: " + dbErr);
+    database.close();
+    config.releaseLock();
+    return 4;
+  }
+
+  // ---- 4. 服务装配 ----
+  core::ThreadPool pool(std::thread::hardware_concurrency() > 2
+                            ? std::thread::hardware_concurrency() - 1
+                            : 2);
+  rpc::Dispatcher dispatcher;
+  rpc::RpcServer server(&dispatcher);
+
+  JobManager jobs(&pool, server.notifyFn());
+
+  db::PhotoDao photos(&database);
+  db::AlbumDao albums(&database);
+  db::HealthDao health(&database);
+  db::FtsIndexer fts(&database);
+  library::QueryEngine query(&config, &database, &photos);
+  raw::RawDecoder decoder;
+  xmp::XmpService xmpService(&config, &photos, &database, &pool);
+  xmp::XmpMigrator migrator(&config, &photos, &database);
+  edit::EditSessionManager sessions(&xmpService, &photos);
+  edit::VirtualCopyService vcopy(&config, &database, &photos, &xmpService);
+  health::HealthScanner healthScanner(&config, &photos, &health, server.notifyFn());
+  health::BackupService backup(&config, &photos, &database, server.notifyFn());
+  import::Importer importer(&config, &photos, &database, &fts, &decoder, &xmpService,
+                            server.notifyFn());
+  mock::MockGenerator mockGenerator(&config, &photos, &database, &fts, &health, &decoder,
+                                    &xmpService);
+  thumb::ThumbnailService thumbs(&config, &photos, &pool,
+                                 [&server](int64_t photoId, int size, const std::string& path) {
+                                   json::JsonValue params = json::JsonValue::objectValue();
+                                   params.setItem("photoId", photoId);
+                                   params.setItem("size", size);
+                                   params.setItem("path", path);
+                                   server.sendNotification("event.thumb.ready", params);
+                                 });
+
+  rpc::EngineServices services;
+  services.config = &config;
+  services.db = &database;
+  services.photos = &photos;
+  services.albums = &albums;
+  services.health = &health;
+  services.fts = &fts;
+  services.query = &query;
+  services.thumbs = &thumbs;
+  services.decoder = &decoder;
+  services.xmp = &xmpService;
+  services.migrator = &migrator;
+  services.sessions = &sessions;
+  services.vcopy = &vcopy;
+  services.importer = &importer;
+  services.healthScanner = &healthScanner;
+  services.backup = &backup;
+  services.mock = &mockGenerator;  // 曾遗漏：mock.generate 解引用空指针导致 worker 线程崩溃
+  services.jobs = &jobs;
+  services.server = &server;
+  services.requestShutdown = [&server]() { server.requestShutdown(); };
+
+  // ---- 5. 文件系统实时监测（自动开启） ----
+  health::HealthWatcher watcher(&config, &photos, &health, server.notifyFn());
+  services.watcher = &watcher;
+  {
+    std::string watchErr;
+    watcher.start(&watchErr);
+  }
+
+  // ---- 6. 预置数据 + 方法注册 ----
+  rpc::seedPresetData(&services);
+  rpc::registerMethods(&dispatcher, &services);
+
+  // ---- 6.5 DB 每日自动备份（WP-A2）：启动即补当日快照 + 守护线程跨天补份 ----
+  health::DbBackupService dbBackup(&config, &database);
+  {
+    std::string outPath;
+    std::string bErr;
+    if (dbBackup.backupNow(&outPath, &bErr)) {
+      logInfo("main", "startup db backup: " + outPath);
+    } else {
+      logWarn("main", "startup db backup failed: " + bErr);
+    }
+    dbBackup.startDaily();
+  }
+
+  // ---- 7. 启动兜底：XMP 版本迁移（静默自动升级 + 记录） ----
+  {
+    int migrated = 0;
+    std::string migrateErr;
+    if (migrator.migrateAll(&migrated, &migrateErr)) {
+      logInfo("main", "xmp migration pass done, scanned=" + std::to_string(migrated));
+    } else {
+      logWarn("main", "xmp migration pass failed: " + migrateErr);
+    }
+  }
+
+  logInfo("main", "engine ready, " + std::to_string(dispatcher.methodNames().size()) +
+                      " methods registered");
+  fflush(stdout);
+
+  // ---- 7.5 诊断看门狗：主循环状态变化/心跳落日志（挂死定位用） ----
+  std::atomic<bool> watchdogStop{false};
+  std::thread watchdog([&]() {
+    int last = -1;
+    int beats = 0;
+    while (!watchdogStop.load()) {
+      for (int i = 0; i < 30 && !watchdogStop.load(); ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      if (watchdogStop.load()) break;
+      int st = server.loopState();
+      ++beats;
+      if (st != last || beats % 6 == 0) {
+        logInfo("watchdog", "loopState=" + std::to_string(st) + " shutdown=" +
+                                std::to_string(server.isShuttingDown() ? 1 : 0) +
+                                " poolPending=" + std::to_string(pool.pendingCount()));
+        last = st;
+      }
+    }
+  });
+  watchdog.detach();
+
+  // ---- 8. 主循环 ----
+  int exitCode = server.run();
+
+  // ---- 9. 优雅退出：flush sidecar / 停止监测 ----
+  watchdogStop.store(true);
+  logInfo("main", "shutting down, pool pending=" + std::to_string(pool.pendingCount()));
+  sessions.shutdown();
+  logInfo("main", "cleanup: sessions flushed");
+  jobs.shutdown();
+  logInfo("main", "cleanup: jobs cancelled");
+  // 退出前再补一份当日快照（WP-A2）：首启快照是空库，会话内新增数据必须落进当日备份，
+  // 否则"损坏→恢复"会回退到空库（本轮 A2 验证抓到的真实缺陷）。
+  {
+    std::string outPath;
+    std::string bErr;
+    if (dbBackup.backupNow(&outPath, &bErr)) {
+      logInfo("main", "shutdown db backup: " + outPath);
+    } else {
+      logWarn("main", "shutdown db backup failed: " + bErr);
+    }
+  }
+  dbBackup.stopDaily();
+  logInfo("main", "cleanup: db backup thread stopped");
+  watcher.stop();
+  logInfo("main", "cleanup: watcher stopped");
+  pool.shutdown();
+  logInfo("main", "cleanup: pool joined");
+  database.close();
+  logInfo("main", "cleanup: db closed");
+  config.releaseLock();
+  logInfo("main", "cleanup: lock released");
+  Logger::instance().shutdown();
+  return exitCode;
+}

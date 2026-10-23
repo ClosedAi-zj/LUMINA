@@ -1,0 +1,274 @@
+%% LUMINA 引擎侧核心类图（C++17，与架构设计文档 §5 同步维护）
+classDiagram
+    direction TB
+
+    %% ===== RPC 层 =====
+    class RpcServer {
+        -FILE* stdin
+        -FILE* stdout
+        -int64_t nextFrameCap
+        +run() int
+        +sendNotification(method, paramsJson)
+        +sendResponse(id, resultJson)
+        +sendError(id, code, msg, dataJson)
+    }
+    class Dispatcher {
+        -map~string, Handler~ handlers_
+        +registerMethod(name, handler)
+        +dispatch(request) Response
+    }
+    class FrameCodec {
+        +encode(payload) bytes$
+        +decode(buffer) Frame$
+    }
+    class JsonValue {
+        +parse(text) JsonValue$
+        +serialize() string
+        +operator[](key) JsonValue&
+    }
+    RpcServer *-- FrameCodec : 帧编解码
+    RpcServer --> Dispatcher : 分发
+    Dispatcher --> JsonValue : 载荷解析/序列化
+
+    %% ===== 基础设施 =====
+    class ThreadPool {
+        -vector~thread~ workers_
+        -queue~Task~ queue_
+        +submit(task) future
+    }
+    class JobManager {
+        -map~int64,Job~ jobs_
+        +start(kind, task) jobId
+        +cancel(jobId) bool
+        +progress(jobId, pct, detail)
+        +onProgress callback
+    }
+    class Config {
+        +homeDir Path
+        +libraryRoots vector~Path~
+        +backupTarget Path
+        +load() +save()
+    }
+    class Logger {
+        +info(module, msg)
+        +warn(module, msg)
+        +error(module, msg)
+    }
+    JobManager --> ThreadPool : 长任务执行
+    JobManager --> RpcServer : 进度/完成通知
+
+    %% ===== 数据层 =====
+    class Database {
+        -sqlite3* db_
+        +open(path) +migrate()
+        +prepare(sql) Stmt
+        +exec(sql)
+    }
+    class PhotoDao {
+        +query(filter, sort, page) QueryResult
+        +search(text, page) QueryResult
+        +getById(id) PhotoRecord
+        +upsert(record) int64
+        +updateFlags(ids, patch)
+        +softRemove(ids) +restore(ids)
+        +facets(filter) FacetResult
+        +timeline(filter) vector~MonthBucket~
+    }
+    class FtsIndexer {
+        +indexPhoto(photo)
+        +rebuildAll()
+    }
+    class AlbumDao {
+        +list(kind) +create(name,kind)
+        +addPhotos +removePhotos +reorder
+    }
+    class HealthDao {
+        +upsertIssue(issue) +listIssues(kind,page)
+        +resolve(issueId, action)
+        +counts() HealthCounts
+    }
+    Database --> PhotoDao
+    Database --> AlbumDao
+    Database --> HealthDao
+    PhotoDao --> FtsIndexer : 写入联动
+
+    %% ===== 元数据 / XMP =====
+    class XmpDocument {
+        -string rawPacket
+        -vector~Span~ untouchedSpans_
+        +parse(bytes) XmpDocument$
+        +setField(ns, name, value)
+        +getField(ns, name) optional~string~
+        +serialize() bytes  %% 未触碰区间逐字节拼接
+    }
+    class XmpMapper {
+        +toParams(doc) EditParams$   %% crs:+lumina: 合并
+        +applyParams(doc, params)   %% 仅写本次编辑字段
+        +readExposureRamp(doc) ExposureRamp  %% lrt: 兼容通道
+    }
+    class XmpService {
+        -map~int64,mtimes~ knownMtimes_
+        -writeQueue per-photo
+        +read(photoId) ReadResult
+        +write(photoId, params) Mtime
+        +checkExternal(photoId) bool
+    }
+    class ExifReader {
+        +readJpegExif(path) ExifData$
+        +extractGps(path) GeoPoint$
+    }
+    class Migrator {
+        +scanDistribution() map
+        +migrate(photoId) bool  %% 静默自动 + 记录
+    }
+    XmpService --> XmpDocument : 解析/编辑
+    XmpService --> XmpMapper : 模型映射
+    XmpService --> Migrator : SchemaVersion 升级
+
+    %% ===== RAW / 影像 =====
+    class RawDecoder {
+        -libraw_data_t ctx
+        +decode(path, scale) DecodeResult$  %% LibRaw → sRGB
+        +readMetadata(path) RawMeta$
+    }
+    class EmbeddedProxy {
+        +extract(path) JpegBytes$  %% RW2 内嵌 JPEG fallback
+    }
+    class ThumbnailService {
+        -LRUCache cache
+        +ensureBatch(ids, size)
+        +generate(photo) Path  %% 解码/提取 → stb resize → JPEG 落盘
+    }
+    class Imaging {
+        +resize +encodeJpeg +encodePng
+        +histogram(pixels) Histogram$
+    }
+    RawDecoder --> Imaging
+    ThumbnailService --> RawDecoder : 代理缺失时同步解码
+    ThumbnailService --> EmbeddedProxy : RW2 内嵌 JPEG 优先
+    ThumbnailService --> Imaging : 缩放/编码
+
+    %% ===== 会话 / 编辑 =====
+    class EditSession {
+        -int64 sessionId
+        -EditParams params
+        -int revision
+        -HistoryStack history
+        +applyPatch(patch, commitHistory) Params
+        +undo() +redo() +flush()
+    }
+    class SessionManager {
+        -map~int64,EditSession~ sessions_
+        +begin(photoId) sessionId
+        +end(sessionId, flush)
+        -DebounceTimer 500ms 写 sidecar
+    }
+    class VirtualCopyService {
+        +create(photoId, name) vcopyId
+        +list(photoId)
+    }
+    SessionManager --> EditSession
+    SessionManager --> XmpService : 防抖落盘
+
+    %% ===== 业务服务 =====
+    class ImportService {
+        +scanSource(source) jobId
+        +checkTarget(target, bytes)
+        +start(options) jobId
+        +resolveMissingFolder(path, action)
+    }
+    class HealthService {
+        +scanFull() jobId
+        +verifyPhotos(ids) jobId
+        +restoreFromBackup(photoId) jobId
+        -Watcher watcher 实时监测
+    }
+    class ExportService {
+        +createJob(photoIds, spec) jobId
+        -burnParams(pixels, params) %% 参数烧录
+        -applyWatermark() -applyNaming()
+    }
+    class TimelapseService {
+        +listSequences() +getSequence(seqId)
+        +analyzeFlicker(seqId) jobId
+        +setExposureRamp(seqId, keyframes)
+        +render(seqId, spec) jobId
+    }
+    class HdrService {
+        +detectBracketGroups(filter)
+        +composite(groupId, opts) jobId
+        -aligner -merger(曝光合并+鬼影消除)
+    }
+    class DenoiseService {
+        +apply(photoId, strength, mask) jobId  %% NLM + 亮度蒙版
+        +preview(photoId, strength, rect) Path
+    }
+    class MapService {
+        +getLocations(viewport, zoom) ClusterList$
+        +setPhotoLocation(ids, geo)  %% 写 sidecar exif: 命名空间
+        +toggleFavorite(locationId, fav)
+    }
+    class GalleryService {
+        +publish(albumId, password, days) PublishResult
+        +revoke(albumId) +importFeedback(albumId, path)
+        -generateStaticSite()
+    }
+    class MockGenerator {
+        +generate(spec) jobId  %% 18192 条 + DNG 影像 + sidecar 同分布
+        +status() MockStatus
+        -runSelfTest() SelfTestResult  %% L1 判定：raw.selfTest
+    }
+    class ImageSynth {
+        +render(style, w, h) RgbBuffer$  %% 天空渐变/山体/雾/建筑/噪声
+    }
+    class DngWriter {
+        +write(path, cfa16, w, h, exif, previewJpeg)  %% TIFF-EP: IFD0+SubIFD+CFA 标签+16bit Strip
+    }
+    class SidecarSynth {
+        +build(photoSeed) XmpBytes$  %% crs: 全字段 + 蒙版 83.8% + lrt: + lumina:
+    }
+    MockGenerator --> ImageSynth
+    MockGenerator --> DngWriter
+    MockGenerator --> SidecarSynth
+    MockGenerator --> RawDecoder : selfTest 走真解码
+    class LibraryQuery {
+        +queryPhotos(filter, sort, page)
+        +folderTree() +timeline(filter)
+        +smartCollections()
+    }
+    LibraryQuery --> PhotoDao
+    LibraryQuery --> AlbumDao
+
+    ImportService --> PhotoDao : 入库
+    ImportService --> XmpService : 预设写 sidecar
+    ImportService --> HealthService : MD5 校验联动
+    HealthService --> HealthDao
+    ExportService --> RawDecoder : 全质量解码
+    ExportService --> Imaging : 编码
+    ExportService --> XmpService : 读参数
+    TimelapseService --> XmpService : ExposureRamp / 逐帧参数
+    TimelapseService --> RawDecoder : 帧解码
+    HdrService --> RawDecoder
+    DenoiseService --> RawDecoder
+    MapService --> XmpService : GPS 反向写入
+    GalleryService --> AlbumDao : 画册数据
+    MockGenerator --> PhotoDao
+    MockGenerator --> XmpService : 生成同分布 sidecar
+
+    %% ===== 编排 =====
+    Dispatcher --> LibraryQuery
+    Dispatcher --> ThumbnailService
+    Dispatcher --> XmpService
+    Dispatcher --> SessionManager
+    Dispatcher --> ImportService
+    Dispatcher --> HealthService
+    Dispatcher --> ExportService
+    Dispatcher --> TimelapseService
+    Dispatcher --> HdrService
+    Dispatcher --> DenoiseService
+    Dispatcher --> MapService
+    Dispatcher --> GalleryService
+    Dispatcher --> MockGenerator
+    Dispatcher --> Config
+    Dispatcher --> JobManager
+```

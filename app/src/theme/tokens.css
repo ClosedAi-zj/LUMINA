@@ -1,0 +1,78 @@
+/* LUMINA 设计令牌 v1.0.0 · 引自 lumina-dev-handoff/design-tokens.css（单一来源副本）。
+   根元素默认 = Dark；切浅色时根元素加 data-theme="Light"。
+   照片观察区（查看器/地图/延时画面）固定 --Lumina-Tokens-viewer (#08090B)，不随主题翻转（红线 R5）。 */
+
+:root {
+  --Lumina-Tokens-canvas: #0c0d10;
+  --Lumina-Tokens-panel: #14161a;
+  --Lumina-Tokens-card: #1d2025;
+  --Lumina-Tokens-hover: #23272d;
+  --Lumina-Tokens-viewer: #08090b;
+  --Lumina-Tokens-browserBar: #181b1f;
+  --Lumina-Tokens-border: #23272d;
+  --Lumina-Tokens-textPrimary: #f2f2f2;
+  --Lumina-Tokens-textSecondary: #a8adb5;
+  --Lumina-Tokens-textMuted: #6b7078;
+  --Lumina-Tokens-accent: #e8c268;
+  --Lumina-Tokens-success: #7dd9a6;
+  --Lumina-Tokens-danger: #d9604f;
+  /* 强调色之上的前景（设计稿 09 帧：浅色下金色降饱和，其上文字翻白） */
+  --Lumina-Tokens-onAccent: #0c0d10;
+  /* 图表通道色（直方图/曲线共用，画布经 getComputedStyle 读取） */
+  --Lumina-Tokens-chartRed: rgba(217, 96, 79, 0.55);
+  --Lumina-Tokens-chartGreen: rgba(125, 217, 166, 0.5);
+  --Lumina-Tokens-chartBlue: rgba(91, 141, 217, 0.55);
+  --Lumina-Tokens-chartLuma: rgba(168, 173, 181, 0.8);
+  /* 照片色标（元数据标签，双主题同值；置于照片缩略图之上，恒定不翻转） */
+  --Lumina-Tokens-labelRed: #d9604f;
+  --Lumina-Tokens-labelYellow: #e8c268;
+  --Lumina-Tokens-labelGreen: #7dd9a6;
+  --Lumina-Tokens-labelBlue: #5b8dd9;
+  --Lumina-Tokens-labelPurple: #9b6bd9;
+  --Lumina-Tokens-labelPink: #d96bb0;
+  /* 观察区（#08090B 恒色面）上的强调文字与浮层底，双主题同值 */
+  --Lumina-Tokens-viewerAccent: #e8c268;
+  --Lumina-Tokens-viewerOverlay: rgba(8, 9, 11, 0.85);
+  --Lumina-Tokens-radiusSm: 4px;
+  --Lumina-Tokens-radiusMd: 6px;
+  --Lumina-Tokens-radiusLg: 8px;
+  --Lumina-Tokens-radiusXl: 12px;
+  --Lumina-Tokens-fontSans: 'Inter';
+  --Lumina-Tokens-fontMono: 'JetBrains Mono';
+  --Lumina-Tokens-fontCjk: 'Noto Sans SC';
+  /* 派生令牌（淘汰态叠加 #0C0D10@50%，PRD §4-④） */
+  --Lumina-Tokens-rejectOverlay: rgba(12, 13, 16, 0.5);
+  --Lumina-Tokens-accentSoft: rgba(232, 194, 104, 0.14);
+  --Lumina-Tokens-shadow: rgba(0, 0, 0, 0.45);
+}
+
+[data-theme='Light'] {
+  --Lumina-Tokens-canvas: #f4f3f0;
+  --Lumina-Tokens-panel: #ffffff;
+  --Lumina-Tokens-card: #faf9f6;
+  --Lumina-Tokens-hover: #efeee9;
+  --Lumina-Tokens-viewer: #08090b; /* 观察区恒色，不随主题翻转 */
+  --Lumina-Tokens-browserBar: #ffffff;
+  --Lumina-Tokens-border: #e4e2dc;
+  --Lumina-Tokens-textPrimary: #191b1e;
+  --Lumina-Tokens-textSecondary: #5a5e66;
+  --Lumina-Tokens-textMuted: #90949b;
+  --Lumina-Tokens-accent: #b98a2e;
+  --Lumina-Tokens-success: #1f8a5b;
+  --Lumina-Tokens-danger: #c2483a;
+  --Lumina-Tokens-onAccent: #ffffff;
+  --Lumina-Tokens-chartRed: rgba(194, 72, 58, 0.5);
+  --Lumina-Tokens-chartGreen: rgba(31, 138, 91, 0.45);
+  --Lumina-Tokens-chartBlue: rgba(74, 116, 190, 0.5);
+  --Lumina-Tokens-chartLuma: rgba(90, 94, 102, 0.8);
+  --Lumina-Tokens-radiusSm: 4px;
+  --Lumina-Tokens-radiusMd: 6px;
+  --Lumina-Tokens-radiusLg: 8px;
+  --Lumina-Tokens-radiusXl: 12px;
+  --Lumina-Tokens-fontSans: 'Inter';
+  --Lumina-Tokens-fontMono: 'JetBrains Mono';
+  --Lumina-Tokens-fontCjk: 'Noto Sans SC';
+  --Lumina-Tokens-rejectOverlay: rgba(12, 13, 16, 0.5);
+  --Lumina-Tokens-accentSoft: rgba(185, 138, 46, 0.12);
+  --Lumina-Tokens-shadow: rgba(0, 0, 0, 0.18);
+}

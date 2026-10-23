@@ -1,0 +1,73 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--Lumina-Tokens-fontSans), var(--Lumina-Tokens-fontCjk), 'Microsoft YaHei UI', system-ui, sans-serif;
+  background: var(--Lumina-Tokens-canvas);
+  color: var(--Lumina-Tokens-textPrimary);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+/* 滚动条（双主题适配，全部走令牌） */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--Lumina-Tokens-border);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--Lumina-Tokens-textMuted);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 键帽（精选/快捷键条） */
+.keycap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border: 1px solid var(--Lumina-Tokens-border);
+  border-bottom-width: 2px;
+  border-radius: var(--Lumina-Tokens-radiusSm);
+  background: var(--Lumina-Tokens-card);
+  color: var(--Lumina-Tokens-textSecondary);
+  font-family: var(--Lumina-Tokens-fontMono), monospace;
+  font-size: 10px;
+  line-height: 1;
+}
+
+/* 数字等宽 */
+.num {
+  font-family: var(--Lumina-Tokens-fontMono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 淘汰态叠加（精选模式 X 键） */
+.reject-overlay::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--Lumina-Tokens-rejectOverlay);
+  pointer-events: none;
+}
