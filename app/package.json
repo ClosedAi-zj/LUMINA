@@ -1,7 +1,7 @@
 {
   "name": "lumina-app",
   "productName": "LUMINA",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": true,
   "description": "LUMINA · 风光/建筑摄影师一站式工作台（Electron UI）",
   "main": "../build/app/electron/main.cjs",

@@ -564,7 +564,7 @@ bool writeLinearRgbDng(const std::string& path, const imaging::Image& image,
   const std::string desc = "LUMINA HDR composite - linear RGB DNG";
   const std::string make = "LUMINA";
   const std::string model = "LUMINA HDR Composite";
-  const std::string software = "LUMINA 1.1.0";
+  const std::string software = "LUMINA 1.1.1";
   const std::string uniqueModel = "LUMINA HDR Composite";
 
   const uint32_t w = static_cast<uint32_t>(image.width);

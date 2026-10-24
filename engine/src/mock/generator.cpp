@@ -276,7 +276,7 @@ bool MockGenerator::writeLinearDng(const std::string& path, int width, int heigh
   const std::string desc = "LUMINA mock asset - Linear DNG (uncompressed CFA)";
   const std::string make = "Panasonic";
   const std::string model = "DC-S5M2";
-  const std::string software = "LUMINA 1.1.0";
+  const std::string software = "LUMINA 1.1.1";
   const std::string uniqueModel = "Panasonic DC-S5M2";
 
   std::vector<Entry> ifd0;

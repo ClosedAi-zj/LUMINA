@@ -136,7 +136,7 @@ int main(int argc, char** argv) {
   library::QueryEngine query(&config, &database, &photos);
   raw::RawDecoder decoder;
   xmp::XmpService xmpService(&config, &photos, &database, &pool);
-  xmp::XmpMigrator migrator(&config, &photos, &database);
+  xmp::XmpMigrator migrator(&config, &photos, &database, &xmpService);
   edit::EditSessionManager sessions(&xmpService, &photos);
   edit::VirtualCopyService vcopy(&config, &database, &photos, &xmpService);
   health::HealthScanner healthScanner(&config, &photos, &health, server.notifyFn());
@@ -201,22 +201,30 @@ int main(int argc, char** argv) {
     dbBackup.startDaily();
   }
 
-  // ---- 7. 启动兜底：XMP 版本迁移（静默自动升级 + 记录） ----
-  {
-    int migrated = 0;
-    std::string migrateErr;
-    if (migrator.migrateAll(&migrated, &migrateErr)) {
-      logInfo("main", "xmp migration pass done, scanned=" + std::to_string(migrated));
-    } else {
-      logWarn("main", "xmp migration pass failed: " + migrateErr);
-    }
-  }
+  // ---- 7. 启动兜底：XMP 版本迁移（v1.1.1 起改为 engine ready 之后后台执行，见 7.5） ----
+  //     左移前此处同步跑 migrateAll，全新安装首次启动迁移慢（Defender 扫描 684MB 文件 ~22s）
+  //     超过 UI 握手超时 15s，被降级为 Mock。现改为后台线程，握手秒回。
 
   logInfo("main", "engine ready, " + std::to_string(dispatcher.methodNames().size()) +
                       " methods registered");
   fflush(stdout);
 
-  // ---- 7.5 诊断看门狗：主循环状态变化/心跳落日志（挂死定位用） ----
+  // ---- 7.5 后台 XMP 版本迁移（v1.1.1 主修复） ----
+  // 迁移只是补字段的兜底升级，读侧兼容旧格式；放后台保证 RPC server 先起来、握手秒回。
+  // 复用 XmpService 的 per-photo 写锁（migrator.cpp 内部持有），与编辑/地图写入串行化。
+  std::atomic<bool> migrationStop{false};
+  std::thread migrationThread([&migrator, &migrationStop]() {
+    logInfo("main", "xmp migration pass started (background)");
+    int migrated = 0;
+    std::string migrateErr;
+    if (migrator.migrateAll(&migrated, &migrateErr, &migrationStop)) {
+      logInfo("main", "xmp migration pass done, scanned=" + std::to_string(migrated));
+    } else {
+      logWarn("main", "xmp migration pass failed: " + migrateErr);
+    }
+  });
+
+  // ---- 7.6 诊断看门狗：主循环状态变化/心跳落日志（挂死定位用） ----
   std::atomic<bool> watchdogStop{false};
   std::thread watchdog([&]() {
     int last = -1;
@@ -242,6 +250,10 @@ int main(int argc, char** argv) {
 
   // ---- 9. 优雅退出：flush sidecar / 停止监测 ----
   watchdogStop.store(true);
+  // 后台迁移优雅退出：置 stop 后处理完当前张即收尾，join 保证退出前迁移线程已结束
+  // （迁移持 per-photo 写锁，须先于 sessions.shutdown 完成，避免与编辑会话写 sidecar 竞争）
+  migrationStop.store(true);
+  if (migrationThread.joinable()) migrationThread.join();
   logInfo("main", "shutting down, pool pending=" + std::to_string(pool.pendingCount()));
   sessions.shutdown();
   logInfo("main", "cleanup: sessions flushed");

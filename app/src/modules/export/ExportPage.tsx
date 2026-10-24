@@ -53,7 +53,7 @@ export default function ExportPage() {
           <div className="rounded-lg border border-line p-3 flex flex-col gap-3" style={{ background: 'var(--Lumina-Tokens-panel)' }}>
             <div className="flex items-center gap-3">
               <span className="text-2xs text-txt2 w-16 shrink-0">格式</span>
-              {/* v1.1.0 引擎支持 jpg/tiff/png（PNG 为无损，与 TIFF 逐像素一致）；
+              {/* v1.1.1 引擎支持 jpg/tiff/png（PNG 为无损，与 TIFF 逐像素一致）；
                   选 psd 会在 export.createJob 被明确拒绝（5001），UI 先收窄到可用集 */}
               <Segmented
                 value={spec.format === 'psd' ? 'jpg' : spec.format}
@@ -64,7 +64,7 @@ export default function ExportPage() {
                   { value: 'tiff', label: 'TIFF' },
                 ]}
               />
-              <span className="text-2xs text-txt3">PSD · 带图层：引擎 v1.1.0 暂不支持（见协议缺口清单）</span>
+              <span className="text-2xs text-txt3">PSD · 带图层：引擎 v1.1.1 暂不支持（见协议缺口清单）</span>
             </div>
             <div className="flex items-center gap-3">
               <span className="text-2xs text-txt2 w-16 shrink-0">长边</span>

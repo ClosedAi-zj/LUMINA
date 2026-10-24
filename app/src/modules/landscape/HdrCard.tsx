@@ -28,7 +28,7 @@ export default function HdrCard() {
       <div className="flex items-center gap-2">
         <span className="text-xs font-medium">HDR 包围曝光合成</span>
         <div className="flex-1" />
-        <span className="text-2xs px-1.5 py-0.5 rounded-sm" style={{ background: 'var(--Lumina-Tokens-accentSoft)', color: 'var(--Lumina-Tokens-accent)' }}>v1.1.0</span>
+        <span className="text-2xs px-1.5 py-0.5 rounded-sm" style={{ background: 'var(--Lumina-Tokens-accentSoft)', color: 'var(--Lumina-Tokens-accent)' }}>v1.1.1</span>
       </div>
       <div className="text-2xs text-txt3 leading-4">自动对齐 · 去鬼影 · 宽影调<i className="not-italic text-txt3">（包围组 ≥3 张）</i></div>
 

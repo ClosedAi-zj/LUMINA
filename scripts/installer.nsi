@@ -1,4 +1,4 @@
-; LUMINA v1.1.0 - NSIS installer (user-level, silent-capable, English UI)
+; LUMINA v1.1.1 - NSIS installer (user-level, silent-capable, English UI)
 ;
 ; Discipline: keep this script PURE ASCII (project convention for Windows
 ; tooling). The package contains CJK file names; the NSIS Unicode build
@@ -18,7 +18,7 @@
 ;     NEVER touched by uninstall (install dir is runtime read-only)
 
 !define APP_NAME "LUMINA"
-!define APP_VERSION "1.1.0"
+!define APP_VERSION "1.1.1"
 !define APP_PUBLISHER "LUMINA Team"
 !define APP_EXE "LUMINA.exe"
 
@@ -35,10 +35,10 @@ RequestExecutionLevel user
 SetCompressor /SOLID lzma
 BrandingText "${APP_NAME} ${APP_VERSION} - user-level install"
 
-VIProductVersion "1.1.0.0"
+VIProductVersion "1.1.1.0"
 VIAddVersionKey "ProductName" "${APP_NAME}"
 VIAddVersionKey "FileDescription" "${APP_NAME} photography workspace"
-VIAddVersionKey "FileVersion" "1.1.0.0"
+VIAddVersionKey "FileVersion" "1.1.1.0"
 VIAddVersionKey "ProductVersion" "${APP_VERSION}"
 VIAddVersionKey "Publisher" "${APP_PUBLISHER}"
 VIAddVersionKey "LegalCopyright" "(c) ${APP_PUBLISHER}"

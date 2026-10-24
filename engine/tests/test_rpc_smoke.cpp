@@ -127,7 +127,7 @@ int main() {
                                  [](int64_t, int, const std::string&) {});
   raw::RawDecoder decoder;
   xmp::XmpService xmp(&config, &photos, &database, &pool);
-  xmp::XmpMigrator migrator(&config, &photos, &database);
+  xmp::XmpMigrator migrator(&config, &photos, &database, &xmp);
   edit::EditSessionManager sessions(&xmp, &photos);
   edit::VirtualCopyService vcopy(&config, &database, &photos, &xmp);
   import::Importer importer(&config, &photos, &database, &fts, &decoder, &xmp,
@@ -171,7 +171,7 @@ int main() {
     rpc::RpcResponse r = dispatcher.dispatch("system.initialize", json::JsonValue::objectValue());
     check(!r.isError, "case1: system.initialize 无错误");
     check(r.result.get("protocolVersion").asString() == "1.0", "case1: protocolVersion=1.0");
-    check(r.result.get("engineVersion").asString() == "1.1.0", "case1: engineVersion=1.1.0");
+    check(r.result.get("engineVersion").asString() == "1.1.1", "case1: engineVersion=1.1.1");
     check(r.result.get("capabilities").get("libraw").asBool(false), "case1: capabilities.libraw");
   }
 

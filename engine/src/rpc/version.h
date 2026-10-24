@@ -10,7 +10,7 @@ constexpr const char* kProtocolVersion = "1.0";
 constexpr int kProtocolMajor = 1;
 constexpr int kProtocolMinor = 0;
 // 引擎版本（随构建推进递增）
-constexpr const char* kEngineVersion = "1.1.0";
+constexpr const char* kEngineVersion = "1.1.1";
 // sidecar 当前 schema 版本（XMP 映射表 §7）
 constexpr int kXmpSchemaVersion = 1;
 // 认知的 crs:ProcessVersion 上限（超过则提示 1006，不猜测）

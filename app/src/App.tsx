@@ -123,7 +123,7 @@ function TopBar() {  const view = useUi((s) => s.view);
             className="w-1.5 h-1.5 rounded-full"
             style={{ background: engineStatus === 'starting' ? 'var(--Lumina-Tokens-textMuted)' : engineStatus === 'mock' ? 'var(--Lumina-Tokens-accent)' : 'var(--Lumina-Tokens-success)' }}
           />
-          {engineStatus === 'starting' ? '引擎连接中…' : engineStatus === 'mock' ? `Mock 引擎 · ${engineVersion || '1.1.0'}` : `引擎 · ${engineVersion || '1.1.0'}`}
+          {engineStatus === 'starting' ? '引擎连接中…' : engineStatus === 'mock' ? `Mock 引擎 · ${engineVersion || '1.1.1'}` : `引擎 · ${engineVersion || '1.1.1'}`}
         </span>
         {stats && <span className="num">已同步 · {formatCount(stats.totalPhotos)} 张</span>}
       </div>

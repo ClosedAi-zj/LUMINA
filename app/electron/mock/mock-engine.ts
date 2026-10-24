@@ -393,7 +393,7 @@ export class MockEngine {
     // ---- 5.0 系统与握手 ----
     H('system.initialize', () => ({
       protocolVersion: '1.0',
-      engineVersion: 'mock-1.1.0',
+      engineVersion: 'mock-1.1.1',
       capabilities: { libraw: false, fts5: true, codecs: ['h264', 'h265'], mock: true },
       homeDir: this.settings.homeDir,
       dbPath: `${this.settings.homeDir}/lumina.db`,

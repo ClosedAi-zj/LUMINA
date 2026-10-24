@@ -22,6 +22,8 @@ const RESTART_DELAY_MS = 800; // 崩溃后 800ms 内重启，满足「3s 内自�
 /** 重启熔断：20s 窗口内连续 3 次退出 → 停止自动重启（防单实例锁冲突等场景的 spawn 风暴） */
 const RESTART_BREAKER_COUNT = 3;
 const RESTART_BREAKER_WINDOW_MS = 20_000;
+/** 首次握手（system.initialize）超时：v1.1.1 由 15s 放宽到 60s，兜底大图库冷启动迁移/扫描耗时 */
+const ENGINE_HANDSHAKE_TIMEOUT_MS = 60_000;
 
 /** 引擎 → UI 的通知（无 id） */
 export interface EngineNotification {
@@ -78,7 +80,7 @@ export class EngineBridge {
   private breakerTripped = false;
   private eventListeners = new Set<(n: EngineNotification) => void>();
   private lifecycleListeners = new Set<(s: BridgeLifecycle) => void>();
-  private initParams: { uiVersion: string } = { uiVersion: '1.1.0' };
+  private initParams: { uiVersion: string } = { uiVersion: '1.1.1' };
   /** initialize 返回的握手信息（供 UI 状态栏显示引擎版本） */
   engineInfo: Record<string, unknown> = {};
 
@@ -169,7 +171,7 @@ export class EngineBridge {
     this.mode = 'mock';
     this.engineInfo = {
       protocolVersion: PROTOCOL_VERSION,
-      engineVersion: 'mock-1.1.0',
+      engineVersion: 'mock-1.1.1',
       capabilities: { libraw: false, fts5: true, codecs: ['h264', 'h265'], mock: true },
       homeDir: this.homeDir.replace(/\\/g, '/'),
       dbPath: `${this.homeDir.replace(/\\/g, '/')}/lumina.db`,
@@ -229,7 +231,7 @@ export class EngineBridge {
           try {
             await this.spawnEngine();
             // initialize 重放；参数以 sidecar 为准，天然可恢复
-            await this.rawRequest('system.initialize', this.initParams, 15_000);
+            await this.rawRequest('system.initialize', this.initParams, ENGINE_HANDSHAKE_TIMEOUT_MS);
             this.initialized = true;
             this.emitLifecycle('recovered');
           } catch {
@@ -246,7 +248,7 @@ export class EngineBridge {
           settled = true;
           reject(new Error('initialize 握手超时'));
         }
-      }, 15_000);
+      }, ENGINE_HANDSHAKE_TIMEOUT_MS);
       this.pending.set(initId, {
         id: initId,
         method: 'system.initialize',

@@ -1,6 +1,10 @@
 // XMP 版本迁移器实现
 #include "xmp/migrator.h"
 
+#include <memory>
+#include <mutex>
+#include <vector>
+
 #include "core/logger.h"
 #include "core/str_util.h"
 #include "rpc/version.h"
@@ -9,10 +13,18 @@
 namespace lumina {
 namespace xmp {
 
-XmpMigrator::XmpMigrator(core::Config* config, db::PhotoDao* photos, db::Database* db)
-    : config_(config), photos_(photos), db_(db) {}
+XmpMigrator::XmpMigrator(core::Config* config, db::PhotoDao* photos, db::Database* db,
+                         XmpService* xmp)
+    : config_(config), photos_(photos), db_(db), xmp_(xmp) {}
 
 bool XmpMigrator::migrateOne(int64_t photoId, std::string* err) {
+  // v1.1.1：与 XmpService::saveParams/setExifGps/clearExifGps 复用同一把 per-photo 写锁。
+  // 后台全量迁移（main.cpp 后台线程）与用户实时编辑/定位写入因此串行化，
+  // 避免 read-modify-write 竞争丢更新或写坏正在编辑的 sidecar。
+  static std::mutex kFallbackMutex;  // xmp_ 为空时的退化串行化（正常构造不会发生）
+  std::shared_ptr<std::mutex> photoLock =
+      xmp_ ? xmp_->photoWriteMutex(photoId) : std::shared_ptr<std::mutex>();
+  std::lock_guard<std::mutex> lock(photoLock ? *photoLock : kFallbackMutex);
   PhotoRecord p;
   if (!photos_->getById(photoId, &p, err)) {
     if (err->empty()) *err = "photo not found";
@@ -42,7 +54,8 @@ bool XmpMigrator::migrateOne(int64_t photoId, std::string* err) {
   return true;
 }
 
-bool XmpMigrator::migrateAll(int* migrated, std::string* err) {
+bool XmpMigrator::migrateAll(int* migrated, std::string* err,
+                             const std::atomic<bool>* stop) {
   *migrated = 0;
   std::string sql = "SELECT id FROM photos WHERE deleted=0 AND (sidecar_path IS NOT NULL AND "
                     "sidecar_path<>'') ORDER BY id;";
@@ -55,6 +68,12 @@ bool XmpMigrator::migrateAll(int* migrated, std::string* err) {
   stmt->reset();
   int count = 0;
   for (int64_t id : ids) {
+    // 后台迁移优雅退出：退出流程置位 stop 后，处理完当前张即收尾（单张毫秒级）
+    if (stop && stop->load()) {
+      logInfo("xmp", "migration pass stopped early at photo " + std::to_string(id) +
+                         ", migrated so far=" + std::to_string(count));
+      break;
+    }
     std::string oneErr;
     if (migrateOne(id, &oneErr)) {
       // 只有真正发生写入才算迁移一次；此处简化：无 sidecar 跳过

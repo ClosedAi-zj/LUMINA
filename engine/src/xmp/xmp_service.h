@@ -46,8 +46,12 @@ class XmpService {
                   std::string* err);
   bool clearExifGps(int64_t photoId, std::string* err);
 
- private:
+  // per-photo sidecar 写锁（saveParams/setExifGps/clearExifGps 内部使用的同一把）。
+  // 引擎内部其他 sidecar 写方（如 XmpMigrator 后台全量迁移）复用它，
+  // 保证所有 read-modify-write 路径按照片串行化：不丢更新、不写坏正在编辑的 sidecar。
   std::shared_ptr<std::mutex> photoWriteMutex(int64_t photoId);
+
+ private:
 
   core::Config* config_;
   db::PhotoDao* photos_;
