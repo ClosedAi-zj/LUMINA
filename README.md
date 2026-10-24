@@ -22,4 +22,4 @@ An all-in-one workstation for landscape and architecture photographers — C++17
 
 ## Status
 
-v1.1.0 RC: release gates closed (7/7 PASS) — see `docs/release-gate-1.1.0.md`.
+v1.1.0 released (2026-10-24) — download from [Releases](https://github.com/xjjj22/LUMINA/releases/tag/v1.1.0); see `docs/release-gate-1.1.0.md` for release gates.
