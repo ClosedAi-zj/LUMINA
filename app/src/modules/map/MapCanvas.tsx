@@ -215,7 +215,7 @@ export default function MapCanvas({ locations, selectedId, onSelect }: Props) {
       </div>
 
       {/* 右下署名（对应设计稿"抽象底图 · LUMINA"） */}
-      <div className="absolute right-3 bottom-3 text-2xs text-txt3 pointer-events-none">抽象底图 · 无网络瓦片 · LUMINA v1.0.0</div>
+      <div className="absolute right-3 bottom-3 text-2xs text-txt3 pointer-events-none">抽象底图 · 无网络瓦片 · LUMINA v1.1.0</div>
 
       {/* 视图层缩放控制 */}
       <div className="absolute top-2 right-3 flex items-center gap-1 text-2xs text-txt3 rounded-md px-1.5 py-1 border border-line bg-panel/80">

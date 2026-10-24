@@ -171,7 +171,7 @@ int main() {
     rpc::RpcResponse r = dispatcher.dispatch("system.initialize", json::JsonValue::objectValue());
     check(!r.isError, "case1: system.initialize 无错误");
     check(r.result.get("protocolVersion").asString() == "1.0", "case1: protocolVersion=1.0");
-    check(r.result.get("engineVersion").asString() == "1.0.0", "case1: engineVersion=1.0.0");
+    check(r.result.get("engineVersion").asString() == "1.1.0", "case1: engineVersion=1.1.0");
     check(r.result.get("capabilities").get("libraw").asBool(false), "case1: capabilities.libraw");
   }
 
