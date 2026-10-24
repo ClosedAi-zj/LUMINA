@@ -57,6 +57,15 @@
 - 笔刷：覆盖区均值差 86.9 / 区外 1.8，三条下限断言在位
 - 三项已知限制处置后回归（引擎二进制 20:16 定版后复跑）：中文水印 GDI 光栅化验收 PASS（changed=1485、bbox 273×22px 落在右下锚区、裁剪目验「版权所有 · 齐活林 2025」字形清晰）；PNG 导出与 TIFF 逐像素相等；冒烟 13 场景 + case6.5 全绿、0 FAILED
 
+### 7. 打包版冒烟（正式发布物验证）—— PASS
+- 对象：正式发布物 `build/pkg/LUMINA/`（引擎 20:16 定版 + renderer 含全部 UI 修复；684.1MB，另产便携包 `LUMINA-1.0.0-portable.zip` 262.7MB）
+- 运行：`LUMINA_SMOKE=1` 启动打包版，36s 跑完 13 场景，`[smoke-scenario] DONE`，看门狗正常退出（exit 0）
+- 引擎：`engine mode = real`（包内引擎真实拉起，103 methods registered，schema migrated，fs watcher 5 roots，启动 db 备份完成）
+- 覆盖：boot 四阶段（handshake/library/thumbs/ready）→ 库统计（18192 / missing 421 / edited 4350 / roots 5 / smartHits 4350）→ develop（加载 / shader 无告警 / patch+undo+redo / XMP sidecar 写入 ok / 预设应用 sync=2）→ 11 项按键注入（copy/paste/undo/redo/compare/space-hold/next/prev/overlay，workflow 断言全 true）→ HSL 诊断 / 笔刷 SDF → 主题 dark→light→dark → ingest 扫描（18371 files, 0 unreadable）→ health（verified 17771/18192, md5 97.7%）→ map 写入 → protocol v1.0.1 自检 ok
+- 截图：`~/.lumina/smoke-capture.png`（素材库网格 3655 张目验正常）+ 基线图 5 张（smoke-develop / hsl-diag / brush-sdf / theme-dark / theme-light）落盘 `resources/build/`
+- 排障记录：此前"挂起 / 秒退"系工具环境变量 `ELECTRON_RUN_AS_NODE=1` 被打包版继承（Electron 退化为 Node REPL，无窗口无日志），以 `env -u ELECTRON_RUN_AS_NODE` 清除后一次通过；与发布物本身无关
+- 结论：**PASS**，正式发布物体检通过
+
 ---
 
 ## 二、在途 / 待定
@@ -67,6 +76,7 @@
 | `health.listIssues` 计数与清单矛盾 | **已修复** | bindAll 双调用盖位根因；rpc_probe 5 组分页用例 + 冒烟 `issues=421/100` 实测通过；附带治愈 421/362 工单缺口 |
 | 真实 RW2 样张复测 | **PASS** | 用户提供 20 张真实 S5M2 RW2（`samples/rw2/`）；6K 预览 p50=449ms / max=465ms（DoD <1500ms，3.2 倍余量）；全尺寸解码 4.6s/张；导出 2.7s/张；原片零改写 20/20 + 样张零改动。报告：`docs/rw2-real-bench.md`。**另抓到并修复 3 个导入缺陷**（RAW 时间戳秒/毫秒、`{camera}` 字面量、重命名用 mtime 而非 EXIF 时间），mock 资产未覆盖故此前未暴露 |
 | 8 小时稳定性压测 | **PASS** | 第三轮完整窗口（20:28→04:28）全绿：480 循环 / 16 次计划重启干净退出 / 16 次 quick_check ok / RPC 错误 0 / 非计划死亡 0 / 零改写违例 0 / RSS -9.9%。前两轮各因用户取消、引擎改版在 4.7h、4min 处中断，中断前记录均全绿（归档 `*-partial-4.7h.*`）。报告：`docs/stability-8h.md` |
+| 打包版冒烟（正式发布物） | **PASS** | 见「一.7」：36s 跑完 13 场景全过，包内引擎真实拉起，按键注入 / XMP / 主题切换 / 健康校验全断言通过，截图目验正常 |
 
 ---
 
@@ -95,4 +105,4 @@
 | 真实 RW2 复测 | ✅（docs/rw2-real-bench.md） |
 | 8 小时稳定性 | ✅（docs/stability-8h.md，480 循环 0 错误，RSS -9.9%） |
 
-**当前判定：7/7 门槛全部关闭，RC 定稿。正式发布物（打包 + 打包版冒烟）完成后即可交付。**
+**当前判定：7/7 门槛全部关闭，正式发布物（`build/pkg/LUMINA/` 打包 + 打包版冒烟 PASS）已完成，RC 定稿，可交付。**
