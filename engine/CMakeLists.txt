@@ -64,6 +64,16 @@ set(LUMINA_SOURCES
   src/library/smart_collections.cpp
   src/imaging/imaging.cpp
   src/imaging/image_buffer.cpp
+  src/plan/op_table.cpp
+  src/plan/ops/basic.cpp
+  src/plan/ops/curve.cpp
+  src/plan/ops/color.cpp
+  src/plan/ops/calibration.cpp
+  src/plan/ops/detail.cpp
+  src/plan/ops/lens.cpp
+  src/plan/ops/geometry.cpp
+  src/plan/ops/effects.cpp
+  src/plan/ops/mask.cpp
   src/thumb/thumbnail_service.cpp
   src/raw/raw_decoder.cpp
   src/raw/embedded_proxy.cpp
@@ -150,3 +160,8 @@ add_executable(test_raw16 tests/test_raw16.cpp)
 target_link_libraries(test_raw16 PRIVATE lumina_core)
 set_target_properties(test_raw16 PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
 add_test(NAME raw16 COMMAND test_raw16)
+
+add_executable(test_op_table tests/test_op_table.cpp)
+target_link_libraries(test_op_table PRIVATE lumina_core)
+set_target_properties(test_op_table PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME op_table COMMAND test_op_table)
