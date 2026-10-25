@@ -147,7 +147,7 @@ export function buildGeomTransform(p: EditParams, srcW: number, srcH: number): G
       num(ps.horizontal, 0) !== 0 ||
       num(ps.vertical, 0) !== 0 ||
       num(ps.rotate, 0) !== 0 ||
-      num(ps.scale, 100) !== 100);
+      num(ps.scale, 1) !== 1);
   if (!cropActive && !perspActive) {
     return { inv: null, outW: srcW, outH: srcH, cropX: 0, cropY: 0 };
   }
@@ -162,7 +162,10 @@ export function buildGeomTransform(p: EditParams, srcW: number, srcH: number): G
   const angleDeg = (cropActive ? angle : 0) + (perspActive ? num(ps.rotate, 0) : 0);
   const pH = perspActive ? num(ps.horizontal, 0) / 100 + (num(ps.x, 0) / 100) * 0.1 : 0;
   const pV = perspActive ? num(ps.vertical, 0) / 100 + (num(ps.y, 0) / 100) * 0.1 : 0;
-  const scale = perspActive ? Math.max(0.05, num(ps.scale, 100) / 100) : 1.0;
+  // scale 语义 = 倍数（UI 滑杆 0.5–2，默认 1=恒等；与 protocol.ts/TransformBar 一致）。
+  // 曾按引擎旧口径写成 num(ps.scale,100)/100 → 会话默认 scale:1 被判激活且缩到 5%，
+  // 主画布缓冲塌成 4x3（T1.4 回归根因，2026-10-25 修复，两端同步改倍数语义）。
+  const scale = perspActive ? Math.max(0.05, num(ps.scale, 1)) : 1.0;
   const halfW = cw / 2;
   const halfH = ch / 2;
   const theta = (angleDeg * Math.PI) / 180;

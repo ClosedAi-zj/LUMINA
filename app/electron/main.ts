@@ -457,7 +457,9 @@ async function bootstrap(): Promise<void> {
   createWindow();
 
   if (isSmoke) {
-    // 冒烟模式：跑完全模块场景（素材库→修图台→导入→健康→协议契约→主题，约 20s）后截图并退出
+    // 冒烟模式：跑完全模块场景（素材库→修图台→导入→健康→协议契约→主题，约 20s）
+    // 后截图并退出；T1.7 起逐控件像素断言（19 控件 × ~1.2s）+ 导出=预览断言入列，
+    // 30s 预算不够 → 放宽到 120s（场景自身有 DONE/异常路径，防挂死靠进程退出）。
     setTimeout(async () => {
       try {
         const image = await mainWindow?.webContents.capturePage();
@@ -472,7 +474,7 @@ async function bootstrap(): Promise<void> {
       process.stdout.write('[smoke] timeout reached, quitting\n');
       await bridge?.shutdown();
       app.quit();
-    }, 30_000);
+    }, 120_000);
   }
 
   if (isBaseline) {

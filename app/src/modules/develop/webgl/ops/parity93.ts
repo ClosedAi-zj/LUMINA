@@ -170,8 +170,8 @@ export function buildLeafCases(): LeafCase[] {
   add('geometry.perspective.vertical', set((p) => { p.geometry.perspective.vertical = 20; }));
   add('geometry.perspective.horizontal', set((p) => { p.geometry.perspective.horizontal = 20; }));
   add('geometry.perspective.rotate', set((p) => { p.geometry.perspective.rotate = 10; }));
-  add('geometry.perspective.scale', set((p) => { p.geometry.perspective.scale = 80; }));
-  add('geometry.perspective.aspect', set((p) => { p.geometry.perspective.scale = 90; p.geometry.perspective.aspect = 10; }));
+  add('geometry.perspective.scale', set((p) => { p.geometry.perspective.scale = 1.3; }));
+  add('geometry.perspective.aspect', set((p) => { p.geometry.perspective.scale = 1.2; p.geometry.perspective.aspect = 10; }));
   add('geometry.perspective.x', set((p) => { p.geometry.perspective.x = 15; }));
   add('geometry.perspective.y', set((p) => { p.geometry.perspective.y = 15; }));
   return cases;

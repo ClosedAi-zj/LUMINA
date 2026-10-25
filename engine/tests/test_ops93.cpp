@@ -747,10 +747,10 @@ static void testGeometryPerspective() {
   p.setItem("geometry.perspective.rotate", 90.0);
   CHECK(applyParams("geometry.perspective", p, &buf, &err), "rotate 90 apply");
   CHECK(buf.w == 48 && buf.h == 64, "rotate 90: 尺寸互换");
-  // scale 50：内容缩小（引擎按内容出界重映射，尺寸由 mapQuadBounds 决定——只验输出有效）
+  // scale 0.5：内容缩小（倍数语义，1=恒等；尺寸由 mapQuadBounds 决定——只验输出有效）
   ImageBuf sc = makeToneStripes(64, 48);
   JsonValue ps = JsonValue::objectValue();
-  ps.setItem("geometry.perspective.scale", 50.0);
+  ps.setItem("geometry.perspective.scale", 0.5);
   CHECK(applyParams("geometry.perspective", ps, &sc, &err), "scale apply");
   CHECK(sc.valid(), "scale: 输出有效");
   // horizontal/vertical/x/y/aspect：合法执行 + 输出有效
@@ -908,7 +908,8 @@ static void testPlanEndToEnd() {
   params.push_back({"geometry.perspective.rotate", "0"});
   lumina::plan::RenderPlan plan;
   CHECK(lumina::plan::compilePlan(1, params, &plan, &err), "compilePlan");
-  CHECK(plan.opSequence.size() == 5, "算子去重与 stage 归并（perspective 即便 rotate=0 也入列）");
+  // T1.5：pipeline.toneMap 恒入序列（唯一域分界，预览 GPU/TS oracle 同口径）→ 5 叶 + 1
+  CHECK(plan.opSequence.size() == 6, "算子去重与 stage 归并 + toneMap 恒入（perspective 即便 rotate=0 也入列）");
   ImageBuf buf = makeToneStripes(64, 48);
   ImageBuf ref = buf;
   CHECK(lumina::plan::executePlan(plan, &buf, &err), "executePlan");

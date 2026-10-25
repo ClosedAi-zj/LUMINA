@@ -53,16 +53,19 @@ class GeometryPerspectiveOp : public ParamOp {
     const double ph = params_.get("geometry.perspective.horizontal").asDouble(0.0);
     const double pv = params_.get("geometry.perspective.vertical").asDouble(0.0);
     const double rot = params_.get("geometry.perspective.rotate").asDouble(0.0);
-    const double scale = params_.get("geometry.perspective.scale").asDouble(100.0);
+    // scale 语义 = 倍数（UI 滑杆 0.5–2，protocol/TransformBar 默认 1=恒等）。
+    // 曾按 100=恒等、/100 归一 → 会话默认 scale:1 被判激活且缩到 5%（T1.4 预览 4x3
+    // 回归根因，2026-10-25 修复，与 app oracle93.buildGeomTransform 两端同步）。
+    const double scale = params_.get("geometry.perspective.scale").asDouble(1.0);
     const double aspect = params_.get("geometry.perspective.aspect").asDouble(0.0);
-    if (px == 0 && py == 0 && ph == 0 && pv == 0 && rot == 0 && scale == 100.0 && aspect == 0) {
+    if (px == 0 && py == 0 && ph == 0 && pv == 0 && rot == 0 && scale == 1.0 && aspect == 0) {
       return true;  // identity
     }
     GeometryParams gp;
     gp.angleDeg = rot;
     gp.perspectiveH = ph / 100.0 + px / 100.0 * 0.1;
     gp.perspectiveV = pv / 100.0 + py / 100.0 * 0.1;
-    gp.scale = std::max(0.05, scale / 100.0);
+    gp.scale = std::max(0.05, scale);
     (void)aspect;  // 比例约束与裁剪框联动，T2.4 交互期实装（不静默改像素）
     imaging::ImageBuf out;
     uint64_t samples = 0;

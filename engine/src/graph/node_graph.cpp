@@ -111,7 +111,7 @@ json::JsonValue defaultParamsFor(NodeType t) {
       p.setItem("perspective.horizontal", num(0.0));
       p.setItem("perspective.vertical", num(0.0));
       p.setItem("perspective.rotate", num(0.0));
-      p.setItem("perspective.scale", num(100.0));
+      p.setItem("perspective.scale", num(1.0));  // 倍数语义，1=恒等（与 geometry.cpp/口径一致）
       p.setItem("perspective.aspect", num(0.0));
       break;
     case NodeType::Effects:
