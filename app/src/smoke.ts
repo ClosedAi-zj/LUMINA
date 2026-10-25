@@ -342,70 +342,207 @@ export async function runSmokeScenario(): Promise<void> {
     // 口径（架构文档 §11 T1.7）：每个可交互控件 改值 → 等预览刷新 → 断言像素变化；
     // 默认值必须 identity（拖回 0/默认 = 恢复基线）。全部走真实 setNumeric/setPath →
     // EditParams → paramsToGraph → RPC → GPU ops 渲染，与用户操作同链路。
+    // 夹具（T1.7 工装升级）：mock 库原片均为 160×112 合成图且无高光分区，强算子在那种
+    // 内容上无论实现对错都低于 minD（断言无效度）。改用程序化代表性夹具：1024×683
+    // 无损 PNG（被裁切高光 / 深阴影 / 中性灰阶 / 高饱和色块 / 纹理中调），走真实 import
+    // 入库（renameTemplate '{name}' + dedupe=skip，重跑幂等）。minD 与全部断言口径原样不动。
     {
-      await useDevelop.getState().applyPatch(
-        {
-          whiteBalance: 'custom',
-          exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0,
-          temperature: 5500, tint: 0, vibrance: 0, saturation: 0, clarity: 0, texture: 0, dehaze: 0,
-          toneCurveRGB: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
-          masks: [],
-          hsl: {
-            red: { hue: 0, sat: 0, lum: 0 }, orange: { hue: 0, sat: 0, lum: 0 },
-            yellow: { hue: 0, sat: 0, lum: 0 }, green: { hue: 0, sat: 0, lum: 0 },
-            aqua: { hue: 0, sat: 0, lum: 0 }, blue: { hue: 0, sat: 0, lum: 0 },
-            purple: { hue: 0, sat: 0, lum: 0 }, magenta: { hue: 0, sat: 0, lum: 0 },
-          },
-          colorGrade: { shadowHue: 0, shadowSat: 0, midtoneHue: 0, midtoneSat: 0, highlightHue: 0, highlightSat: 0, blend: 50, balance: 0 },
-          calibration: { shadowTint: 0, redHue: 0, redSat: 0, greenHue: 0, greenSat: 0, blueHue: 0, blueSat: 0 },
-          detail: { sharpness: 0, sharpenRadius: 1, sharpenDetail: 25, sharpenMasking: 0, luminanceSmoothing: 0, colorNR: 0, colorNRDetail: 25 },
-          optics: { lensProfileEnable: false, manualDistortion: 0, vignetteAmount: 0, vignetteMidpoint: 50, vignetteFeather: 50, grainAmount: 0, grainFrequency: 1, grainSize: 1 },
-        },
-        true,
-        'T1.7 逐控件基线',
-      );
-      await sleep(700);
-      const num = (k: keyof EditParams, v: number) => () => useDevelop.getState().setNumeric(k, v, true);
-      const path = (p: string, v: number) => () => useDevelop.getState().setPath(p, v, true);
-      // minD = 该控件「变了」的最小像素阈值（max 通道差）；id 阈值统一 2.0
-      const controls: { name: string; apply: () => Promise<void>; reset: () => Promise<void>; minD: number }[] = [
-        { name: 'exposure+0.6', apply: num('exposure', 0.6), reset: num('exposure', 0), minD: 3 },
-        { name: 'contrast+35', apply: num('contrast', 35), reset: num('contrast', 0), minD: 2 },
-        { name: 'highlights-45', apply: num('highlights', -45), reset: num('highlights', 0), minD: 1.5 },
-        { name: 'shadows+45', apply: num('shadows', 45), reset: num('shadows', 0), minD: 1.5 },
-        { name: 'whites+35', apply: num('whites', 35), reset: num('whites', 0), minD: 1.5 },
-        { name: 'blacks-35', apply: num('blacks', -35), reset: num('blacks', 0), minD: 1.5 },
-        { name: 'temperature+2000K', apply: num('temperature', 7500), reset: num('temperature', 5500), minD: 2 },
-        { name: 'tint-25', apply: num('tint', -25), reset: num('tint', 0), minD: 1.5 },
-        { name: 'vibrance+45', apply: num('vibrance', 45), reset: num('vibrance', 0), minD: 2 },
-        { name: 'saturation+35', apply: num('saturation', 35), reset: num('saturation', 0), minD: 2 },
-        { name: 'clarity+45', apply: num('clarity', 45), reset: num('clarity', 0), minD: 1.5 },
-        { name: 'texture+45', apply: num('texture', 45), reset: num('texture', 0), minD: 1 },
-        { name: 'dehaze+35', apply: num('dehaze', 35), reset: num('dehaze', 0), minD: 1.5 },
-        { name: 'detail.sharpness+80', apply: path('detail.sharpness', 80), reset: path('detail.sharpness', 0), minD: 1 },
-        { name: 'detail.colorNR+50', apply: path('detail.colorNR', 50), reset: path('detail.colorNR', 0), minD: 1.5 },
-        { name: 'optics.vignette-60', apply: path('optics.vignetteAmount', -60), reset: path('optics.vignetteAmount', 0), minD: 3 },
-        { name: 'optics.grain+50', apply: path('optics.grainAmount', 50), reset: path('optics.grainAmount', 0), minD: 1.5 },
-        { name: 'colorGrade.midtoneSat+50', apply: path('colorGrade.midtoneSat', 50), reset: path('colorGrade.midtoneSat', 0), minD: 1.5 },
-        { name: 'calibration.blueSat+40', apply: path('calibration.blueSat', 40), reset: path('calibration.blueSat', 0), minD: 1.5 },
+      const FW = 1024;
+      const FH = 683;
+      const fixtureDir = 'C:/Users/zj/.lumina/t17-fixture';
+      const fixtureSrcPath = `${fixtureDir}/t17-fixture.png`;
+      const fixtureLibPath = 'C:/Users/zj/.lumina/mocklib/t17-fixture.png';
+      const fc = document.createElement('canvas');
+      fc.width = FW;
+      fc.height = FH;
+      const fx = fc.getContext('2d');
+      if (!fx) throw new Error('2d context unavailable');
+      const fimg = fx.createImageData(FW, FH);
+      // 确定性伪噪声（整数 hash，无随机源）：中调纹理与 colorNR/颗粒的可测素材
+      const hash01 = (x: number, y: number): number => {
+        let h = (x * 374761393 + y * 668265263) | 0;
+        h = Math.imul(h ^ (h >> 13), 1274126177);
+        return ((h ^ (h >> 16)) >>> 0) / 4294967295;
+      };
+      const SAT: [number, number, number][] = [
+        [224, 32, 32], [32, 190, 64], [32, 96, 224], [240, 210, 32], [224, 48, 208], [40, 216, 216],
       ];
-      const t17: string[] = [];
-      let t17Failed = 0;
-      for (const c of controls) {
-        const base = sampleMean();
-        await c.apply();
-        await sleep(650);
-        const after = sampleMean();
-        const d = dist(base, after);
-        await c.reset();
-        await sleep(500);
-        const back = sampleMean();
-        const dId = dist(back, base);
-        const ok = d >= c.minD && dId < 2.0;
-        if (!ok) t17Failed++;
-        t17.push(`${c.name} d=${d.toFixed(1)} id=${dId.toFixed(1)}${ok ? '' : ' FAILED'}`);
+      const groundY = Math.floor(FH * 0.42);
+      for (let y = 0; y < FH; ++y) {
+        for (let x = 0; x < FW; ++x) {
+          const i = (y * FW + x) * 4;
+          let r: number;
+          let g: number;
+          let b: number;
+          if (y < groundY) {
+            // 天空：垂直渐变（中高调，含 blueSat/temperature 可测的蓝区）
+            const t = y / groundY;
+            r = 150 + 70 * t;
+            g = 170 + 60 * t;
+            b = 205 + 42 * t;
+          } else {
+            // 地面：中调纹理（正弦条纹 + 噪声）
+            const s = Math.sin(x * 0.055) * Math.sin(y * 0.09);
+            const n = (hash01(x, y) - 0.5) * 46;
+            const v = 118 + s * 34 + n;
+            r = v;
+            g = v * 0.97 + 6;
+            b = v * 0.9 + 10;
+          }
+          // 右上：被裁切高光块（255 裁切 + 4px 过渡沿）
+          {
+            const hx0 = FW - 300;
+            const hy0 = 24;
+            if (x >= hx0 && x < FW - 24 && y >= hy0 && y < hy0 + 200) {
+              const edge = Math.min(x - hx0, FW - 25 - x, y - hy0, hy0 + 199 - y);
+              const k = edge < 4 ? (0.75 + 0.25 * (edge / 4)) * 254 + 1.02 : 255;
+              r = k; g = k; b = Math.min(255, k - 2);
+            }
+          }
+          // 左下：深阴影块（近黑）
+          if (x < 300 && y >= FH - 213) {
+            r = 7; g = 8; b = 11;
+          }
+          // 中带：中性灰阶 64/96/128/160/192（5 × 80px）
+          if (y >= 380 && y < 460 && x >= 64 && x < 464) {
+            const v = 64 + Math.floor((x - 64) / 80) * 32;
+            r = v; g = v; b = v;
+          }
+          // 中带：高饱和色块（6 × 70px）
+          if (y >= 380 && y < 460 && x >= 560 && x < 980) {
+            const c2 = SAT[Math.floor((x - 560) / 70)];
+            r = c2[0]; g = c2[1]; b = c2[2];
+          }
+          fimg.data[i] = r;
+          fimg.data[i + 1] = g;
+          fimg.data[i + 2] = b;
+          fimg.data[i + 3] = 255;
+        }
       }
-      log(`t17-controls: ${t17Failed === 0 ? 'ALL-OK' : `${t17Failed}-FAILED`} n=${controls.length} | ${t17.join(' · ')}`);
+      fx.putImageData(fimg, 0, 0);
+      log(`t17-fixture-write ${fixtureSrcPath}: ${fc.toDataURL('image/png')}`);
+      await sleep(400); // 等主进程落盘
+      const { jobId: impJob } = await api.importApi.start({
+        source: { kind: 'folder', path: fixtureDir },
+        target: 'C:/Users/zj/.lumina/mocklib',
+        renameTemplate: '{name}',
+        pairRawJpg: false,
+        verifyMd5: true,
+      });
+      const impRes = (await waitJob(impJob)) as { imported?: number; duplicated?: number; failed?: number };
+      const pngQ = await api.library.queryPhotos({ formats: ['PNG'] }, undefined, { offset: 0, limit: 20 });
+      const fixtureId = pngQ.items[0]?.id ?? null;
+      if (fixtureId === null) {
+        log(`t17-fixture: FAILED import-missing imported=${impRes.imported} duplicated=${impRes.duplicated} failed=${impRes.failed}`);
+      } else {
+        log(
+          `t17-fixture: photoId=${fixtureId} imported=${impRes.imported ?? 0} duplicated=${impRes.duplicated ?? 0} failed=${impRes.failed ?? 0} ` +
+            `size=${FW}x${FH} content=clipped-highlight/deep-shadow/neutral-gray/saturated-blocks/texture-midtone`,
+        );
+        await useDevelop.getState().openPhoto(fixtureId);
+        await sleep(1500);
+        // 固定基线：色调参数 + 8 色带 + 蒙版全部归零，再取基线（custom+5500K 由 store 契约归一化为 0）
+        await useDevelop.getState().applyPatch(
+          {
+            whiteBalance: 'custom',
+            exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0,
+            temperature: 5500, tint: 0, vibrance: 0, saturation: 0, clarity: 0, texture: 0, dehaze: 0,
+            toneCurveRGB: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+            masks: [],
+            hsl: {
+              red: { hue: 0, sat: 0, lum: 0 }, orange: { hue: 0, sat: 0, lum: 0 },
+              yellow: { hue: 0, sat: 0, lum: 0 }, green: { hue: 0, sat: 0, lum: 0 },
+              aqua: { hue: 0, sat: 0, lum: 0 }, blue: { hue: 0, sat: 0, lum: 0 },
+              purple: { hue: 0, sat: 0, lum: 0 }, magenta: { hue: 0, sat: 0, lum: 0 },
+            },
+            colorGrade: { shadowHue: 0, shadowSat: 0, midtoneHue: 0, midtoneSat: 0, highlightHue: 0, highlightSat: 0, blend: 50, balance: 0 },
+            calibration: { shadowTint: 0, redHue: 0, redSat: 0, greenHue: 0, greenSat: 0, blueHue: 0, blueSat: 0 },
+            detail: { sharpness: 0, sharpenRadius: 1, sharpenDetail: 25, sharpenMasking: 0, luminanceSmoothing: 0, colorNR: 0, colorNRDetail: 25 },
+            optics: { lensProfileEnable: false, manualDistortion: 0, vignetteAmount: 0, vignetteMidpoint: 50, vignetteFeather: 50, grainAmount: 0, grainFrequency: 1, grainSize: 1 },
+          },
+          true,
+          'T1.7 逐控件基线',
+        );
+        await sleep(700);
+        const baseParamsSnap = structuredClone(useDevelop.getState().params!);
+        // 引擎侧交叉验证：同一夹具（无损 PNG 原片）+ 同一参数快照，走 develop.render
+        // （导出同代码路径）→ 64×64 网格均值，与 GPU 预览 d 同口径对照
+        const engineMean = async (params: EditParams): Promise<[number, number, number]> => {
+          const er = await api.develop.render({ inputPath: fixtureLibPath, params, longEdge: 0 });
+          const im = await new Promise<HTMLImageElement>((res, rej) => {
+            const q = new Image();
+            q.onload = () => res(q);
+            q.onerror = () => rej(new Error(`engine render load failed: ${er.path}`));
+            q.src = fileUrl(er.path);
+          });
+          const ec2 = document.createElement('canvas');
+          ec2.width = 64;
+          ec2.height = 64;
+          const ectx = ec2.getContext('2d', { willReadFrequently: true });
+          if (!ectx) throw new Error('2d context unavailable');
+          ectx.drawImage(im, 0, 0, 64, 64);
+          const epx = ectx.getImageData(0, 0, 64, 64).data;
+          let er2 = 0;
+          let eg = 0;
+          let eb = 0;
+          for (let i = 0; i < epx.length; i += 4) {
+            er2 += epx[i];
+            eg += epx[i + 1];
+            eb += epx[i + 2];
+          }
+          const en = epx.length / 4;
+          return [er2 / en, eg / en, eb / en];
+        };
+        const num = (k: keyof EditParams, v: number) => () => useDevelop.getState().setNumeric(k, v, true);
+        const path = (p: string, v: number) => () => useDevelop.getState().setPath(p, v, true);
+        // minD = 该控件「变了」的最小像素阈值（max 通道差）；id 阈值统一 2.0
+        const controls: { name: string; apply: () => Promise<void>; reset: () => Promise<void>; minD: number }[] = [
+          { name: 'exposure+0.6', apply: num('exposure', 0.6), reset: num('exposure', 0), minD: 3 },
+          { name: 'contrast+35', apply: num('contrast', 35), reset: num('contrast', 0), minD: 2 },
+          { name: 'highlights-45', apply: num('highlights', -45), reset: num('highlights', 0), minD: 1.5 },
+          { name: 'shadows+45', apply: num('shadows', 45), reset: num('shadows', 0), minD: 1.5 },
+          { name: 'whites+35', apply: num('whites', 35), reset: num('whites', 0), minD: 1.5 },
+          { name: 'blacks-35', apply: num('blacks', -35), reset: num('blacks', 0), minD: 1.5 },
+          { name: 'temperature+2000K', apply: num('temperature', 7500), reset: num('temperature', 5500), minD: 2 },
+          { name: 'tint-25', apply: num('tint', -25), reset: num('tint', 0), minD: 1.5 },
+          { name: 'vibrance+45', apply: num('vibrance', 45), reset: num('vibrance', 0), minD: 2 },
+          { name: 'saturation+35', apply: num('saturation', 35), reset: num('saturation', 0), minD: 2 },
+          { name: 'clarity+45', apply: num('clarity', 45), reset: num('clarity', 0), minD: 1.5 },
+          { name: 'texture+45', apply: num('texture', 45), reset: num('texture', 0), minD: 1 },
+          { name: 'dehaze+35', apply: num('dehaze', 35), reset: num('dehaze', 0), minD: 1.5 },
+          { name: 'detail.sharpness+80', apply: path('detail.sharpness', 80), reset: path('detail.sharpness', 0), minD: 1 },
+          { name: 'detail.colorNR+50', apply: path('detail.colorNR', 50), reset: path('detail.colorNR', 0), minD: 1.5 },
+          { name: 'optics.vignette-60', apply: path('optics.vignetteAmount', -60), reset: path('optics.vignetteAmount', 0), minD: 3 },
+          { name: 'optics.grain+50', apply: path('optics.grainAmount', 50), reset: path('optics.grainAmount', 0), minD: 1.5 },
+          { name: 'colorGrade.midtoneSat+50', apply: path('colorGrade.midtoneSat', 50), reset: path('colorGrade.midtoneSat', 0), minD: 1.5 },
+          { name: 'calibration.blueSat+40', apply: path('calibration.blueSat', 40), reset: path('calibration.blueSat', 0), minD: 1.5 },
+        ];
+        const t17: string[] = [];
+        let t17Failed = 0;
+        for (const c of controls) {
+          const base = sampleMean();
+          await c.apply();
+          await sleep(650);
+          const after = sampleMean();
+          const d = dist(base, after);
+          // 引擎侧同参数对拍（apply 后的 store params 即 GPU 实际用的合并结果）
+          const appliedSnap = structuredClone(useDevelop.getState().params!);
+          let dEng = -1;
+          try {
+            dEng = dist(await engineMean(baseParamsSnap), await engineMean(appliedSnap));
+          } catch (eeng) {
+            log(`t17-engine-x: ${c.name} FAILED ${(eeng as Error).message}`);
+          }
+          await c.reset();
+          await sleep(500);
+          const back = sampleMean();
+          const dId = dist(back, base);
+          const ok = d >= c.minD && dId < 2.0;
+          if (!ok) t17Failed++;
+          t17.push(`${c.name} d=${d.toFixed(1)} eng=${dEng >= 0 ? dEng.toFixed(1) : 'n/a'} id=${dId.toFixed(1)}${ok ? '' : ' FAILED'}`);
+        }
+        log(`t17-controls: ${t17Failed === 0 ? 'ALL-OK' : `${t17Failed}-FAILED`} n=${controls.length} | ${t17.join(' · ')}`);
+      }
     }
 
     // ---------- ⑧ WP-B5 画笔逐笔 SDF：三笔交叉 + 浮层边界一致 ----------
@@ -619,6 +756,8 @@ export async function runSmokeScenario(): Promise<void> {
     }
 
     // ---------- ⑦c T1.5 导出=预览像素断言（销毁三套实现后的验收，进 CI） ----------
+    // ⑦c 口径保持：回到照片 1 的 80×56 底图（t17 夹具照片会让 parity 画布变 1024×683，
+    // 属另一口径；不因夹具升级改变 ⑦c 对照基准）。
     // 口径（写进报表 note）：同一输入位图（preview base 经渲染进程解码一次导出的**无损 PNG**，
     // 两端共享同一份文件，消除浏览器/引擎对有损 JPEG 的双解码差）+
     // 同一参数集 P（覆盖非几何非蒙版全部叶）。预览侧 = GPU 管线（DevelopRenderer/
@@ -626,7 +765,9 @@ export async function runSmokeScenario(): Promise<void> {
     // （与 export 完全同一代码路径 displayToPlanBuf → runEditPlan → planBufToDisplay）。
     // 逐像素 8bit RGB LSB 比对，门槛同 §10 parity：mean<0.5 / max≤3。超门槛即冒烟失败。
     {
-      // ⑦c 跑在 closePhoto 之后（协议契约段尾），先重开一张照片拿 preview base 路径
+      // ⑦c 跑在 t17 之后：显式回到照片 1，保证 parity 画布口径仍是 80×56
+      await useDevelop.getState().openPhoto(firstId);
+      await sleep(1200);
       const stOpen = useDevelop.getState();
       if (!stOpen.baseImageUrl) {
         await stOpen.openPhoto(firstId);

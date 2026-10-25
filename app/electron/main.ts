@@ -222,18 +222,18 @@ function createWindow(): void {
         process.stdout.write(`[smoke] export-parity-report write failed: ${String(err)}\n`);
       }
     }
-    // T1.5 ⑦c：两侧共享的无损底图落盘（渲染层 PNG dataURL + 行内目标路径 → 写盘），
-    // 消除浏览器/引擎对有损 JPEG 的双解码差（工装输入差，非管线差）
-    if (isSmoke && message.includes('[smoke-scenario] export-parity-base ')) {
-      const m = /\[smoke-scenario\] export-parity-base (.+?): data:image\/png;base64,([A-Za-z0-9+/=]+)/.exec(message);
-      if (m) {
+    // T1.5 ⑦c / T1.7 t17 夹具：渲染层 PNG dataURL + 行内目标路径 → 主进程写盘
+    // （⑦c 共享无损底图消除浏览器/引擎双解码差；t17 代表性夹具落盘后走真实 import 入库）
+    if (isSmoke) {
+      const pngWrite = /\[smoke-scenario\] (?:export-parity-base|t17-fixture-write) (.+?): data:image\/png;base64,([A-Za-z0-9+/=]+)/.exec(message);
+      if (pngWrite) {
         try {
-          const out = m[1].trim();
+          const out = pngWrite[1].trim();
           fs.mkdirSync(path.dirname(out), { recursive: true });
-          fs.writeFileSync(out, Buffer.from(m[2], 'base64'));
-          process.stdout.write(`[smoke] export-parity-base -> ${out}\n`);
+          fs.writeFileSync(out, Buffer.from(pngWrite[2], 'base64'));
+          process.stdout.write(`[smoke] png-write -> ${out}\n`);
         } catch (err) {
-          process.stdout.write(`[smoke] export-parity-base write failed: ${String(err)}\n`);
+          process.stdout.write(`[smoke] png-write failed: ${String(err)}\n`);
         }
       }
     }
@@ -489,9 +489,9 @@ async function bootstrap(): Promise<void> {
   createWindow();
 
   if (isSmoke) {
-    // 冒烟模式：跑完全模块场景（素材库→修图台→导入→健康→协议契约→主题，约 20s）
-    // 后截图并退出；T1.7 起逐控件像素断言（19 控件 × ~1.2s）+ 导出=预览断言入列，
-    // 30s 预算不够 → 放宽到 120s（场景自身有 DONE/异常路径，防挂死靠进程退出）。
+    // 冒烟模式：跑完全模块场景（素材库→修图台→导入→健康→协议契约→主题）后截图并退出；
+    // T1.7 起逐控件像素断言（19 控件 × ~1.2s）+ 夹具 import/引擎交叉验证 + 导出=预览断言
+    // 入列，120s 预算不够 → 放宽到 240s（场景自身有 DONE/异常路径，防挂死靠进程退出）。
     setTimeout(async () => {
       try {
         const image = await mainWindow?.webContents.capturePage();
@@ -506,7 +506,7 @@ async function bootstrap(): Promise<void> {
       process.stdout.write('[smoke] timeout reached, quitting\n');
       await bridge?.shutdown();
       app.quit();
-    }, 120_000);
+    }, 240_000);
   }
 
   if (isBaseline) {
