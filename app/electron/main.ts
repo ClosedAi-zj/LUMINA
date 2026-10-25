@@ -206,6 +206,10 @@ function createWindow(): void {
     if (isSmoke && message.includes('[smoke-scenario] brush-shot')) {
       captureTo(path.resolve(appRoot, 'build/brush-sdf.png'), 2);
     }
+    // M-3：浮层（对话框）打开状态截图，验证玻璃材质 + 浮入动效
+    if (isSmoke && message.includes('[smoke-scenario] overlay-shot')) {
+      captureTo(path.resolve(appRoot, 'build/review-overlay.png'), 3, 600);
+    }
     // WP-C1 视觉基线：`[baseline] shot <id>-<name> dark|light`
     if (isBaseline) {
       const m = /\[baseline\] shot ([a-z0-9]+-[a-z0-9-]+) (dark|light)/i.exec(message);

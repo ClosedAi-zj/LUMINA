@@ -59,7 +59,8 @@ export function PanelCard({
         </svg>
       </button>
       {open && (
-        <div className="pb-2 border-t border-line">
+        // R7 §3-6：面板展开 240ms cubic-bezier(0.2,0.8,0.2,1)（keyframes panel-in）
+        <div className="pb-2 border-t border-line animate-panel-in">
           {children}
         </div>
       )}

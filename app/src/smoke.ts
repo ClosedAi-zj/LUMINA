@@ -445,6 +445,21 @@ export async function runSmokeScenario(): Promise<void> {
     const flushMtime = useDevelop.getState().lastFlushMtime;
     log(`develop-endSession: sidecarMtime=${flushMtime === null ? 'null' : 'confirmed'}`);
 
+    // ---------- ②b M-3：浮层打开状态截图（移除确认对话框 = 玻璃 M2 材质验证载体） ----------
+    useUi.getState().navigate('library');
+    await sleep(400);
+    const firstLib = (useLibrary.getState().pages[0] ?? [])[0];
+    if (firstLib) {
+      useLibrary.getState().select(firstLib.id, 'set');
+      await sleep(200);
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete' }));
+      await sleep(300);
+      log('overlay-shot'); // 主进程据此拍「浮层打开状态」→ build/review-overlay.png
+      await sleep(900);
+      document.querySelector<HTMLButtonElement>('button[aria-label="关闭"]')?.click();
+      await sleep(200);
+    }
+
     // ---------- ③ 导入向导 ----------
     useUi.getState().navigate('ingest');
     await sleep(200);
