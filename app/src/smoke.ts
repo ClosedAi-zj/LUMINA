@@ -352,92 +352,103 @@ export async function runSmokeScenario(): Promise<void> {
       const fixtureDir = 'C:/Users/zj/.lumina/t17-fixture';
       const fixtureSrcPath = `${fixtureDir}/t17-fixture.png`;
       const fixtureLibPath = 'C:/Users/zj/.lumina/mocklib/t17-fixture.png';
-      const fc = document.createElement('canvas');
-      fc.width = FW;
-      fc.height = FH;
-      const fx = fc.getContext('2d');
-      if (!fx) throw new Error('2d context unavailable');
-      const fimg = fx.createImageData(FW, FH);
-      // 确定性伪噪声（整数 hash，无随机源）：中调纹理与 colorNR/颗粒的可测素材
-      const hash01 = (x: number, y: number): number => {
-        let h = (x * 374761393 + y * 668265263) | 0;
-        h = Math.imul(h ^ (h >> 13), 1274126177);
-        return ((h ^ (h >> 16)) >>> 0) / 4294967295;
-      };
-      const SAT: [number, number, number][] = [
-        [224, 32, 32], [32, 190, 64], [32, 96, 224], [240, 210, 32], [224, 48, 208], [40, 216, 216],
-      ];
-      const groundY = Math.floor(FH * 0.42);
-      for (let y = 0; y < FH; ++y) {
-        for (let x = 0; x < FW; ++x) {
-          const i = (y * FW + x) * 4;
-          let r: number;
-          let g: number;
-          let b: number;
-          if (y < groundY) {
-            // 天空：垂直渐变（中高调，含 blueSat/temperature 可测的蓝区）
-            const t = y / groundY;
-            r = 150 + 70 * t;
-            g = 170 + 60 * t;
-            b = 205 + 42 * t;
-          } else {
-            // 地面：中调纹理（正弦条纹 + 噪声）
-            const s = Math.sin(x * 0.055) * Math.sin(y * 0.09);
-            const n = (hash01(x, y) - 0.5) * 46;
-            const v = 118 + s * 34 + n;
-            r = v;
-            g = v * 0.97 + 6;
-            b = v * 0.9 + 10;
-          }
-          // 右上：被裁切高光块（255 裁切 + 4px 过渡沿）
-          {
-            const hx0 = FW - 300;
-            const hy0 = 24;
-            if (x >= hx0 && x < FW - 24 && y >= hy0 && y < hy0 + 200) {
-              const edge = Math.min(x - hx0, FW - 25 - x, y - hy0, hy0 + 199 - y);
-              const k = edge < 4 ? (0.75 + 0.25 * (edge / 4)) * 254 + 1.02 : 255;
-              r = k; g = k; b = Math.min(255, k - 2);
+      // 库内已有夹具照片（内容确定性 + dedupe=skip）→ 直接复用，跳过重写/import。
+      // 首跑曾出现 import job 与 xmp migration 在引擎 job 队列竞争、恰好撞上 waitJob
+      // 超时的竞态（import finished 时刻 ≈ 超时时刻），复用路径从根上消除。
+      const preQ = await api.library.queryPhotos({ formats: ['PNG'] }, undefined, { offset: 0, limit: 20 });
+      const preExisting = preQ.items[0]?.id != null;
+      let pngQ = preQ;
+      if (!preExisting) {
+        const fc = document.createElement('canvas');
+        fc.width = FW;
+        fc.height = FH;
+        const fx = fc.getContext('2d');
+        if (!fx) throw new Error('2d context unavailable');
+        const fimg = fx.createImageData(FW, FH);
+        // 确定性伪噪声（整数 hash，无随机源）：中调纹理与 colorNR/颗粒的可测素材
+        const hash01 = (x: number, y: number): number => {
+          let h = (x * 374761393 + y * 668265263) | 0;
+          h = Math.imul(h ^ (h >> 13), 1274126177);
+          return ((h ^ (h >> 16)) >>> 0) / 4294967295;
+        };
+        const SAT: [number, number, number][] = [
+          [224, 32, 32], [32, 190, 64], [32, 96, 224], [240, 210, 32], [224, 48, 208], [40, 216, 216],
+        ];
+        const groundY = Math.floor(FH * 0.42);
+        for (let y = 0; y < FH; ++y) {
+          for (let x = 0; x < FW; ++x) {
+            const i = (y * FW + x) * 4;
+            let r: number;
+            let g: number;
+            let b: number;
+            if (y < groundY) {
+              // 天空：垂直渐变（中高调，含 blueSat/temperature 可测的蓝区）
+              const t = y / groundY;
+              r = 150 + 70 * t;
+              g = 170 + 60 * t;
+              b = 205 + 42 * t;
+            } else {
+              // 地面：中调纹理（正弦条纹 + 噪声）
+              const s = Math.sin(x * 0.055) * Math.sin(y * 0.09);
+              const n = (hash01(x, y) - 0.5) * 46;
+              const v = 118 + s * 34 + n;
+              r = v;
+              g = v * 0.97 + 6;
+              b = v * 0.9 + 10;
             }
+            // 右上：被裁切高光块（255 裁切 + 4px 过渡沿）
+            {
+              const hx0 = FW - 300;
+              const hy0 = 24;
+              if (x >= hx0 && x < FW - 24 && y >= hy0 && y < hy0 + 200) {
+                const edge = Math.min(x - hx0, FW - 25 - x, y - hy0, hy0 + 199 - y);
+                const k = edge < 4 ? (0.75 + 0.25 * (edge / 4)) * 254 + 1.02 : 255;
+                r = k; g = k; b = Math.min(255, k - 2);
+              }
+            }
+            // 左下：深阴影块（近黑）
+            if (x < 300 && y >= FH - 213) {
+              r = 7; g = 8; b = 11;
+            }
+            // 中带：中性灰阶 64/96/128/160/192（5 × 80px）
+            if (y >= 380 && y < 460 && x >= 64 && x < 464) {
+              const v = 64 + Math.floor((x - 64) / 80) * 32;
+              r = v; g = v; b = v;
+            }
+            // 中带：高饱和色块（6 × 70px）
+            if (y >= 380 && y < 460 && x >= 560 && x < 980) {
+              const c2 = SAT[Math.floor((x - 560) / 70)];
+              r = c2[0]; g = c2[1]; b = c2[2];
+            }
+            fimg.data[i] = r;
+            fimg.data[i + 1] = g;
+            fimg.data[i + 2] = b;
+            fimg.data[i + 3] = 255;
           }
-          // 左下：深阴影块（近黑）
-          if (x < 300 && y >= FH - 213) {
-            r = 7; g = 8; b = 11;
-          }
-          // 中带：中性灰阶 64/96/128/160/192（5 × 80px）
-          if (y >= 380 && y < 460 && x >= 64 && x < 464) {
-            const v = 64 + Math.floor((x - 64) / 80) * 32;
-            r = v; g = v; b = v;
-          }
-          // 中带：高饱和色块（6 × 70px）
-          if (y >= 380 && y < 460 && x >= 560 && x < 980) {
-            const c2 = SAT[Math.floor((x - 560) / 70)];
-            r = c2[0]; g = c2[1]; b = c2[2];
-          }
-          fimg.data[i] = r;
-          fimg.data[i + 1] = g;
-          fimg.data[i + 2] = b;
-          fimg.data[i + 3] = 255;
         }
+        fx.putImageData(fimg, 0, 0);
+        log(`t17-fixture-write ${fixtureSrcPath}: ${fc.toDataURL('image/png')}`);
+        await sleep(400); // 等主进程落盘
+        const { jobId: impJob } = await api.importApi.start({
+          source: { kind: 'folder', path: fixtureDir },
+          target: 'C:/Users/zj/.lumina/mocklib',
+          renameTemplate: '{name}',
+          pairRawJpg: false,
+          verifyMd5: true,
+        });
+        // 30s 容差：import job 可能排在 xmp migration 等长任务之后
+        const impRes = (await waitJob(impJob, 30_000)) as { imported?: number; duplicated?: number; failed?: number };
+        pngQ = await api.library.queryPhotos({ formats: ['PNG'] }, undefined, { offset: 0, limit: 20 });
+        log(`t17-fixture: import imported=${impRes.imported ?? 0} duplicated=${impRes.duplicated ?? 0} failed=${impRes.failed ?? 0}`);
+      } else {
+        log(`t17-fixture: reuse photoId=${preQ.items[0].id}（库内已有夹具，跳过重写/import）`);
       }
-      fx.putImageData(fimg, 0, 0);
-      log(`t17-fixture-write ${fixtureSrcPath}: ${fc.toDataURL('image/png')}`);
-      await sleep(400); // 等主进程落盘
-      const { jobId: impJob } = await api.importApi.start({
-        source: { kind: 'folder', path: fixtureDir },
-        target: 'C:/Users/zj/.lumina/mocklib',
-        renameTemplate: '{name}',
-        pairRawJpg: false,
-        verifyMd5: true,
-      });
-      const impRes = (await waitJob(impJob)) as { imported?: number; duplicated?: number; failed?: number };
-      const pngQ = await api.library.queryPhotos({ formats: ['PNG'] }, undefined, { offset: 0, limit: 20 });
       const fixtureId = pngQ.items[0]?.id ?? null;
       if (fixtureId === null) {
-        log(`t17-fixture: FAILED import-missing imported=${impRes.imported} duplicated=${impRes.duplicated} failed=${impRes.failed}`);
+        log('t17-fixture: FAILED import-missing（重查 queryPhotos 无 PNG 记录）');
       } else {
         log(
-          `t17-fixture: photoId=${fixtureId} imported=${impRes.imported ?? 0} duplicated=${impRes.duplicated ?? 0} failed=${impRes.failed ?? 0} ` +
-            `size=${FW}x${FH} content=clipped-highlight/deep-shadow/neutral-gray/saturated-blocks/texture-midtone`,
+          `t17-fixture: photoId=${fixtureId} size=${FW}x${FH} content=clipped-highlight/deep-shadow/neutral-gray/saturated-blocks/texture-midtone`,
         );
         await useDevelop.getState().openPhoto(fixtureId);
         await sleep(1500);
