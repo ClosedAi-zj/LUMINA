@@ -35,7 +35,8 @@ interface LibraryStore {
   facets: FacetsResult | null;
   stats: LibraryStats | null;
   activeSmartId: number | null;
-  collapsedRoots: number[];
+  /** 展开的根目录（阶段4 裁定：目录树默认折叠，展开态记这里并持久化 sessionStorage） */
+  expandedRoots: number[];
   filterVersion: number;
   detailLoading: boolean;
   /** 最近一次查询失败原因（WP-B3 零静默：页面凭它渲染失败态） */
@@ -59,6 +60,17 @@ interface LibraryStore {
   clearSelection: () => void;
 }
 
+/** sessionStorage 读取展开态（不可用时返回空 = 全折叠默认态） */
+function readExpandedRoots(): number[] {
+  try {
+    const raw = sessionStorage.getItem('lumina.expandedRoots');
+    const parsed: unknown = raw === null ? [] : JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((v): v is number => typeof v === 'number') : [];
+  } catch {
+    return [];
+  }
+}
+
 export const useLibrary = create<LibraryStore>((set, get) => ({
   filter: {},
   sort: { field: 'capturedAt', order: 'asc' },
@@ -77,7 +89,7 @@ export const useLibrary = create<LibraryStore>((set, get) => ({
   facets: null,
   stats: null,
   activeSmartId: null,
-  collapsedRoots: [],
+  expandedRoots: readExpandedRoots(),
   filterVersion: 0,
   detailLoading: false,
   lastError: null,
@@ -114,9 +126,16 @@ export const useLibrary = create<LibraryStore>((set, get) => ({
   },
 
   toggleRootCollapse: (rootId) =>
-    set((st) => ({
-      collapsedRoots: st.collapsedRoots.includes(rootId) ? st.collapsedRoots.filter((r) => r !== rootId) : [...st.collapsedRoots, rootId],
-    })),
+    set((st) => {
+      // 默认折叠语义：列表里是「已展开」的根；点击即在展开/折叠间切换，并持久化 sessionStorage
+      const expanded = st.expandedRoots.includes(rootId) ? st.expandedRoots.filter((r) => r !== rootId) : [...st.expandedRoots, rootId];
+      try {
+        sessionStorage.setItem('lumina.expandedRoots', JSON.stringify(expanded));
+      } catch {
+        /* 隐私模式等存储不可用：降级为仅会话内记忆，不影响功能 */
+      }
+      return { expandedRoots: expanded };
+    }),
 
   fetchPage: async (offset) => {
     const st = get();

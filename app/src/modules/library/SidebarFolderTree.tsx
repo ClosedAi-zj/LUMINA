@@ -18,7 +18,7 @@ import type { AlbumInfo, FolderNode, SmartCollection } from '../../api/protocol'
 
 export default function SidebarFolderTree() {
   const folderTree = useLibrary((s) => s.folderTree);
-  const collapsedRoots = useLibrary((s) => s.collapsedRoots);
+  const expandedRoots = useLibrary((s) => s.expandedRoots);
   const toggleRootCollapse = useLibrary((s) => s.toggleRootCollapse);
   const filter = useLibrary((s) => s.filter);
   const [collections, setCollections] = useState<SmartCollection[]>([]);
@@ -39,7 +39,7 @@ export default function SidebarFolderTree() {
           <RootNode
             key={root.rootId}
             node={root}
-            collapsed={collapsedRoots.includes(root.rootId)}
+            collapsed={!expandedRoots.includes(root.rootId)}
             onToggle={() => toggleRootCollapse(root.rootId)}
             activeFolderIds={filter.folderIds ?? []}
             activeRootIds={filter.rootIds ?? []}
