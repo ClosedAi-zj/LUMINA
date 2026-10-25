@@ -165,3 +165,8 @@ add_executable(test_op_table tests/test_op_table.cpp)
 target_link_libraries(test_op_table PRIVATE lumina_core)
 set_target_properties(test_op_table PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
 add_test(NAME op_table COMMAND test_op_table)
+
+# M0 ΔE 基线工具（不入 ctest：依赖本机 RW2 样本；由 scripts/ci/deltae.py 编排）
+add_executable(deltae_baseline tests/color/delta_e_baseline.cpp)
+target_link_libraries(deltae_baseline PRIVATE lumina_core)
+set_target_properties(deltae_baseline PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
