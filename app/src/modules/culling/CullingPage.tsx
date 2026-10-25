@@ -1,7 +1,7 @@
 /**
- * 精选模式主页：顶部决策工具条 + 左候选网格（可折叠）+ 中央大图观察区 +
- * 底部胶片条 + 键帽提示条。键盘流：1-5 星 / P 精选 / X 淘汰 / ←→ 切换 /
- * Z 放大 / Space 对比 / Esc 清除决策。
+ * 精选模式主页（阶段5 B1 重排）：默认 = 网格批量形态（网格 + 右栏审阅 + 计数条）；
+ * Tab 切换到单张审阅子模式（原大图流水线：工具条 + 候选条 + 大观察区 + 胶片条）。
+ * 键盘流：J/K 翻张、P 晋级、X 拒绝、U 撤销标记、1-5 星、←→/Z/Space（审阅模式）、Esc 清除。
  */
 
 import { useEffect, useState } from 'react';
@@ -12,12 +12,15 @@ import CullingToolbar from './CullingToolbar';
 import CullingViewer from './CullingViewer';
 import CullingFilmstrip from './CullingFilmstrip';
 import CullingGrid from './CullingGrid';
+import CullingBatch, { CullingStatusBar } from './CullingBatch';
 
 export default function CullingPage() {
   const loading = useCulling((s) => s.loading);
   const loadError = useCulling((s) => s.loadError);
   const total = useCulling((s) => s.total);
   const [gridCollapsed, setGridCollapsed] = useState(false);
+  /** B1：grid = 网格批量（默认）；review = 单张审阅子模式（原流水线） */
+  const [mode, setMode] = useState<'grid' | 'review'>('grid');
 
   // 进入页面即加载候选队列（store 内幂等）
   useEffect(() => {
@@ -31,6 +34,11 @@ export default function CullingPage() {
       if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable) return;
       const st = useCulling.getState();
       const key = e.key.toLowerCase();
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        setMode((m) => (m === 'grid' ? 'review' : 'grid'));
+        return;
+      }
       if (e.key >= '1' && e.key <= '5') {
         e.preventDefault();
         st.rate(Number(e.key) as 1 | 2 | 3 | 4 | 5);
@@ -43,6 +51,18 @@ export default function CullingPage() {
       } else if (key === 'x') {
         e.preventDefault();
         st.toggleReject();
+      } else if (key === 'j') {
+        // B1：网格批量翻张（下一张）
+        e.preventDefault();
+        st.step(1);
+      } else if (key === 'k') {
+        // B1：网格批量翻张（上一张）
+        e.preventDefault();
+        st.step(-1);
+      } else if (key === 'u') {
+        // B1：撤销当前张标记（评分与旗标一并还原为未判）
+        e.preventDefault();
+        st.clearDecision();
       } else if (e.key === 'ArrowRight') {
         e.preventDefault();
         st.step(1);
@@ -94,6 +114,27 @@ export default function CullingPage() {
     );
   }
 
+  if (mode === 'grid') {
+    return (
+      <div className="h-full flex flex-col">
+        <CullingToolbar />
+        <CullingBatch />
+        <CullingStatusBar />
+        <KeycapBar
+          items={[
+            { keys: ['J', 'K'], label: '翻张' },
+            { keys: ['P'], label: '晋级' },
+            { keys: ['X'], label: '拒绝' },
+            { keys: ['U'], label: '撤销标记' },
+            { keys: ['1', '–', '5'], label: '打星' },
+            { keys: ['Esc'], label: '清除决策' },
+            { keys: ['Tab'], label: '单张审阅' },
+          ]}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="h-full flex flex-col">
       <CullingToolbar />
@@ -114,6 +155,7 @@ export default function CullingPage() {
           { keys: ['Space'], label: '对比上一张' },
           { keys: ['Esc'], label: '清除决策' },
           { keys: ['0'], label: '取消评分' },
+          { keys: ['Tab'], label: '网格批量' },
         ]}
       />
     </div>

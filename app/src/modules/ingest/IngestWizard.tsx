@@ -1,6 +1,7 @@
 /**
- * 导入向导（帧 06 三步）：① 选择来源（SD 卡 / 文件夹，异步扫描摘要）
- * ② 目标与备份（黄条预警）③ 导入选项（模板 / 去重 / 配对 / 后动作）→ 执行态 → 完成弹窗。
+ * 导入向导（阶段5 B2 重排，帧 06 裁定）：左侧纵向步骤条（选择来源 → 检测摘要 →
+ * 备份目标 → 命名/去重 → 执行）+ 右侧常驻设置面板（NAS 双备份 / 去重策略 /
+ * 预览胶片条）。执行进度走真实 ingest 事件（importFileResults + job 进度）。
  * 整夹不可读 → 三选项弹窗（重定位 / 孤儿 / 回填），禁止静默跳过（PRD R3）。
  */
 
@@ -13,10 +14,11 @@ import { useLibrary } from '../../store/libraryStore';
 import { useJobProgress, useRpcQuery } from '../../api/hooks';
 import { Button, Toggle, Chip } from '../../components/primitives';
 import { Dialog, Icon } from '../../components/shell';
+import Filmstrip from '../library/Filmstrip';
 import { formatBytes, formatCount, formatEta } from '../../utils/format';
 import type { ScanSourceResult, VolumeInfo } from '../../api/protocol';
 
-type Step = 1 | 2 | 3 | 'executing';
+type Step = 1 | 2 | 3 | 4 | 'executing';
 
 interface SourcePick {
   kind: 'volume' | 'folder';
@@ -136,19 +138,22 @@ export default function IngestWizard() {
         {(
           [
             [1, '选择来源', 'SD 卡 · 相机 · 文件夹'],
-            [2, '目标与备份', '主库 + NAS 双备份'],
-            [3, '导入选项', '命名 · 去重 · 配对'],
+            [2, '检测摘要', '文件数 · 配对 · 重复'],
+            [3, '备份目标', '主库 + NAS 双备份'],
+            [4, '命名与去重', '模板 · 去重 · 配对'],
+            ['executing', '执行', '进度 · 校验 · 汇总'],
           ] as const
         ).map(([n, title, desc]) => {
+          const order: (Step)[] = [1, 2, 3, 4, 'executing'];
           const active = step === n;
-          const done = (step === 2 && n === 1) || (step === 3 && n <= 2) || (step === 'executing' && true);
+          const done = order.indexOf(step as Step) > order.indexOf(n as Step);
           return (
-            <div key={n} className={`flex items-start gap-2.5 py-2.5 ${active ? '' : 'opacity-70'}`}>
+            <div key={String(n)} className={`flex items-start gap-2.5 py-2.5 ${active ? '' : 'opacity-70'}`}>
               <span
                 className="w-5 h-5 rounded-full text-2xs flex items-center justify-center shrink-0 mt-px"
                 style={{ background: active || done ? 'var(--Lumina-Tokens-accent)' : 'var(--Lumina-Tokens-hover)', color: active || done ? 'var(--Lumina-Tokens-onAccent)' : 'var(--Lumina-Tokens-textMuted)' }}
               >
-                {done && !active ? '✓' : n}
+                {done && !active ? '✓' : n === 'executing' ? '▶' : n}
               </span>
               <div>
                 <div className={`text-xs ${active ? 'text-txt font-medium' : 'text-txt2'}`}>{title}</div>
@@ -180,7 +185,8 @@ export default function IngestWizard() {
             onPick={startScan}
           />
         )}
-        {step === 2 && (
+        {step === 2 && <SummaryStep scanResult={scanResult} />}
+        {step === 3 && (
           <TargetStep
             target={target}
             setTarget={setTarget}
@@ -194,9 +200,12 @@ export default function IngestWizard() {
             requiredBytes={scanResult?.totalBytes ?? 0}
           />
         )}
-        {step === 3 && <OptionsStep template={template} setTemplate={setTemplate} enterCulling={enterCulling} setEnterCulling={setEnterCulling} applyPreset={applyPreset} setApplyPreset={setApplyPreset} />}
+        {step === 4 && <OptionsStep template={template} setTemplate={setTemplate} enterCulling={enterCulling} setEnterCulling={setEnterCulling} applyPreset={applyPreset} setApplyPreset={setApplyPreset} />}
         {step === 'executing' && importJobId !== null && <ExecutingBar jobId={importJobId} progress={importJob?.progress ?? 0} eta={importJob?.etaMs ?? null} events={jobEvents} />}
       </section>
+
+      {/* 右侧常驻设置面板（B2）：NAS 双备份 / 去重策略 / 预览胶片条，跨步骤常驻 */}
+      <PersistentSettings backupEnabled={backupEnabled} backupTiming={backupTiming} verifyMd5={verifyMd5} />
 
       {/* 底部按钮 */}
       <footer className="absolute bottom-0 left-0 right-0 h-12 px-4 flex items-center justify-end gap-2 border-t border-line" style={{ background: 'var(--Lumina-Tokens-panel)' }}>
@@ -205,15 +214,20 @@ export default function IngestWizard() {
         )}
         {step === 1 && (
           <Button variant="primary" disabled={!scanResult || scanResult.totalFiles === 0} onClick={() => void enterStep2()}>
-            下一步 · 目标与备份
+            下一步 · 检测摘要
           </Button>
         )}
         {step === 2 && (
-          <Button variant="primary" onClick={() => setStep(3)}>
-            下一步 · 导入选项
+          <Button variant="primary" disabled={!scanResult || scanResult.totalFiles === 0} onClick={() => setStep(3)}>
+            下一步 · 备份目标
           </Button>
         )}
         {step === 3 && (
+          <Button variant="primary" onClick={() => setStep(4)}>
+            下一步 · 命名与去重
+          </Button>
+        )}
+        {step === 4 && (
           <Button variant="primary" onClick={() => void startImport()}>
             开始导入
           </Button>
@@ -286,6 +300,78 @@ export default function IngestWizard() {
         </div>
       </Dialog>
     </div>
+  );
+}
+
+// ---------- Step 2 · 检测摘要（B2 独立步骤） ----------
+
+function SummaryStep({ scanResult }: { scanResult: ScanSourceResult | null }) {
+  if (!scanResult) {
+    return (
+      <div className="text-2xs text-txt3 py-10 text-center">
+        尚无扫描结果 —— 回「选择来源」挑一张卡或文件夹开始扫描。
+      </div>
+    );
+  }
+  return (
+    <div className="max-w-xl rounded-lg border border-line bg-card p-4">
+      <div className="flex items-baseline justify-between mb-3">
+        <span className="text-xs text-txt">检测摘要</span>
+        <span className="text-2xs text-txt3">数据来自扫描任务真实结果</span>
+      </div>
+      <div className="grid grid-cols-3 gap-2 text-xs mb-3">
+        <Stat label="文件总数" value={formatCount(scanResult.totalFiles)} />
+        <Stat label="总大小" value={formatBytes(scanResult.totalBytes)} />
+        <Stat label="RAW+JPG 配对" value={String(scanResult.rawWithJpg)} />
+        <Stat label="与库内重复" value={String(scanResult.duplicates)} accent />
+        <Stat label="伴随 JPG" value={String(scanResult.rawWithJpg)} />
+        <Stat label="读失败" value={String(scanResult.unreadable.length)} danger={scanResult.unreadable.length > 0} />
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {Object.entries(scanResult.byFormat).map(([fmt, n]) => (
+          <Chip key={fmt} label={`${fmt} ${n}`} />
+        ))}
+      </div>
+      <div className="mt-3 text-2xs text-txt3">
+        去重策略：MD5 相同默认跳过并计数（右栏常驻面板可核对）；读失败文件夹将在下一步前弹出三选项处理，不静默跳过。
+      </div>
+    </div>
+  );
+}
+
+// ---------- 右侧常驻设置（B2） ----------
+
+function PersistentSettings({ backupEnabled, backupTiming, verifyMd5 }: { backupEnabled: boolean; backupTiming: 'onImport' | 'nightly'; verifyMd5: boolean }) {
+  // 预览胶片条：真实数据 = 图库首页缓存（导入完成后 refresh 即显示新入库照片）
+  const firstPage = useLibrary((s) => s.pages[0] ?? []);
+  return (
+    <aside className="w-72 shrink-0 border-l border-line p-3 flex flex-col gap-3 overflow-y-auto" style={{ background: 'var(--Lumina-Tokens-panel)' }}>
+      <div>
+        <div className="text-2xs text-txt2 font-medium mb-1.5">NAS 双备份</div>
+        <div className="rounded-md border border-line bg-card p-2.5 text-2xs flex flex-col gap-1">
+          <span className={backupEnabled ? 'text-success' : 'text-txt3'}>{backupEnabled ? '✓ 已启用' : '未启用（仅写入主库）'}</span>
+          <span className="num text-txt3">目标：N:/NAS-Photos/Lumina</span>
+          <span className="text-txt3">时机：{backupTiming === 'onImport' ? '导入时逐文件' : '每晚 03:00 定时'}</span>
+          <span className="text-txt3">MD5 校验：{verifyMd5 ? '导入即校验' : '关闭'}</span>
+        </div>
+      </div>
+      <div>
+        <div className="text-2xs text-txt2 font-medium mb-1.5">去重策略</div>
+        <div className="rounded-md border border-line bg-card p-2.5 text-2xs flex flex-col gap-1">
+          <span className="text-txt2">MD5 相同 → 跳过并计数</span>
+          <span className="text-txt2">RAW + JPG → 配对为一条目（固定开启）</span>
+          <span className="text-txt3">重命名模板见「命名与去重」步骤</span>
+        </div>
+      </div>
+      <div className="min-h-0">
+        <div className="text-2xs text-txt2 font-medium mb-1.5">预览胶片条（当前图库首页）</div>
+        {firstPage.length > 0 ? (
+          <Filmstrip items={firstPage} />
+        ) : (
+          <div className="rounded-md border border-line bg-card p-2.5 text-2xs text-txt3">暂无（导入完成后显示新入库照片）</div>
+        )}
+      </div>
+    </aside>
   );
 }
 
