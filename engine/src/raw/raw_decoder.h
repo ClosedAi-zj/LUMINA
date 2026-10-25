@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "db/photo_dao.h"
+#include "imaging/image_buffer.h"
 #include "imaging/imaging.h"
 
 namespace lumina {
@@ -54,6 +55,12 @@ class RawDecoder {
  public:
   // 真解码为 sRGB 位图；half=true 时降采样加速（大图/缩略图）
   bool decodeToBitmap(const std::string& path, bool half, imaging::Image* out, std::string* err);
+
+  // M0 T0.2：真解码为 16bit 线性 scene-linear ImageBuf（log16 编码）。
+  // output_bps=16、gamma 线性（gamm=1/1）、关自动提亮；blackPoint/whitePoint 记录
+  // LibRaw color.black/color.maximum 供管线可重现。S0 解码唯一入口（M1 起）。
+  bool decodeToImage16(const std::string& path, bool half, imaging::ImageBuf* out,
+                       std::string* err);
 
   // 真解码并直接写 sRGB JPEG 到 outPath（预览/缩略图落盘）
   bool decodeToJpeg(const std::string& path, const std::string& outPath, bool half, int quality,

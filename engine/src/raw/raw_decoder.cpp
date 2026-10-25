@@ -46,6 +46,75 @@ std::string formatOfExtension(const std::string& ext) {
   return upper;
 }
 
+bool RawDecoder::decodeToImage16(const std::string& path, bool half, imaging::ImageBuf* out,
+                                 std::string* err) {
+  if (!fileExists(path)) {
+    if (err) *err = "file not found: " + path;
+    return false;
+  }
+  LibRaw processor;
+  processor.imgdata.params.half_size = half ? 1 : 0;
+  processor.imgdata.params.use_camera_wb = 1;
+  processor.imgdata.params.output_color = 1;       // sRGB 原色矩阵（色域映射留 M4）
+  processor.imgdata.params.output_bps = 16;        // M0：拆除 8bit 天花板
+  processor.imgdata.params.gamm[0] = 1.0;          // gamma 线性：scene-linear 输出
+  processor.imgdata.params.gamm[1] = 1.0;
+  processor.imgdata.params.no_auto_bright = 1;     // 关自动提亮，保线性
+  processor.imgdata.params.use_auto_wb = 0;
+  processor.imgdata.params.exp_correc = 0;
+  processor.imgdata.params.exp_shift = 1.0;
+  processor.imgdata.params.exp_preser = 0.6;
+  processor.imgdata.params.fbdd_noiserd = 0;
+  processor.imgdata.params.threshold = 0.0;
+  processor.imgdata.params.med_passes = 0;
+  processor.imgdata.params.user_qual = 1;
+
+  int rc = processor.open_file(path.c_str());
+  if (rc != LIBRAW_SUCCESS) {
+    if (err) *err = "libraw open failed (" + std::to_string(rc) + "): " + path;
+    return false;
+  }
+  rc = processor.unpack();
+  if (rc != LIBRAW_SUCCESS) {
+    if (err) *err = "libraw unpack failed (" + std::to_string(rc) + "): " + path;
+    return false;
+  }
+  // 黑白电平在 unpack 后即可读（供 S0 归一化与可重现性记录）
+  const float black = static_cast<float>(processor.imgdata.color.black);
+  const float white = static_cast<float>(processor.imgdata.color.maximum);
+
+  rc = processor.dcraw_process();
+  if (rc != LIBRAW_SUCCESS) {
+    if (err) *err = "libraw process failed (" + std::to_string(rc) + "): " + path;
+    return false;
+  }
+  libraw_processed_image_t* image = processor.dcraw_make_mem_image(&rc);
+  if (!image || rc != LIBRAW_SUCCESS) {
+    if (image) LibRaw::dcraw_clear_mem(image);
+    if (err) *err = "libraw make_mem_image failed (" + std::to_string(rc) + "): " + path;
+    return false;
+  }
+  if (image->type != LIBRAW_IMAGE_BITMAP || image->colors != 3 || image->bits != 16) {
+    if (err) *err = "unexpected libraw 16bit image layout: " + path;
+    LibRaw::dcraw_clear_mem(image);
+    return false;
+  }
+  out->w = static_cast<int>(image->width);
+  out->h = static_cast<int>(image->height);
+  out->space = imaging::ColorSpaceTag::SceneLinearCamera;
+  out->blackPoint = black;
+  out->whitePoint = white > 0.f ? white : 65535.f;
+  const size_t n = static_cast<size_t>(out->w) * out->h * 3;
+  out->data.resize(n);
+  const uint16_t* src = reinterpret_cast<const uint16_t*>(image->data);
+  // LibRaw 16bit 输出：[black..maximum] 已线性映射到 [0..65535]，直接按 65535 归一化
+  for (size_t i = 0; i < n; ++i) {
+    out->data[i] = imaging::log16Encode(static_cast<float>(src[i]) / 65535.0f);
+  }
+  LibRaw::dcraw_clear_mem(image);
+  return true;
+}
+
 bool RawDecoder::decodeToBitmap(const std::string& path, bool half, imaging::Image* out,
                                 std::string* err) {
   if (!fileExists(path)) {

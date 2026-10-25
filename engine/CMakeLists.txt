@@ -145,3 +145,8 @@ add_executable(test_image16 tests/test_image16.cpp)
 target_link_libraries(test_image16 PRIVATE lumina_core)
 set_target_properties(test_image16 PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
 add_test(NAME image16 COMMAND test_image16)
+
+add_executable(test_raw16 tests/test_raw16.cpp)
+target_link_libraries(test_raw16 PRIVATE lumina_core)
+set_target_properties(test_raw16 PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME raw16 COMMAND test_raw16)
