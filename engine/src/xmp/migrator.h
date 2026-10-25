@@ -10,6 +10,7 @@
 #include "db/photo_dao.h"
 #include "json/json_value.h"
 #include "rpc/dispatcher.h"
+#include "xmp/xmp_document.h"
 
 namespace lumina {
 namespace xmp {
@@ -27,6 +28,9 @@ class XmpMigrator {
   json::JsonValue status(rpc::RpcError* err);
   // 迁移单个 photo 的 sidecar（读→补 SchemaVersion→字节保留写回，全程持 per-photo 写锁）
   bool migrateOne(int64_t photoId, std::string* err);
+  // T1.2：文档级迁移核心（v1→v2，幂等；无 DB 依赖，供测试直接调用）。
+  // current >= 2 时 no-op 返回 true；current > 2 视为过新跳过（不猜测丢弃）。
+  static bool migrateDocument(XmpDocument* doc, std::string* err);
   // 全量扫描并迁移（幂等）。stop 非空时每张之间检查停止标志，供后台线程优雅退出
   // （退出流程置位后处理完当前张即收尾，单张仅毫秒级，不会拖慢关闭）。
   bool migrateAll(int* migrated, std::string* err, const std::atomic<bool>* stop = nullptr);

@@ -8,6 +8,7 @@
 #include "core/logger.h"
 #include "core/str_util.h"
 #include "rpc/version.h"
+#include "xmp/xmp_mapper.h"
 #include "xmp/xmp_service.h"
 
 namespace lumina {
@@ -16,6 +17,52 @@ namespace xmp {
 XmpMigrator::XmpMigrator(core::Config* config, db::PhotoDao* photos, db::Database* db,
                          XmpService* xmp)
     : config_(config), photos_(photos), db_(db), xmp_(xmp) {}
+
+bool XmpMigrator::migrateDocument(XmpDocument* doc, std::string* err) {
+  if (!doc || !doc->valid()) {
+    if (err) *err = "migrateDocument: invalid doc";
+    return false;
+  }
+  int64_t current = doc->getInt("lumina", "SchemaVersion", 0);
+  if (current >= kXmpSchemaVersion) return true;  // 幂等：已迁移/过新均跳过
+  if (current > kXmpSchemaVersion) {
+    logWarn("xmp", "schema too new (" + std::to_string(current) + "), skipping");
+    return true;
+  }
+  // ---- v1→v2 迁移（架构 §3.5）----
+  // ① 构造默认图：把现有 93 叶参数（含 crs: 投影值）拆进 8 全局节点；
+  //    已有 NodeGraph（版本字段落后）则保留图只升版本。
+  // ② lumina:AdjustmentStack 层映射为节点（在 paramsToGraph 内完成），
+  //    映射后写空数组 + Deprecated 标记，避免双真相源。
+  // ③ 只增写：XmpDocument 字节保留，未触碰的 crs: 字段逐字节不变。
+  json::JsonValue params;
+  std::vector<std::string> warnings;
+  XmpMapper::readFromDoc(*doc, &params, &warnings);
+  graph::NodeGraph g;
+  if (doc->has("lumina", "NodeGraph")) {
+    std::string graphErr;
+    if (!XmpMapper::readGraph(*doc, &g, &graphErr)) {
+      // 图存在但解析失败：不猜测丢弃 → 从 crs:/AdjustmentStack 重建并告警
+      logWarn("xmp", "existing NodeGraph unparseable (" + graphErr +
+                         "), rebuilding from params");
+      g = XmpMapper::paramsToGraph(params);
+    }
+  } else {
+    g = XmpMapper::paramsToGraph(params);
+  }
+  XmpMapper::writeGraph(g, doc);
+  // crs:ProcessVersion 补齐（缺失时；已有则字节保留）
+  if (!doc->has("crs", "ProcessVersion")) {
+    doc->setText("crs", "ProcessVersion", kMaxProcessVersion);
+  }
+  // AdjustmentStack 废弃标记（图已承载其内容）
+  const json::JsonValue& stack = params.get("adjustmentStack");
+  if (stack.isArray() && stack.size() > 0) {
+    doc->setText("lumina", "AdjustmentStack", "[]");
+    doc->setText("lumina", "AdjustmentStackDeprecated", "true");
+  }
+  return true;
+}
 
 bool XmpMigrator::migrateOne(int64_t photoId, std::string* err) {
   // v1.1.1：与 XmpService::saveParams/setExifGps/clearExifGps 复用同一把 per-photo 写锁。
@@ -42,15 +89,12 @@ bool XmpMigrator::migrateOne(int64_t photoId, std::string* err) {
   }
   int64_t current = doc->getInt("lumina", "SchemaVersion", 0);
   if (current >= kXmpSchemaVersion) return true;
-  // 迁移规则 v1：补 lumina:SchemaVersion + crs:ProcessVersion（若缺失）
-  doc->setText("lumina", "SchemaVersion", std::to_string(kXmpSchemaVersion));
-  if (!doc->has("crs", "ProcessVersion")) {
-    doc->setText("crs", "ProcessVersion", kMaxProcessVersion);
-  }
+  if (!migrateDocument(doc.get(), err)) return false;
   std::string output = doc->serialize();
   if (!writeFileAtomic(sidecar, output, err)) return false;
   photos_->setSidecar(photoId, sidecar, fileMtimeMs(sidecar), true, err);
-  logInfo("xmp", "migrated sidecar " + sidecar + " from schema " + std::to_string(current));
+  logInfo("xmp", "migrated sidecar " + sidecar + " from schema " + std::to_string(current) +
+                     " to " + std::to_string(kXmpSchemaVersion));
   return true;
 }
 
@@ -92,6 +136,7 @@ json::JsonValue XmpMigrator::status(rpc::RpcError* err) {
   json::JsonValue distribution = json::JsonValue::objectValue();
   distribution.setItem("0", 0);
   distribution.setItem("1", 0);
+  distribution.setItem("2", 0);
   int64_t migrated = 0;
   std::string sqlErr;
   std::string sql = "SELECT id, sidecar_path FROM photos WHERE deleted=0 AND sidecar_path IS NOT "
@@ -114,11 +159,12 @@ json::JsonValue XmpMigrator::status(rpc::RpcError* err) {
     if (!doc) continue;
     int64_t version = doc->getInt("lumina", "SchemaVersion", 0);
     if (version < kXmpSchemaVersion) {
-      distribution.setItem("0", distribution.get("0").asInt() + 1);
+      distribution.setItem(std::to_string(version),
+                           distribution.get(std::to_string(version)).asInt() + 1);
       std::string oneErr;
       if (migrateOne(id, &oneErr)) ++migrated;
     } else {
-      distribution.setItem("1", distribution.get("1").asInt() + 1);
+      distribution.setItem("2", distribution.get("2").asInt() + 1);
     }
   }
   stmt->reset();

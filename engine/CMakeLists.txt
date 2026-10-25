@@ -207,6 +207,12 @@ target_link_libraries(test_node_graph PRIVATE lumina_core)
 set_target_properties(test_node_graph PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
 add_test(NAME node_graph COMMAND test_node_graph)
 
+# T1.2：XMP 双向迁移（v1→v2 / crs: 字节保留 / AdjustmentStack 映射）
+add_executable(test_xmp_nodegraph tests/test_xmp_nodegraph.cpp)
+target_link_libraries(test_xmp_nodegraph PRIVATE lumina_core)
+set_target_properties(test_xmp_nodegraph PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME xmp_nodegraph COMMAND test_xmp_nodegraph)
+
 # M0 ΔE 基线工具（不入 ctest：依赖本机 RW2 样本；由 scripts/ci/deltae.py 编排）
 add_executable(deltae_baseline tests/color/delta_e_baseline.cpp)
 target_link_libraries(deltae_baseline PRIVATE lumina_core)

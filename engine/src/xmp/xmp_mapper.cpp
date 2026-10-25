@@ -9,6 +9,7 @@
 
 #include "core/logger.h"
 #include "core/str_util.h"
+#include "graph/serialize.h"
 #include "rpc/version.h"
 
 namespace lumina {
@@ -524,6 +525,215 @@ void XmpMapper::writeToDoc(const json::JsonValue& params, XmpDocument* doc) {
   // SchemaVersion 必须始终存在（映射表 §7）
   doc->setText("lumina", "SchemaVersion", std::to_string(kXmpSchemaVersion));
   doc->setText("crs", "ProcessVersion", kMaxProcessVersion);
+}
+
+// ---- T1.2：93 叶参数 ↔ NodeGraph（架构 §3.5）----
+
+namespace {
+
+// 各节点类型的顶层扁平键白名单（basic / curve 用扁平形状）
+const char* kBasicKeys[] = {"whiteBalance", "temperature", "tint",
+                            "exposure",     "contrast",    "highlights",
+                            "shadows",      "whites",      "blacks",
+                            "clarity",      "texture",     "dehaze",
+                            "vibrance",     "saturation"};
+const char* kCurveKeys[] = {"toneCurveRGB",         "toneCurveR",
+                            "toneCurveG",           "toneCurveB",
+                            "parametricHighlights", "parametricLights",
+                            "parametricDarks",      "parametricShadows",
+                            "parametricShadowSplit", "parametricLightSplit",
+                            "parametricMidSplit"};
+const char* kLensKeys[] = {"lensProfileEnable", "manualDistortion"};
+const char* kEffectsKeys[] = {"vignetteAmount", "vignetteMidpoint",
+                              "vignetteFeather", "grainAmount",
+                              "grainFrequency", "grainSize"};
+
+json::JsonValue optObject(const json::JsonValue& p, const char* key) {
+  const json::JsonValue& v = p.get(key);
+  return v.isObject() ? v : json::JsonValue::objectValue();
+}
+
+void copyIfPresent(const json::JsonValue& src, const char* key,
+                   json::JsonValue* dst) {
+  const json::JsonValue& v = src.get(key);
+  if (!v.isNull() && (src.isObject() ? src.contains(key) : false)) {
+    dst->setItem(key, v);
+  }
+}
+
+}  // namespace
+
+graph::NodeGraph XmpMapper::paramsToGraph(const json::JsonValue& params) {
+  graph::NodeGraph g;
+  g.schemaVersion = 2;
+  // 8 全局节点固定顺序（与 defaultGraph 一致），id=n1..n8
+  const graph::NodeType kTypes[8] = {
+      graph::NodeType::Basic,     graph::NodeType::Curve,
+      graph::NodeType::Color,     graph::NodeType::Detail,
+      graph::NodeType::Lens,      graph::NodeType::Geometry,
+      graph::NodeType::Effects,   graph::NodeType::Calibration};
+  std::vector<json::JsonValue> nodeParams(8, json::JsonValue::objectValue());
+  if (params.isObject()) {
+    // basic：顶层扁平键
+    for (const char* k : kBasicKeys) copyIfPresent(params, k, &nodeParams[0]);
+    // curve：顶层扁平键
+    for (const char* k : kCurveKeys) copyIfPresent(params, k, &nodeParams[1]);
+    // color：hsl + colorGrade 嵌套对象
+    const json::JsonValue& hsl = params.get("hsl");
+    if (hsl.isObject()) nodeParams[2].setItem("hsl", hsl);
+    const json::JsonValue& cg = params.get("colorGrade");
+    if (cg.isObject()) nodeParams[2].setItem("colorGrade", cg);
+    // detail
+    const json::JsonValue& detail = params.get("detail");
+    if (detail.isObject()) nodeParams[3].setItem("detail", detail);
+    // lens / effects：optics 嵌套子集
+    const json::JsonValue& optics = optObject(params, "optics");
+    for (const char* k : kLensKeys) {
+      if (optics.contains(k)) nodeParams[4].setItem(k, optics.get(k));
+    }
+    for (const char* k : kEffectsKeys) {
+      if (optics.contains(k)) nodeParams[6].setItem(k, optics.get(k));
+    }
+    // geometry
+    const json::JsonValue& geo = params.get("geometry");
+    if (geo.isObject()) nodeParams[5].setItem("geometry", geo);
+    // calibration
+    const json::JsonValue& cal = params.get("calibration");
+    if (cal.isObject()) nodeParams[7].setItem("calibration", cal);
+  }
+  for (int i = 0; i < 8; ++i) {
+    graph::GraphNode n;
+    n.id = "n" + std::to_string(i + 1);
+    n.type = kTypes[i];
+    n.params = nodeParams[i];
+    g.nodes.push_back(std::move(n));
+  }
+  // masks → 图级 masks[]
+  const json::JsonValue& masks = params.get("masks");
+  if (masks.isArray()) {
+    for (const auto& m : masks.arrayItems()) {
+      if (!m.isObject()) continue;
+      graph::GraphMask gm;
+      gm.id = m.get("id").asString();
+      gm.type = m.get("type").asString();
+      if (gm.id.empty() || gm.type.empty()) continue;  // 缺身份的蒙版不进图（零静默：跳过非静默改写）
+      gm.enabled = m.get("enabled").asBool(true);
+      gm.opacity = static_cast<int>(m.get("opacity").asInt(100));
+      gm.geometry = m.get("geometry");
+      gm.range = m.get("range");
+      gm.strokes = m.get("strokes");
+      g.masks.push_back(std::move(gm));
+    }
+  }
+  // lumina:AdjustmentStack 层 → 追加节点（deprecated 语义：映射后写空 + 标记）
+  const json::JsonValue& stack = params.get("adjustmentStack");
+  if (stack.isArray()) {
+    int idx = 0;
+    for (const auto& layer : stack.arrayItems()) {
+      if (!layer.isObject()) continue;
+      graph::GraphNode n;
+      n.id = "s" + std::to_string(idx++);
+      graph::NodeType t;
+      if (!graph::nodeTypeFromString(layer.get("type").asString(), &t)) {
+        t = graph::NodeType::Basic;  // 未知名回退 basic（不丢弃用户数据）
+      }
+      n.type = t;
+      n.enabled = layer.get("enabled").asBool(true);
+      n.opacity = static_cast<int>(layer.get("opacity").asInt(100));
+      n.blendMode = layer.get("blendMode").asString("normal");
+      if (!graph::isBlendModeValid(n.blendMode)) n.blendMode = "normal";
+      const json::JsonValue& lp = layer.get("params");
+      n.params = lp.isObject() ? lp : json::JsonValue::objectValue();
+      const std::string maskId = layer.get("maskId").asString();
+      if (!maskId.empty()) {
+        n.hasMask = true;
+        n.mask.maskId = maskId;
+      }
+      g.nodes.push_back(std::move(n));
+    }
+  }
+  return g;
+}
+
+json::JsonValue XmpMapper::graphToParams(const graph::NodeGraph& g) {
+  json::JsonValue out = json::JsonValue::objectValue();
+  json::JsonValue optics = json::JsonValue::objectValue();
+  for (const graph::GraphNode& n : g.nodes) {
+    if (n.hasMask) continue;  // 蒙版节点无 crs: 等价字段，投影丢弃
+    const json::JsonValue& p = n.params;
+    if (!p.isObject()) continue;
+    switch (n.type) {
+      case graph::NodeType::Basic:
+        for (const char* k : kBasicKeys) copyIfPresent(p, k, &out);
+        break;
+      case graph::NodeType::Curve:
+        for (const char* k : kCurveKeys) copyIfPresent(p, k, &out);
+        break;
+      case graph::NodeType::Color: {
+        const json::JsonValue& hsl = p.get("hsl");
+        if (hsl.isObject()) out.setItem("hsl", hsl);
+        const json::JsonValue& cg = p.get("colorGrade");
+        if (cg.isObject()) out.setItem("colorGrade", cg);
+        break;
+      }
+      case graph::NodeType::Detail: {
+        const json::JsonValue& d = p.get("detail");
+        if (d.isObject()) out.setItem("detail", d);
+        break;
+      }
+      case graph::NodeType::Lens:
+        for (const char* k : kLensKeys) {
+          if (p.contains(k)) optics.setItem(k, p.get(k));
+        }
+        break;
+      case graph::NodeType::Geometry: {
+        const json::JsonValue& geo = p.get("geometry");
+        if (geo.isObject()) out.setItem("geometry", geo);
+        break;
+      }
+      case graph::NodeType::Effects:
+        for (const char* k : kEffectsKeys) {
+          if (p.contains(k)) optics.setItem(k, p.get(k));
+        }
+        break;
+      case graph::NodeType::Calibration: {
+        const json::JsonValue& cal = p.get("calibration");
+        if (cal.isObject()) out.setItem("calibration", cal);
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  if (!optics.empty()) out.setItem("optics", optics);
+  json::JsonValue masks = json::JsonValue::arrayValue();
+  for (const graph::GraphMask& m : g.masks) {
+    json::JsonValue j = json::JsonValue::objectValue();
+    j.setItem("id", m.id);
+    j.setItem("type", m.type);
+    j.setItem("enabled", m.enabled);
+    j.setItem("opacity", static_cast<int64_t>(m.opacity));
+    j.setItem("geometry", m.geometry);
+    j.setItem("range", m.range);
+    j.setItem("strokes", m.strokes);
+    masks.addItem(j);
+  }
+  out.setItem("masks", masks);
+  return out;
+}
+
+bool XmpMapper::readGraph(const XmpDocument& doc, graph::NodeGraph* out,
+                          std::string* err) {
+  if (!doc.has("lumina", "NodeGraph")) {
+    if (err) *err = "no lumina:NodeGraph";
+    return false;
+  }
+  return graph::graphFromString(doc.get("lumina", "NodeGraph"), out, err);
+}
+
+void XmpMapper::writeGraph(const graph::NodeGraph& g, XmpDocument* doc) {
+  doc->setText("lumina", "NodeGraph", graph::graphToString(g));
+  doc->setText("lumina", "SchemaVersion", std::to_string(kXmpSchemaVersion));
 }
 
 }  // namespace xmp
