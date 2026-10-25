@@ -10,7 +10,7 @@ import { ViewerSurface } from '../../../theme/ThemeProvider';
 
 export type Histogram = { r: number[]; g: number[]; b: number[] };
 
-export default function HistogramPanel({ histogram }: { histogram: Histogram | null }) {
+export default function HistogramPanel({ histogram, bare = false }: { histogram: Histogram | null; bare?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const photoId = useDevelop((s) => s.photoId);
 
@@ -40,19 +40,28 @@ export default function HistogramPanel({ histogram }: { histogram: Histogram | n
     };
   }, [photoId]);
 
-  return (
-    <ViewerSurface className="px-3 py-2 shrink-0" style={{ borderBottom: '1px solid var(--Lumina-Tokens-border)' }}>
+  const body = (
+    <>
       <div className="flex items-center gap-2 mb-1">
-        <span className="text-2xs text-txt3">直方图 RGB</span>
+        {!bare && <span className="text-2xs text-txt3">直方图 RGB</span>}
         <span className="flex items-center gap-1 text-2xs text-txt3">
-          <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--Lumina-Tokens-danger)' }} />R
-          <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--Lumina-Tokens-success)' }} />G
+          <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--Lumina-Tokens-chartRed)' }} />R
+          <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--Lumina-Tokens-chartGreen)' }} />G
           <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--Lumina-Tokens-chartBlue)' }} />B
-          <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--Lumina-Tokens-textSecondary)' }} />亮度
+          <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--Lumina-Tokens-chartLuma)' }} />亮度
         </span>
       </div>
-      <canvas ref={canvasRef} width={224} height={64} className="w-full rounded-sm" style={{ height: 56, background: 'var(--Lumina-Tokens-viewer)' }} />
+      <canvas ref={canvasRef} width={224} height={64} className="w-full rounded-mdC" style={{ height: 56, background: 'var(--Lumina-Tokens-viewer)' }} />
       <div id="exposed-range" className="text-2xs mt-1" style={{ color: 'var(--Lumina-Tokens-danger)', minHeight: 14 }} />
+    </>
+  );
+
+  // bare：作为右栏「直方图」卡片的正文，不再套观察区恒色壳与分隔线
+  if (bare) return <div className="px-2 pb-1">{body}</div>;
+
+  return (
+    <ViewerSurface className="px-3 py-2 shrink-0" style={{ borderBottom: '1px solid var(--Lumina-Tokens-border)' }}>
+      {body}
     </ViewerSurface>
   );
 }

@@ -1,0 +1,1048 @@
+{
+ "schema": 1,
+ "totalLeaves": 93,
+ "previewRenderedCount": 39,
+ "exportRenderedCount": 27,
+ "sourceOfTruth": "engine code grep-verified 2026-10-25",
+ "criteria": {
+  "previewRendered": "该叶在 GPU 预览 shader 或 CPU 预览渲染参数路径（app/src/modules/develop/webgl/）中被实际读取",
+  "exportRendered": "该叶在 engine/src/export/exporter.cpp 导出像素管线中被实际读取"
+ },
+ "notes": [
+  "detail.luminanceSmoothing / detail.colorNR 经 AI/NLM 降噪卡缓存 TIFF 间接生效，但非预览渲染管线算子，按判定标准记 false",
+  "masks 预览仅 6 个槽位（超出截断），导出完全丢弃",
+  "与架构文档 §4 现预/现导标注一致：preview=39（含 masks），export=27",
+  "basic.clarity / basic.dehaze 仅 GPU 管线实现（CPU 软渲染保底不含这两项，见 cpu-render.ts 头注释）"
+ ],
+ "leaves": [
+  {
+   "id": 1,
+   "path": "basic.whiteBalance",
+   "node": "basic",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 2,
+   "path": "basic.temperature",
+   "node": "basic",
+   "previewRendered": true,
+   "exportRendered": false,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:62",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:117"
+   ],
+   "exportEvidence": []
+  },
+  {
+   "id": 3,
+   "path": "basic.tint",
+   "node": "basic",
+   "previewRendered": true,
+   "exportRendered": false,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:63",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:118"
+   ],
+   "exportEvidence": []
+  },
+  {
+   "id": 4,
+   "path": "basic.exposure",
+   "node": "basic",
+   "previewRendered": true,
+   "exportRendered": true,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:56",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:38"
+   ],
+   "exportEvidence": [
+    "engine/engine/src/export/exporter.cpp:725"
+   ]
+  },
+  {
+   "id": 5,
+   "path": "basic.contrast",
+   "node": "basic",
+   "previewRendered": true,
+   "exportRendered": true,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:57",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:39"
+   ],
+   "exportEvidence": [
+    "engine/engine/src/export/exporter.cpp:726"
+   ]
+  },
+  {
+   "id": 6,
+   "path": "basic.highlights",
+   "node": "basic",
+   "previewRendered": true,
+   "exportRendered": false,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:58",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:122"
+   ],
+   "exportEvidence": []
+  },
+  {
+   "id": 7,
+   "path": "basic.shadows",
+   "node": "basic",
+   "previewRendered": true,
+   "exportRendered": false,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:59",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:123"
+   ],
+   "exportEvidence": []
+  },
+  {
+   "id": 8,
+   "path": "basic.whites",
+   "node": "basic",
+   "previewRendered": true,
+   "exportRendered": false,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:60",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:41"
+   ],
+   "exportEvidence": []
+  },
+  {
+   "id": 9,
+   "path": "basic.blacks",
+   "node": "basic",
+   "previewRendered": true,
+   "exportRendered": false,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:61",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:40"
+   ],
+   "exportEvidence": []
+  },
+  {
+   "id": 10,
+   "path": "basic.clarity",
+   "node": "basic",
+   "previewRendered": true,
+   "exportRendered": false,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:66"
+   ],
+   "exportEvidence": []
+  },
+  {
+   "id": 11,
+   "path": "basic.texture",
+   "node": "basic",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 12,
+   "path": "basic.dehaze",
+   "node": "basic",
+   "previewRendered": true,
+   "exportRendered": false,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:67"
+   ],
+   "exportEvidence": []
+  },
+  {
+   "id": 13,
+   "path": "basic.vibrance",
+   "node": "basic",
+   "previewRendered": true,
+   "exportRendered": false,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:64",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:125"
+   ],
+   "exportEvidence": []
+  },
+  {
+   "id": 14,
+   "path": "basic.saturation",
+   "node": "basic",
+   "previewRendered": true,
+   "exportRendered": true,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:65",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:124"
+   ],
+   "exportEvidence": [
+    "engine/engine/src/export/exporter.cpp:727"
+   ]
+  },
+  {
+   "id": 15,
+   "path": "curve.toneCurveRGB",
+   "node": "curve",
+   "previewRendered": true,
+   "exportRendered": false,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:75",
+    "app/app/src/modules/develop/webgl/shaders.ts:143",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:42"
+   ],
+   "exportEvidence": []
+  },
+  {
+   "id": 16,
+   "path": "curve.toneCurveR",
+   "node": "curve",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 17,
+   "path": "curve.toneCurveG",
+   "node": "curve",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 18,
+   "path": "curve.toneCurveB",
+   "node": "curve",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 19,
+   "path": "parametric.highlights",
+   "node": "curve",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 20,
+   "path": "parametric.lights",
+   "node": "curve",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 21,
+   "path": "parametric.darks",
+   "node": "curve",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 22,
+   "path": "parametric.shadows",
+   "node": "curve",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 23,
+   "path": "parametric.shadowSplit",
+   "node": "curve",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 24,
+   "path": "parametric.lightSplit",
+   "node": "curve",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 25,
+   "path": "parametric.midSplit",
+   "node": "curve",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 26,
+   "path": "hsl.red.hue",
+   "node": "color",
+   "previewRendered": true,
+   "exportRendered": true,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:302",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:126"
+   ],
+   "exportEvidence": [
+    "engine/engine/src/export/exporter.cpp:731",
+    "engine/engine/src/export/exporter.cpp:737"
+   ]
+  },
+  {
+   "id": 27,
+   "path": "hsl.red.sat",
+   "node": "color",
+   "previewRendered": true,
+   "exportRendered": true,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:302",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:126"
+   ],
+   "exportEvidence": [
+    "engine/engine/src/export/exporter.cpp:731",
+    "engine/engine/src/export/exporter.cpp:738"
+   ]
+  },
+  {
+   "id": 28,
+   "path": "hsl.red.lum",
+   "node": "color",
+   "previewRendered": true,
+   "exportRendered": true,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:302",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:126"
+   ],
+   "exportEvidence": [
+    "engine/engine/src/export/exporter.cpp:731",
+    "engine/engine/src/export/exporter.cpp:739"
+   ]
+  },
+  {
+   "id": 29,
+   "path": "hsl.orange.hue",
+   "node": "color",
+   "previewRendered": true,
+   "exportRendered": true,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:302",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:126"
+   ],
+   "exportEvidence": [
+    "engine/engine/src/export/exporter.cpp:731",
+    "engine/engine/src/export/exporter.cpp:737"
+   ]
+  },
+  {
+   "id": 30,
+   "path": "hsl.orange.sat",
+   "node": "color",
+   "previewRendered": true,
+   "exportRendered": true,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:302",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:126"
+   ],
+   "exportEvidence": [
+    "engine/engine/src/export/exporter.cpp:731",
+    "engine/engine/src/export/exporter.cpp:738"
+   ]
+  },
+  {
+   "id": 31,
+   "path": "hsl.orange.lum",
+   "node": "color",
+   "previewRendered": true,
+   "exportRendered": true,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:302",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:126"
+   ],
+   "exportEvidence": [
+    "engine/engine/src/export/exporter.cpp:731",
+    "engine/engine/src/export/exporter.cpp:739"
+   ]
+  },
+  {
+   "id": 32,
+   "path": "hsl.yellow.hue",
+   "node": "color",
+   "previewRendered": true,
+   "exportRendered": true,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:302",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:126"
+   ],
+   "exportEvidence": [
+    "engine/engine/src/export/exporter.cpp:731",
+    "engine/engine/src/export/exporter.cpp:737"
+   ]
+  },
+  {
+   "id": 33,
+   "path": "hsl.yellow.sat",
+   "node": "color",
+   "previewRendered": true,
+   "exportRendered": true,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:302",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:126"
+   ],
+   "exportEvidence": [
+    "engine/engine/src/export/exporter.cpp:731",
+    "engine/engine/src/export/exporter.cpp:738"
+   ]
+  },
+  {
+   "id": 34,
+   "path": "hsl.yellow.lum",
+   "node": "color",
+   "previewRendered": true,
+   "exportRendered": true,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:302",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:126"
+   ],
+   "exportEvidence": [
+    "engine/engine/src/export/exporter.cpp:731",
+    "engine/engine/src/export/exporter.cpp:739"
+   ]
+  },
+  {
+   "id": 35,
+   "path": "hsl.green.hue",
+   "node": "color",
+   "previewRendered": true,
+   "exportRendered": true,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:302",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:126"
+   ],
+   "exportEvidence": [
+    "engine/engine/src/export/exporter.cpp:731",
+    "engine/engine/src/export/exporter.cpp:737"
+   ]
+  },
+  {
+   "id": 36,
+   "path": "hsl.green.sat",
+   "node": "color",
+   "previewRendered": true,
+   "exportRendered": true,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:302",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:126"
+   ],
+   "exportEvidence": [
+    "engine/engine/src/export/exporter.cpp:731",
+    "engine/engine/src/export/exporter.cpp:738"
+   ]
+  },
+  {
+   "id": 37,
+   "path": "hsl.green.lum",
+   "node": "color",
+   "previewRendered": true,
+   "exportRendered": true,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:302",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:126"
+   ],
+   "exportEvidence": [
+    "engine/engine/src/export/exporter.cpp:731",
+    "engine/engine/src/export/exporter.cpp:739"
+   ]
+  },
+  {
+   "id": 38,
+   "path": "hsl.aqua.hue",
+   "node": "color",
+   "previewRendered": true,
+   "exportRendered": true,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:302",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:126"
+   ],
+   "exportEvidence": [
+    "engine/engine/src/export/exporter.cpp:731",
+    "engine/engine/src/export/exporter.cpp:737"
+   ]
+  },
+  {
+   "id": 39,
+   "path": "hsl.aqua.sat",
+   "node": "color",
+   "previewRendered": true,
+   "exportRendered": true,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:302",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:126"
+   ],
+   "exportEvidence": [
+    "engine/engine/src/export/exporter.cpp:731",
+    "engine/engine/src/export/exporter.cpp:738"
+   ]
+  },
+  {
+   "id": 40,
+   "path": "hsl.aqua.lum",
+   "node": "color",
+   "previewRendered": true,
+   "exportRendered": true,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:302",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:126"
+   ],
+   "exportEvidence": [
+    "engine/engine/src/export/exporter.cpp:731",
+    "engine/engine/src/export/exporter.cpp:739"
+   ]
+  },
+  {
+   "id": 41,
+   "path": "hsl.blue.hue",
+   "node": "color",
+   "previewRendered": true,
+   "exportRendered": true,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:302",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:126"
+   ],
+   "exportEvidence": [
+    "engine/engine/src/export/exporter.cpp:731",
+    "engine/engine/src/export/exporter.cpp:737"
+   ]
+  },
+  {
+   "id": 42,
+   "path": "hsl.blue.sat",
+   "node": "color",
+   "previewRendered": true,
+   "exportRendered": true,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:302",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:126"
+   ],
+   "exportEvidence": [
+    "engine/engine/src/export/exporter.cpp:731",
+    "engine/engine/src/export/exporter.cpp:738"
+   ]
+  },
+  {
+   "id": 43,
+   "path": "hsl.blue.lum",
+   "node": "color",
+   "previewRendered": true,
+   "exportRendered": true,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:302",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:126"
+   ],
+   "exportEvidence": [
+    "engine/engine/src/export/exporter.cpp:731",
+    "engine/engine/src/export/exporter.cpp:739"
+   ]
+  },
+  {
+   "id": 44,
+   "path": "hsl.purple.hue",
+   "node": "color",
+   "previewRendered": true,
+   "exportRendered": true,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:302",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:126"
+   ],
+   "exportEvidence": [
+    "engine/engine/src/export/exporter.cpp:731",
+    "engine/engine/src/export/exporter.cpp:737"
+   ]
+  },
+  {
+   "id": 45,
+   "path": "hsl.purple.sat",
+   "node": "color",
+   "previewRendered": true,
+   "exportRendered": true,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:302",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:126"
+   ],
+   "exportEvidence": [
+    "engine/engine/src/export/exporter.cpp:731",
+    "engine/engine/src/export/exporter.cpp:738"
+   ]
+  },
+  {
+   "id": 46,
+   "path": "hsl.purple.lum",
+   "node": "color",
+   "previewRendered": true,
+   "exportRendered": true,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:302",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:126"
+   ],
+   "exportEvidence": [
+    "engine/engine/src/export/exporter.cpp:731",
+    "engine/engine/src/export/exporter.cpp:739"
+   ]
+  },
+  {
+   "id": 47,
+   "path": "hsl.magenta.hue",
+   "node": "color",
+   "previewRendered": true,
+   "exportRendered": true,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:302",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:126"
+   ],
+   "exportEvidence": [
+    "engine/engine/src/export/exporter.cpp:731",
+    "engine/engine/src/export/exporter.cpp:737"
+   ]
+  },
+  {
+   "id": 48,
+   "path": "hsl.magenta.sat",
+   "node": "color",
+   "previewRendered": true,
+   "exportRendered": true,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:302",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:126"
+   ],
+   "exportEvidence": [
+    "engine/engine/src/export/exporter.cpp:731",
+    "engine/engine/src/export/exporter.cpp:738"
+   ]
+  },
+  {
+   "id": 49,
+   "path": "hsl.magenta.lum",
+   "node": "color",
+   "previewRendered": true,
+   "exportRendered": true,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:302",
+    "app/app/src/modules/develop/webgl/cpu-render.ts:126"
+   ],
+   "exportEvidence": [
+    "engine/engine/src/export/exporter.cpp:731",
+    "engine/engine/src/export/exporter.cpp:739"
+   ]
+  },
+  {
+   "id": 50,
+   "path": "colorGrade.shadowHue",
+   "node": "color",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 51,
+   "path": "colorGrade.shadowSat",
+   "node": "color",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 52,
+   "path": "colorGrade.midtoneHue",
+   "node": "color",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 53,
+   "path": "colorGrade.midtoneSat",
+   "node": "color",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 54,
+   "path": "colorGrade.highlightHue",
+   "node": "color",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 55,
+   "path": "colorGrade.highlightSat",
+   "node": "color",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 56,
+   "path": "colorGrade.blend",
+   "node": "color",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 57,
+   "path": "colorGrade.balance",
+   "node": "color",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 58,
+   "path": "calibration.shadowTint",
+   "node": "calibration",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 59,
+   "path": "calibration.redHue",
+   "node": "calibration",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 60,
+   "path": "calibration.redSat",
+   "node": "calibration",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 61,
+   "path": "calibration.greenHue",
+   "node": "calibration",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 62,
+   "path": "calibration.greenSat",
+   "node": "calibration",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 63,
+   "path": "calibration.blueHue",
+   "node": "calibration",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 64,
+   "path": "calibration.blueSat",
+   "node": "calibration",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 65,
+   "path": "detail.sharpness",
+   "node": "detail",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 66,
+   "path": "detail.sharpenRadius",
+   "node": "detail",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 67,
+   "path": "detail.sharpenDetail",
+   "node": "detail",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 68,
+   "path": "detail.sharpenMasking",
+   "node": "detail",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 69,
+   "path": "detail.luminanceSmoothing",
+   "node": "detail",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 70,
+   "path": "detail.colorNR",
+   "node": "detail",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 71,
+   "path": "detail.colorNRDetail",
+   "node": "detail",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 72,
+   "path": "optics.lensProfileEnable",
+   "node": "lens",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 73,
+   "path": "optics.manualDistortion",
+   "node": "lens",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 74,
+   "path": "optics.vignetteAmount",
+   "node": "effects",
+   "previewRendered": true,
+   "exportRendered": false,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:309"
+   ],
+   "exportEvidence": []
+  },
+  {
+   "id": 75,
+   "path": "optics.vignetteMidpoint",
+   "node": "effects",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 76,
+   "path": "optics.vignetteFeather",
+   "node": "effects",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 77,
+   "path": "optics.grainAmount",
+   "node": "effects",
+   "previewRendered": true,
+   "exportRendered": false,
+   "previewEvidence": [
+    "app/app/src/modules/develop/webgl/renderer.ts:310"
+   ],
+   "exportEvidence": []
+  },
+  {
+   "id": 78,
+   "path": "optics.grainFrequency",
+   "node": "effects",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 79,
+   "path": "optics.grainSize",
+   "node": "effects",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 80,
+   "path": "geometry.hasCrop",
+   "node": "geometry",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 81,
+   "path": "geometry.cropTop",
+   "node": "geometry",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 82,
+   "path": "geometry.cropBottom",
+   "node": "geometry",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 83,
+   "path": "geometry.cropLeft",
+   "node": "geometry",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 84,
+   "path": "geometry.cropRight",
+   "node": "geometry",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 85,
+   "path": "geometry.cropAngle",
+   "node": "geometry",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 86,
+   "path": "geometry.perspective.vertical",
+   "node": "geometry",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 87,
+   "path": "geometry.perspective.horizontal",
+   "node": "geometry",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 88,
+   "path": "geometry.perspective.rotate",
+   "node": "geometry",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 89,
+   "path": "geometry.perspective.scale",
+   "node": "geometry",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 90,
+   "path": "geometry.perspective.aspect",
+   "node": "geometry",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 91,
+   "path": "geometry.perspective.x",
+   "node": "geometry",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 92,
+   "path": "geometry.perspective.y",
+   "node": "geometry",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  },
+  {
+   "id": 93,
+   "path": "masks[]",
+   "node": "蒙版",
+   "previewRendered": false,
+   "exportRendered": false,
+   "previewEvidence": [],
+   "exportEvidence": []
+  }
+ ]
+}

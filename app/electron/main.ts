@@ -12,6 +12,8 @@ const isDev = process.env.LUMINA_DEV === '1';
 const isSmoke = process.env.LUMINA_SMOKE === '1';
 /** WP-C1 视觉基线：逐帧导航 + 双主题截图（13 帧设计稿 → docs/ui-1.1/baseline/） */
 const isBaseline = process.env.LUMINA_BASELINE === '1';
+/** v1.2.0 外壳自检：四工作区切换 / 二级导航 / 精修占位 / 主题切换（?shellcheck=1） */
+const isShellCheck = process.env.LUMINA_SHELLCHECK === '1';
 // 软件渲染兜底：远程桌面、虚拟机、部分显卡驱动下 GPU 进程会反复崩溃
 // （exit_code=-1073741819），表现为窗口白屏或起不来。置为 1 强制软件渲染。
 // 覆盖场景：冒烟测试、无 GPU 服务器、用户手动排障。
@@ -68,6 +70,8 @@ if (process.env.LUMINA_NO_WEBGL === '1') {
 // WP-C1 视觉基线：截图必须拿到真实合成帧。窗口被判定为"遮挡/后台"时 Chromium 会停止
 // 合成，capturePage 就返回上一帧（实测：连续 7 张 md5 完全相同）——必须关掉节流并强制可见。
 if (isBaseline) {
+  // 基线口径（team-lead 定）：1440×900 @2x，产物 → docs/ui-1.1/baseline-v12/
+  app.commandLine.appendSwitch('force-device-scale-factor', '2');
   app.commandLine.appendSwitch('disable-background-timer-throttling');
   app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
   app.commandLine.appendSwitch('disable-renderer-backgrounding');
@@ -107,8 +111,10 @@ const KEY_INJECTION_STEPS: Array<[string, InjectedKey[]]> = [
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
-    width: 1680,
-    height: 1000,
+    width: isBaseline ? 1440 : 1680,
+    height: isBaseline ? 900 : 1000,
+    // 基线口径：1440×900 指**内容区**，与设计稿 2880×1800@2x 逐像素可比
+    useContentSize: isBaseline,
     minWidth: 1280,
     minHeight: 800,
     backgroundColor: '#0C0D10',
@@ -127,7 +133,7 @@ function createWindow(): void {
 
   // 渲染进程 console 转发到主进程 stdout（smoke 验证用）
   mainWindow.webContents.on('console-message', (_e, level, message, line, sourceId) => {
-    if (isSmoke || isBaseline || level >= 2) {
+    if (isSmoke || isBaseline || isShellCheck || level >= 2) {
       const tag = level === 3 ? 'error' : level === 2 ? 'warn' : level === 1 ? 'log' : 'debug';
       process.stdout.write(`[renderer][${tag}] ${message} (${sourceId}:${line})\n`);
     }
@@ -204,7 +210,14 @@ function createWindow(): void {
     if (isBaseline) {
       const m = /\[baseline\] shot ([a-z0-9]+-[a-z0-9-]+) (dark|light)/i.exec(message);
       if (m) {
-        captureTo(path.resolve(appRoot, 'docs/ui-1.1/baseline', `${m[2]}-${m[1]}.png`), 4, 700);
+        captureTo(path.resolve(appRoot, 'docs/ui-1.1/baseline-v12', `${m[2]}-${m[1]}.png`), 4, 700);
+      }
+    }
+    // v1.2.0 外壳自检截图（深浅各一张，人工核对"不漏色"）
+    if (isShellCheck) {
+      const m = /\[shellcheck\] shot (dark|light)/i.exec(message);
+      if (m) {
+        captureTo(path.resolve(appRoot, 'build', `shell-${m[1]}.png`), 3, 600);
       }
     }
     if (isSmoke && message.includes('[smoke-scenario] theme: dark=')) {
@@ -248,6 +261,9 @@ function createWindow(): void {
     const query: Record<string, string> = {};
     if (process.env.LUMINA_NO_WEBGL === '1') query.nowebgl = '1';
     if (isBaseline) query.baseline = '1';
+    if (isShellCheck) query.shellcheck = '1';
+    // 诊断（C1 排查）：配合 baseline 使用，直接输出底图原色，用于区分"纹理是黑"与"管线算成黑"
+    if (process.env.LUMINA_RAWTEX === '1') query.rawtex = '1';
     void mainWindow.loadFile(indexPath, Object.keys(query).length > 0 ? { query } : undefined);
   }
 
@@ -456,6 +472,23 @@ async function bootstrap(): Promise<void> {
       if (message.includes('[baseline] DONE')) void finish('walk finished, quitting');
     });
     setTimeout(() => void finish('watchdog timeout, quitting'), 180_000);
+  }
+
+  if (isShellCheck) {
+    // 外壳自检：渲染层跑完打 `[shellcheck] DONE` 后退出；60s 兜底
+    let finished = false;
+    const finish = async (why: string) => {
+      if (finished) return;
+      finished = true;
+      process.stdout.write(`[shellcheck] ${why}\n`);
+      await bridge?.shutdown();
+      app.quit();
+    };
+    const wc = mainWindow?.webContents;
+    wc?.on('console-message', (_e, _l, message) => {
+      if (message.includes('[shellcheck] DONE')) void finish('check finished, quitting');
+    });
+    setTimeout(() => void finish('watchdog timeout, quitting'), 60_000);
   }
 }
 

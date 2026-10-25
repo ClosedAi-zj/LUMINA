@@ -21,9 +21,9 @@ export default function LayersPanel() {
   const selected = stack.find((l) => l.id === selectedLayerId) ?? null;
 
   return (
-    <div className="p-3 border-b border-line">
-      <div className="flex items-center mb-2">
-        <span className="text-2xs text-txt3 flex-1">图层 · 调整栈</span>
+    <div className="px-2 pb-1">
+      <div className="flex items-center mb-1.5">
+        <span className="flex-1" />
         <button
           className="text-2xs text-accent hover:opacity-80"
           onClick={() => void useDevelop.getState().addLayer('adjustment', `调整图层 ${stack.length + 1}`)}

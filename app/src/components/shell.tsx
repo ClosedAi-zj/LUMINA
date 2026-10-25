@@ -11,8 +11,8 @@ export function Dialog({ open, title, children, onClose, width = 420 }: { open: 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.55)' }} onClick={onClose}>
       <div
-        className="rounded-xl border border-line bg-panel shadow-2xl"
-        style={{ width, boxShadow: '0 12px 48px var(--Lumina-Tokens-shadow)' }}
+        className="rounded-lgC border border-line bg-panel"
+        style={{ width, boxShadow: 'var(--Lumina-Tokens-shadow2)' }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-4 h-11 border-b border-line">
@@ -52,8 +52,8 @@ export function ToastHost() {
       {toasts.map((t) => (
         <div
           key={t.id}
-          className="pointer-events-auto flex items-center gap-3 px-4 py-2 rounded-lg border border-line bg-panel text-xs shadow-lg"
-          style={{ boxShadow: '0 6px 24px var(--Lumina-Tokens-shadow)' }}
+          className="pointer-events-auto flex items-center gap-3 px-4 py-2 rounded-mdC border border-line bg-panel text-xs"
+          style={{ boxShadow: 'var(--Lumina-Tokens-shadow2)' }}
         >
           <span
             className="w-1.5 h-1.5 rounded-full"

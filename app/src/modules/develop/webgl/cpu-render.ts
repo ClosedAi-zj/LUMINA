@@ -208,19 +208,29 @@ function applyParams(d: Uint8ClampedArray, lut: Float32Array, p: EditParams): vo
 function drawFit(canvas: HTMLCanvasElement, img: HTMLImageElement): { w: number; h: number } | null {
   const ctx = canvas.getContext('2d');
   if (!ctx || !img.naturalWidth || !img.naturalHeight) return null;
-  const rect = canvas.getBoundingClientRect();
-  const cssW = rect.width > 0 ? rect.width : img.naturalWidth;
-  const cssH = rect.height > 0 ? rect.height : cssW * (img.naturalHeight / img.naturalWidth);
-  const scale = Math.min(cssW / img.naturalWidth, cssH / img.naturalHeight);
+  // 与 GPU 路径同一口径：量宿主容器，不量 canvas 自己（否则 CSS 盒↔缓冲尺寸自引用死锁）
+  const host = (canvas.closest('[data-viewer-host]') as HTMLElement | null) ?? canvas.parentElement;
+  const hostRect = host ? host.getBoundingClientRect() : canvas.getBoundingClientRect();
+  const availW = hostRect.width > 0 ? hostRect.width : img.naturalWidth;
+  const availH = hostRect.height > 0 ? hostRect.height : availW * (img.naturalHeight / img.naturalWidth);
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+  let cssW = availW;
+  let cssH = cssW * (img.naturalHeight / img.naturalWidth);
+  if (cssH > availH) {
+    cssH = availH;
+    cssW = cssH * (img.naturalWidth / img.naturalHeight);
+  }
   // 性能预算：解码尺寸超过 1600px 时先降采样（长边 1600）
   const cap = 1600;
-  const k = Math.min(scale, cap / Math.max(img.naturalWidth, img.naturalHeight));
+  const k = Math.min(cssW / img.naturalWidth, cap / Math.max(img.naturalWidth, img.naturalHeight));
   const w = Math.max(64, Math.round(img.naturalWidth * k));
   const h = Math.max(36, Math.round(img.naturalHeight * k));
   if (canvas.width !== w || canvas.height !== h) {
     canvas.width = w;
     canvas.height = h;
   }
+  canvas.style.width = `${Math.round(w / dpr)}px`;
+  canvas.style.height = `${Math.round(h / dpr)}px`;
   ctx.clearRect(0, 0, w, h);
   ctx.drawImage(img, 0, 0, w, h);
   return { w, h };

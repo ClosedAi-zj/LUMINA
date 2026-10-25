@@ -45,7 +45,7 @@ export default function Filmstrip({ items }: { items: PhotoSummary[] }) {
   const slice = items.slice(range.start, range.end);
 
   return (
-    <div className="shrink-0 border-t border-line flex flex-col" style={{ background: 'var(--Lumina-Tokens-panel)', height: 92 }}>
+    <div className="shrink-0 border-t border-line flex flex-col" style={{ background: 'var(--Lumina-Tokens-panel)', height: 96 }}>
       <div className="flex items-center px-2 pt-1 text-2xs text-txt3">
         <span>胶片条</span>
         {currentPhotoId !== null && <span className="ml-2 num">#{currentPhotoId}</span>}
@@ -62,8 +62,23 @@ export default function Filmstrip({ items }: { items: PhotoSummary[] }) {
                 <div
                   key={p.id}
                   onClick={() => setCurrent(p.id)}
-                  className={`shrink-0 rounded-sm overflow-hidden cursor-pointer border ${active ? 'border-accent' : 'border-transparent hover:border-line'}`}
-                  style={{ width: ITEM_W, height: 56, marginRight: GAP, background: 'var(--Lumina-Tokens-card)' }}
+                  className={`shrink-0 rounded-mdC overflow-hidden cursor-pointer transition-transform ${active ? 'border-2 border-accent' : 'border border-transparent hover:border-line'}`}
+                  style={{
+                    width: ITEM_W,
+                    height: 56,
+                    marginRight: GAP,
+                    background: 'var(--Lumina-Tokens-card)',
+                    transitionDuration: '120ms',
+                    transitionTimingFunction: 'cubic-bezier(.2,.8,.2,1)',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.transform = 'scale(1.02)';
+                    e.currentTarget.style.boxShadow = 'var(--Lumina-Tokens-shadow2)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = 'scale(1)';
+                    e.currentTarget.style.boxShadow = 'none';
+                  }}
                 >
                   {src ? <img src={src} alt={p.fileName} draggable={false} className="w-full h-full object-cover" /> : <div className="w-full h-full" style={{ background: 'var(--Lumina-Tokens-hover)' }} />}
                 </div>

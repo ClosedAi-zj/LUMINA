@@ -271,50 +271,64 @@ export default function ViewerCanvas({ onHistogram }: { onHistogram?: (h: { r: n
   void baseImageReady;
   void photoId;
 
+  // 零静默：曲线若读回"全零"（引擎 parseCurve 把 "0, 0 255, 255" 按空格切散，y 恒为 0），
+  // 预览必然全黑。这是引擎侧已知缺陷，UI 不能装作正常，也不能偷偷替换用户数据。
+  const curveAllZero =
+    !!params &&
+    Array.isArray(params.toneCurveRGB) &&
+    params.toneCurveRGB.length >= 2 &&
+    params.toneCurveRGB.every((pt) => Number(pt.y) === 0);
+
   return (
     <ViewerSurface className="relative flex-1 min-h-0 flex items-center justify-center overflow-hidden" style={{ padding: 24 }}>
-      <div className="relative flex items-center justify-center max-w-full max-h-full">
-        <canvas
-          ref={canvasRef}
-          data-viewer-canvas="true"
-          className="max-w-full max-h-full rounded-md cursor-col-resize"
-          style={{ boxShadow: '0 4px 24px rgba(0,0,0,0.5)', display: loading ? 'none' : 'block', maxHeight: '100%', objectFit: 'contain' }}
-          onPointerDown={(e) => {
-            if (!effectiveCompare) return;
-            const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
-            const move = (ev: PointerEvent) => {
-              setSplit(Math.max(0.02, Math.min(0.98, (ev.clientX - rect.left) / rect.width)));
-            };
-            const up = () => {
-              window.removeEventListener('pointermove', move);
-              window.removeEventListener('pointerup', up);
-            };
-            window.addEventListener('pointermove', move);
-            window.addEventListener('pointerup', up);
-            move(e.nativeEvent);
-          }}
-        />
-        {/* 画笔蒙版浮层：红色 = 因子>0 区域，软边 = 因子衰减（与渲染同一场数据） */}
-        <canvas
-          ref={maskOverlayRef}
-          width={FIELD_CELL}
-          height={FIELD_CELL}
-          className="absolute inset-0 w-full h-full rounded-md"
-          style={{
-            cursor: painting ? 'crosshair' : 'default',
-            pointerEvents: painting ? 'auto' : 'none',
-            touchAction: 'none',
-            opacity: brushSelected ? 1 : 0,
-          }}
-          onPointerDown={onOverlayPointerDown}
-          onPointerMove={onOverlayPointerMove}
-          onPointerUp={endPainting}
-          onPointerCancel={endPainting}
-        />
+      {/* data-viewer-host：渲染器量**这个容器**来算 contain 尺寸。
+          旧实现量 canvas 自身 → CSS 盒与缓冲尺寸互相推导，永远卡在默认 300×150。 */}
+      <div data-viewer-host className="relative flex-1 min-h-0 w-full h-full flex items-center justify-center">
+        <div className="relative">
+          <canvas
+            ref={canvasRef}
+            data-viewer-canvas="true"
+            className="block rounded-xlC cursor-col-resize"
+            style={{ display: loading ? 'none' : 'block' }}
+            onPointerDown={(e) => {
+              if (!effectiveCompare) return;
+              const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
+              const move = (ev: PointerEvent) => {
+                setSplit(Math.max(0.02, Math.min(0.98, (ev.clientX - rect.left) / rect.width)));
+              };
+              const up = () => {
+                window.removeEventListener('pointermove', move);
+                window.removeEventListener('pointerup', up);
+              };
+              window.addEventListener('pointermove', move);
+              window.addEventListener('pointerup', up);
+              move(e.nativeEvent);
+            }}
+          />
+          {/* 画笔蒙版浮层：红色 = 因子>0 区域，软边 = 因子衰减（与渲染同一场数据） */}
+          <canvas
+            ref={maskOverlayRef}
+            width={FIELD_CELL}
+            height={FIELD_CELL}
+            className="absolute inset-0 w-full h-full rounded-md"
+            style={{
+              cursor: painting ? 'crosshair' : 'default',
+              pointerEvents: painting ? 'auto' : 'none',
+              touchAction: 'none',
+              opacity: brushSelected ? 1 : 0,
+            }}
+            onPointerDown={onOverlayPointerDown}
+            onPointerMove={onOverlayPointerMove}
+            onPointerUp={endPainting}
+            onPointerCancel={endPainting}
+          />
+        </div>
       </div>
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center text-txt3 text-xs">解码底图…</div>
       )}
+      {!loading && curveAllZero && <CurveAllZeroBanner />}
+
       {!loading && renderNotice && (
         <div
           className="absolute top-3 left-3 right-3 px-3 py-1.5 rounded-md text-2xs"
@@ -340,3 +354,38 @@ export default function ViewerCanvas({ onHistogram }: { onHistogram?: (h: { r: n
     </ViewerSurface>
   );
 }
+
+/**
+ * 曲线全零红条：一行摘要 + 「详情」展开两行说明（引擎已知缺陷，零静默原则）。
+ * 样式仅用 danger 令牌与既有 rgba 蒙层口径，不引入新色值。
+ */
+function CurveAllZeroBanner(): React.JSX.Element {
+  const [expanded, setExpanded] = useState(false);
+  const bannerStyle: React.CSSProperties = {
+    background: 'rgba(217,96,79,0.14)',
+    border: '1px solid rgba(217,96,79,0.5)',
+    color: 'var(--Lumina-Tokens-danger)',
+  };
+  return (
+    <div className="absolute top-3 left-3 right-3 px-3 py-1.5 rounded-md text-2xs z-10" style={bannerStyle}>
+      <div className="flex items-center gap-2">
+        <span className="flex-1">曲线读回全零，预览为黑（引擎已知缺陷）</span>
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="shrink-0 underline underline-offset-2 cursor-pointer"
+          style={{ color: 'var(--Lumina-Tokens-danger)' }}
+        >
+          {expanded ? '收起' : '详情'}
+        </button>
+      </div>
+      {expanded && (
+        <div className="mt-1 leading-relaxed opacity-90">
+          <div>· XMP 曲线解析缺陷：`0, 0 255, 255` 被解析成 y=0</div>
+          <div>· 未修改你的 sidecar，修复随 v1.2.0 M0 引擎交付</div>
+        </div>
+      )}
+    </div>
+  );
+}
+

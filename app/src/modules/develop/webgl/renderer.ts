@@ -230,18 +230,32 @@ export class DevelopRenderer {
     if (!gl || !this.tex || !this.program) return false;
     const { params, split = null, beforeParams = null } = opts;
 
-    // canvas 尺寸随容器 & 图片宽高比
-    const rect = canvas.getBoundingClientRect();
+    // canvas 尺寸：**必须量宿主容器**，不能量 canvas 自己。
+    // 旧实现用 canvas.getBoundingClientRect()：canvas 的 CSS 盒由 width/height 属性推导，
+    // 属性又由 CSS 盒推导 → 自引用死锁，永远停在默认 300×150（C1 基线裁到 px=0,0,0 的诱因之一）。
+    // 现在：宿主 rect → contain 适配 → 同时设 CSS 尺寸（可见大小）与缓冲尺寸（×dpr）。
+    const host = (canvas.closest('[data-viewer-host]') as HTMLElement | null) ?? canvas.parentElement;
+    const hostRect = host ? host.getBoundingClientRect() : canvas.getBoundingClientRect();
     const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
-    const cssW = rect.width;
-    const cssH = rect.width / this.aspect;
-    const targetH = Math.max(64, Math.min(cssH, rect.height));
+    const availW = Math.max(64, hostRect.width);
+    const availH = Math.max(64, hostRect.height);
+    const aspect = this.aspect > 0 ? this.aspect : 1.5;
+    let cssW = availW;
+    let cssH = cssW / aspect;
+    if (cssH > availH) {
+      cssH = availH;
+      cssW = cssH * aspect;
+    }
     const w = Math.max(64, Math.round(cssW * dpr));
-    const h = Math.max(64, Math.round(targetH * dpr));
+    const h = Math.max(64, Math.round(cssH * dpr));
     if (canvas.width !== w || canvas.height !== h) {
       canvas.width = w;
       canvas.height = h;
     }
+    const cssWpx = `${Math.round(cssW)}px`;
+    const cssHpx = `${Math.round(cssH)}px`;
+    if (canvas.style.width !== cssWpx) canvas.style.width = cssWpx;
+    if (canvas.style.height !== cssHpx) canvas.style.height = cssHpx;
     gl.viewport(0, 0, w, h);
     gl.useProgram(this.program);
 

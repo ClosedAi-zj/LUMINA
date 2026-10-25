@@ -35,9 +35,9 @@ export default function HistoryPanel() {
   }, [photoId, loadError]);
 
   return (
-    <div className="p-3 text-xs">
-      <div className="flex items-center gap-1.5 mb-2">
-        <span className="text-2xs text-txt3 flex-1">历史记录 · HISTORY</span>
+    <div className="px-2 pb-1 text-xs">
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <span className="flex-1" />
         <Button size="sm" disabled={!canUndo} onClick={() => void undo()} title="Ctrl+Z">
           ↶ 撤销
         </Button>
@@ -87,18 +87,19 @@ export default function HistoryPanel() {
       <div className="text-2xs text-txt3 mb-1.5">快照</div>
       <div className="flex flex-col gap-px mb-3">
         {snapshots.length === 0 && <div className="text-2xs text-txt3">暂无快照</div>}
-        {snapshots.map((s) => (
+        {groupSnapshots(snapshots).map((g) => (
           <button
-            key={s.snapshotId}
-            className="h-6 px-2 rounded-sm text-left text-2xs text-txt2 hover:bg-hover hover:text-txt"
+            key={g.ids[0]}
+            className="h-6 px-2 rounded-mdC text-left text-2xs text-txt2 hover:bg-hover hover:text-txt flex items-center gap-1.5"
+            title={g.ids.length > 1 ? `${g.name}（${g.ids.length} 条同名快照，点击恢复最新一条）` : g.name}
             onClick={async () => {
               if (photoId === null) return;
               try {
-                const res = await api.edit.restoreSnapshot(photoId, s.snapshotId);
+                const res = await api.edit.restoreSnapshot(photoId, g.ids[0]);
                 useDevelop.setState({
                   params: normalizeParams(res.params),
                   revision: useDevelop.getState().revision + 1,
-                  historyLabels: [...useDevelop.getState().historyLabels, `快照恢复 · ${s.name}`],
+                  historyLabels: [...useDevelop.getState().historyLabels, `快照恢复 · ${g.name}`],
                 });
               } catch (err) {
                 const { useJobStore } = await import('../../../store/jobStore');
@@ -106,7 +107,8 @@ export default function HistoryPanel() {
               }
             }}
           >
-            ◉ {s.name}
+            <span className="truncate">◉ {g.name}</span>
+            {g.ids.length > 1 && <span className="num text-txt3 shrink-0">×{g.ids.length}</span>}
           </button>
         ))}
         <Button
@@ -144,4 +146,19 @@ export default function HistoryPanel() {
       </div>
     </div>
   );
+}
+
+/** 同名连续快照合并（历次冒烟留下的 64 条「冒烟快照」应显示成一条 ×64，而不是刷满列表） */
+function groupSnapshots(list: SnapshotInfo[]): { name: string; ids: number[]; latest: number }[] {
+  const out: { name: string; ids: number[]; latest: number }[] = [];
+  for (const s of list) {
+    const last = out[out.length - 1];
+    if (last && last.name === s.name) {
+      last.ids.push(s.snapshotId);
+      last.latest = Math.max(last.latest, s.createdAt);
+    } else {
+      out.push({ name: s.name, ids: [s.snapshotId], latest: s.createdAt });
+    }
+  }
+  return out;
 }

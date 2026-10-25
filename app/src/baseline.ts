@@ -107,10 +107,14 @@ export async function runBaselineScenario(): Promise<void> {
           }
         }
         const st = useDevelop.getState();
+        const cards = Array.from(document.querySelectorAll('aside section')).map(
+          (s) => `${(s.querySelector('button')?.textContent ?? '').trim().slice(0, 10)}:${Math.round((s as HTMLElement).getBoundingClientRect().height)}`,
+        );
         log(
           `probe ${f.id}-${f.devMode}: canvas=${el ? `${el.width}x${el.height}` : 'none'} px=${px} ` +
             `base=${(st.baseImageUrl ?? 'null').split('/').pop()} ready=${st.baseImageReady} loading=${st.loading} photoId=${st.photoId}`,
         );
+        log(`cards ${f.id}: ${cards.join(' | ')}`);
       }
       await setTheme('Dark');
       await sleep(700);

@@ -88,7 +88,11 @@ export async function runSmokeScenario(): Promise<void> {
     // 预设 + 快照 + 同步
     const presets = await api.presets.list();
     await useDevelop.getState().applyPreset(presets[0].params, presets[0].name);
-    await useDevelop.getState().saveSnapshot('冒烟快照');
+    // 快照：同名已存在就复用，避免每次冒烟都往真实库里多堆一条（此前已堆到 64 条同名）
+    const existedSnaps = await api.edit.getSnapshots(firstId).catch(() => []);
+    if (!existedSnaps.some((x) => x.name === '冒烟快照')) {
+      await useDevelop.getState().saveSnapshot('冒烟快照');
+    }
     const sync = await api.edit.syncToSelection(firstId, [firstId + 1, firstId + 2], true);
     log(`develop-preset: presets=${presets.length} applied=${presets[0].name} snapshot=ok sync=${sync.updated}`);
 
