@@ -6,11 +6,13 @@
 #define LUMINA_PLAN_RENDER_PLAN_H_
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "imaging/image_buffer.h"
+#include "json/json_value.h"
 #include "plan/cache_key.h"
 
 namespace lumina {
@@ -18,6 +20,7 @@ namespace plan {
 
 struct RenderPlan {
   std::vector<std::string> opSequence;               // 有序算子名
+  std::map<std::string, json::JsonValue> paramsByOp; // 算子名 → 叶路径键值集（T1.3）
   std::string cacheKeys[kCacheBucketCount];          // kGeom/kTone/kDisplay
   bool valid() const { return !cacheKeys[0].empty() && !cacheKeys[1].empty() &&
                               !cacheKeys[2].empty(); }

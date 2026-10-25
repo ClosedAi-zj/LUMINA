@@ -94,6 +94,22 @@ bool OpTable::evaluate(const std::vector<std::string>& opNames, imaging::ImageBu
   return true;
 }
 
+bool OpTable::evaluate(const std::vector<std::string>& opNames, imaging::ImageBuf* buf,
+                       const std::map<std::string, json::JsonValue>& paramsByOp,
+                       std::string* err) {
+  // 先统一注入参数（本序列不重复的算子不受影响）
+  for (const std::string& name : opNames) {
+    auto it = paramsByOp.find(name);
+    Operator* op = const_cast<Operator*>(find(name));
+    if (!op) {
+      if (err) *err = "evaluate: unknown operator '" + name + "'";
+      return false;
+    }
+    op->setParams(it != paramsByOp.end() ? it->second : json::JsonValue::objectValue());
+  }
+  return evaluate(opNames, buf, err);
+}
+
 // ---- 骨架算子注册：8 节点骨架（plan/ops/*.cpp）+ iccInput 预留 + S7 输出占位 ----
 
 namespace {
@@ -111,6 +127,27 @@ class IccInputOp : public Operator {
       return false;
     }
     return true;  // M2 前占位 identity
+  }
+};
+
+// S3 ToneMap（唯一域分界，非节点）：scene-linear → display-referred。
+// CPU oracle 口径：Reinhard c/(1+c)（单调、0→0、∞→1）；中间值 0.18 → 0.153。
+// T2.1 管线重排时由 PlanBuilder 在 S2/S4 之间自动插入。
+class ToneMapOp : public Operator {
+ public:
+  const char* name() const override { return "pipeline.toneMap"; }
+  Stage stage() const override { return Stage::S3ToneMap; }
+  bool apply(imaging::ImageBuf* buf, std::string* err) const override {
+    if (!buf || !buf->valid()) {
+      if (err) *err = "pipeline.toneMap: invalid buffer";
+      return false;
+    }
+    for (size_t i = 0; i < buf->data.size(); ++i) {
+      const double c = imaging::log16Decode(buf->data[i], buf->logStep);
+      const double d = c / (1.0 + c);
+      buf->data[i] = imaging::log16Encode(static_cast<float>(d), buf->logStep);
+    }
+    return true;
   }
 };
 
@@ -141,6 +178,7 @@ bool registerBuiltinOps(OpTable* table, std::string* err) {
   ok = registerGeometryOps(table, err) && ok;
   ok = registerEffectsOps(table, err) && ok;
   ok = registerMaskOps(table, err) && ok;
+  ok = table->registerOp(std::make_shared<ToneMapOp>(), err) && ok;
   ok = table->registerOp(std::make_shared<IccInputOp>(), err) && ok;
   ok = table->registerOp(std::make_shared<OutputOp>(), err) && ok;
   return ok;

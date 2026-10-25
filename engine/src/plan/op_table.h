@@ -6,6 +6,7 @@
 
 #include <map>
 #include <memory>
+#include "json/json_value.h"
 #include <string>
 #include <vector>
 
@@ -45,6 +46,9 @@ class Operator {
   virtual Stage stage() const = 0;
   // 就地变换 buf；错误（如域不匹配）写 err 并返回 false。零静默。
   virtual bool apply(imaging::ImageBuf* buf, std::string* err) const = 0;
+  // T1.3：求值前注入本算子参数（键 = 叶路径口径，如 "exposure"/"hsl.blue.sat"）。
+  // 默认忽略（无参算子）。evaluate(带 params) 会对序列中每个算子调用。
+  virtual void setParams(const json::JsonValue& params) { (void)params; }
 };
 
 // 算子注册表 + 有序求值器（骨架；M0 期末由 Plan 求值器接管 evaluate）
@@ -62,6 +66,10 @@ class OpTable {
   // ③ 单算子 apply 失败 → 透传报错。任何失败不落盘、不部分求值（调用方丢弃 buf）。
   bool evaluate(const std::vector<std::string>& opNames, imaging::ImageBuf* buf,
                 std::string* err) const;
+  // T1.3：带参数求值（opName → params 叶路径键值集）。非 const（注入 setParams）。
+  bool evaluate(const std::vector<std::string>& opNames, imaging::ImageBuf* buf,
+                const std::map<std::string, json::JsonValue>& paramsByOp,
+                std::string* err);
 
  private:
   OpTable() = default;

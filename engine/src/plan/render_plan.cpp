@@ -37,8 +37,9 @@ std::string opForParam(const std::string& path) {
   if (path.rfind("geometry.", 0) == 0) return "geometry.crop";
   if (path == "optics.manualDistortion") return "lens.manualDistortion";
   if (path == "optics.lensProfileEnable") return "lens.profile";
-  // curve：算子名 = 叶路径
+  // curve：点曲线算子名 = 叶路径；参数曲线 7 叶收拢到 curve.parametric
   if (path.rfind("curve.", 0) == 0) return path;
+  if (path.rfind("parametric.", 0) == 0) return "curve.parametric";
   // 颜色（HSL 全体一把 / 分级一把）
   if (path.rfind("hsl.", 0) == 0) return "color.hsl";
   if (path.rfind("colorGrade.", 0) == 0) return "color.colorGrade";
@@ -70,13 +71,15 @@ bool compilePlan(int64_t photoId,
     if (err) *err = "compilePlan: cache key computation failed";
     return false;
   }
-  // 去重收集算子名（同一算子多个叶只进序列一次），记录首次出现顺序
+  // 去重收集算子名（同一算子多个叶只进序列一次），记录首次出现顺序；
+  // 同时收集算子参数（叶路径键值原样透传给算子，键口径 = compile 入参 kv.first）
   std::map<std::string, size_t> firstSeen;
   std::vector<std::string> ops;
   for (const auto& kv : params) {
     const std::string opName = opForParam(kv.first);
     if (opName.empty()) continue;
     if (firstSeen.emplace(opName, ops.size()).second) ops.push_back(opName);
+    plan->paramsByOp[opName].setItem(kv.first, kv.second);
   }
   // stage 归并稳定排序：同 stage 保持参数出现顺序（iccInput 由参数顺序保证居前）
   std::stable_sort(ops.begin(), ops.end(),
@@ -92,7 +95,7 @@ bool executePlan(const RenderPlan& plan, imaging::ImageBuf* buf, std::string* er
     if (err) *err = "executePlan: plan not compiled";
     return false;
   }
-  return OpTable::instance().evaluate(plan.opSequence, buf, err);
+  return OpTable::instance().evaluate(plan.opSequence, buf, plan.paramsByOp, err);
 }
 
 }  // namespace plan

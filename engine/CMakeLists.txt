@@ -72,6 +72,7 @@ set(LUMINA_SOURCES
   src/plan/render_plan.cpp
   src/graph/node_graph.cpp
   src/graph/serialize.cpp
+  src/plan/ops/opsmath.cpp
   src/plan/ops/basic.cpp
   src/plan/ops/curve.cpp
   src/plan/ops/color.cpp
@@ -212,6 +213,11 @@ add_executable(test_xmp_nodegraph tests/test_xmp_nodegraph.cpp)
 target_link_libraries(test_xmp_nodegraph PRIVATE lumina_core)
 set_target_properties(test_xmp_nodegraph PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
 add_test(NAME xmp_nodegraph COMMAND test_xmp_nodegraph)
+
+add_executable(test_ops93 tests/test_ops93.cpp)
+target_link_libraries(test_ops93 PRIVATE lumina_core)
+set_target_properties(test_ops93 PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME ops93 COMMAND test_ops93)
 
 # M0 ΔE 基线工具（不入 ctest：依赖本机 RW2 样本；由 scripts/ci/deltae.py 编排）
 add_executable(deltae_baseline tests/color/delta_e_baseline.cpp)
