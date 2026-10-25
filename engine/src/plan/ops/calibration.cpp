@@ -21,10 +21,10 @@ class PrimaryOp : public ParamOp {
     if (hue == 0.0 && sat == 0.0) return true;
     const int o1 = (ch_ + 1) % 3;
     const int o2 = (ch_ + 2) % 3;
-    for (size_t i = 0; i + 2 < buf->data.size(); i += 3) {
-      double px[3] = {static_cast<double>(buf->data[i]),
-                      static_cast<double>(buf->data[i + 1]),
-                      static_cast<double>(buf->data[i + 2])};
+    for (size_t i = 0; i + 2 < buf->channelCount(); i += 3) {
+      double px[3] = {static_cast<double>(imaging::codeAt(*buf, i)),
+                      static_cast<double>(imaging::codeAt(*buf, i + 1)),
+                      static_cast<double>(imaging::codeAt(*buf, i + 2))};
       const double mean = (px[0] + px[1] + px[2]) / 3.0;
       // hue：主色与两邻色交叉混合（hue>0 → 向 hue 轴正方向旋转）
       const double cross = (px[o1] - px[o2]) * (hue / 100.0 * 0.25);
@@ -32,8 +32,7 @@ class PrimaryOp : public ParamOp {
       // sat：主色离亮度差缩放
       px[ch_] = mean + (px[ch_] - mean) * (1.0 + sat / 100.0);
       for (int c = 0; c < 3; ++c) {
-        buf->data[i + c] =
-            static_cast<uint16_t>(std::clamp(px[c], 0.0, 65535.0) + 0.5);
+        imaging::setCodeAt(*buf, i + c, px[c]);
       }
     }
     return true;
@@ -55,15 +54,12 @@ class ShadowTintOp : public ParamOp {
     const double dR = t / 100.0 * 400.0 * 0.5;
     const double dG = -t / 100.0 * 400.0;
     const double dB = dR;
-    for (size_t i = 0; i + 2 < buf->data.size(); i += 3) {
-      const double l = perceptualLum(&buf->data[i]);
+    for (size_t i = 0; i + 2 < buf->channelCount(); i += 3) {
+      const double l = perceptualLumAt(*buf, i);
       const double w = 1.0 - smooth01(l, 0.0, 0.4);  // 只影响阴影
-      double v[3] = {buf->data[i] + dR * w, buf->data[i + 1] + dG * w,
-                     buf->data[i + 2] + dB * w};
-      for (int c = 0; c < 3; ++c) {
-        buf->data[i + c] =
-            static_cast<uint16_t>(std::clamp(v[c], 0.0, 65535.0) + 0.5);
-      }
+      imaging::setCodeAt(*buf, i, imaging::codeAt(*buf, i) + dR * w);
+      imaging::setCodeAt(*buf, i + 1, imaging::codeAt(*buf, i + 1) + dG * w);
+      imaging::setCodeAt(*buf, i + 2, imaging::codeAt(*buf, i + 2) + dB * w);
     }
     return true;
   }

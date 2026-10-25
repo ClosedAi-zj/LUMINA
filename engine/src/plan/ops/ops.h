@@ -94,6 +94,12 @@ bool applyMasked(const Operator& op, const imaging::ImageBuf& base,
 inline double perceptualLum(const uint16_t* p) {
   return (static_cast<double>(p[0]) + p[1] + p[2]) / (3.0 * 65535.0);
 }
+// T1.5 float 工作链版本：经 codeAt 兼容 uint16 / float 两种缓冲
+inline double perceptualLumAt(const imaging::ImageBuf& b, size_t i) {
+  return (static_cast<double>(imaging::codeAt(b, i)) + imaging::codeAt(b, i + 1) +
+          imaging::codeAt(b, i + 2)) /
+         (3.0 * 65535.0);
+}
 // 平滑衰减（smoothstep 版）：edge0→0，edge1→1
 inline double smooth01(double x, double edge0, double edge1) {
   if (edge1 <= edge0) return x >= edge1 ? 1.0 : 0.0;

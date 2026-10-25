@@ -142,10 +142,12 @@ class ToneMapOp : public Operator {
       if (err) *err = "pipeline.toneMap: invalid buffer";
       return false;
     }
-    for (size_t i = 0; i < buf->data.size(); ++i) {
-      const double c = imaging::log16Decode(buf->data[i], buf->logStep);
+    for (size_t i = 0; i < buf->channelCount(); ++i) {
+      const double c = imaging::log16DecodeF(imaging::codeAt(*buf, i), buf->logStep);
       const double d = c / (1.0 + c);
-      buf->data[i] = imaging::log16Encode(static_cast<float>(d), buf->logStep);
+      // log16Encode 自带 round-to-栅格（TS oracle 同式：编码点量化语义保留）
+      imaging::setCodeAt(*buf, i,
+                         static_cast<double>(imaging::log16Encode(static_cast<float>(d), buf->logStep)));
     }
     return true;
   }

@@ -70,6 +70,7 @@ set(LUMINA_SOURCES
   src/plan/geometry.cpp
   src/plan/cache_key.cpp
   src/plan/render_plan.cpp
+  src/plan/render_exec.cpp
   src/graph/node_graph.cpp
   src/graph/serialize.cpp
   src/plan/ops/opsmath.cpp
@@ -218,6 +219,12 @@ add_executable(test_ops93 tests/test_ops93.cpp)
 target_link_libraries(test_ops93 PRIVATE lumina_core)
 set_target_properties(test_ops93 PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
 add_test(NAME ops93 COMMAND test_ops93)
+
+# T1.5：Plan 端到端执行（flatten/compile+execute/display 转换/导出同实现）
+add_executable(test_render_exec tests/test_render_exec.cpp)
+target_link_libraries(test_render_exec PRIVATE lumina_core)
+set_target_properties(test_render_exec PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME render_exec COMMAND test_render_exec)
 
 # M0 ΔE 基线工具（不入 ctest：依赖本机 RW2 样本；由 scripts/ci/deltae.py 编排）
 add_executable(deltae_baseline tests/color/delta_e_baseline.cpp)

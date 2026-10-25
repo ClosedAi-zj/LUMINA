@@ -25,9 +25,9 @@ class ExposureOp : public ParamOp {
     const double ev = num("basic.exposure", 0.0);
     if (ev == 0.0) return true;
     const double delta = ev * buf->logStep;
-    for (size_t i = 0; i < buf->data.size(); ++i) {
-      double c = static_cast<double>(buf->data[i]) + delta;
-      buf->data[i] = static_cast<uint16_t>(std::clamp(c, 0.0, 65535.0) + 0.5);
+    for (size_t i = 0; i < buf->channelCount(); ++i) {
+      const double c = static_cast<double>(imaging::codeAt(*buf, i)) + delta;
+      imaging::setCodeAt(*buf, i, c);
     }
     return true;
   }
@@ -50,10 +50,9 @@ class WbGainOp : public ParamOp {
   // ev[r/g/b] = 各通道 EV 偏移；码值 += ev*logStep
   void shiftChannels(imaging::ImageBuf* buf, double evR, double evG, double evB) const {
     const double d[3] = {evR * buf->logStep, evG * buf->logStep, evB * buf->logStep};
-    for (size_t i = 0; i + 2 < buf->data.size(); i += 3) {
+    for (size_t i = 0; i + 2 < buf->channelCount(); i += 3) {
       for (int c = 0; c < 3; ++c) {
-        double v = static_cast<double>(buf->data[i + c]) + d[c];
-        buf->data[i + c] = static_cast<uint16_t>(std::clamp(v, 0.0, 65535.0) + 0.5);
+        imaging::setCodeAt(*buf, i + c, static_cast<double>(imaging::codeAt(*buf, i + c)) + d[c]);
       }
     }
   }
@@ -95,9 +94,9 @@ class ContrastOp : public ParamOp {
     if (!checkBuf(buf, err)) return false;
     const double k = 1.0 + num("basic.contrast", 0.0) / 100.0 * 0.3;
     if (k == 1.0) return true;
-    for (size_t i = 0; i < buf->data.size(); ++i) {
-      double v = kMidCode + (static_cast<double>(buf->data[i]) - kMidCode) * k;
-      buf->data[i] = static_cast<uint16_t>(std::clamp(v, 0.0, 65535.0) + 0.5);
+    for (size_t i = 0; i < buf->channelCount(); ++i) {
+      const double v = kMidCode + (static_cast<double>(imaging::codeAt(*buf, i)) - kMidCode) * k;
+      imaging::setCodeAt(*buf, i, v);
     }
     return true;
   }
@@ -113,8 +112,8 @@ class ToneZoneOp : public ParamOp {
     const double amt = num(n_, 0.0);
     if (amt == 0.0) return true;
     const double k = amt / 100.0 * 3000.0;  // 满量程 ≈ 1.5EV
-    for (size_t i = 0; i + 2 < buf->data.size(); i += 3) {
-      const double l = perceptualLum(&buf->data[i]);
+    for (size_t i = 0; i + 2 < buf->channelCount(); i += 3) {
+      const double l = perceptualLumAt(*buf, i);
       double w;
       switch (z_) {
         case kHighlights: w = wHigh(l); break;
@@ -124,8 +123,7 @@ class ToneZoneOp : public ParamOp {
       }
       const double d = k * w;
       for (int c = 0; c < 3; ++c) {
-        double v = static_cast<double>(buf->data[i + c]) + d;
-        buf->data[i + c] = static_cast<uint16_t>(std::clamp(v, 0.0, 65535.0) + 0.5);
+        imaging::setCodeAt(*buf, i + c, static_cast<double>(imaging::codeAt(*buf, i + c)) + d);
       }
     }
     return true;
@@ -152,17 +150,16 @@ class LocalContrastOp : public ParamOp {
       for (int y = 0; y < h; ++y) {
         for (int x = 0; x < w; ++x) {
           plane[static_cast<size_t>(y) * w + x] =
-              static_cast<float>(buf->data[(static_cast<size_t>(y) * w + x) * 3 + c]);
+              imaging::codeAt(*buf, (static_cast<size_t>(y) * w + x) * 3 + c);
         }
       }
       boxBlurPlane(plane.data(), blurred.data(), w, h, radius_);
       for (int y = 0; y < h; ++y) {
         for (int x = 0; x < w; ++x) {
           const size_t idx = (static_cast<size_t>(y) * w + x) * 3 + c;
-          const double base = buf->data[idx];
+          const double base = imaging::codeAt(*buf, idx);
           const double resid = base - blurred[static_cast<size_t>(y) * w + x];
-          const double v = base + k * resid;
-          buf->data[idx] = static_cast<uint16_t>(std::clamp(v, 0.0, 65535.0) + 0.5);
+          imaging::setCodeAt(*buf, idx, base + k * resid);
         }
       }
     }
@@ -184,14 +181,16 @@ class DehazeOp : public ParamOp {
     const double kShadow = dz / 100.0 * 1500.0;
     const double kBlack = -dz / 100.0 * 500.0;   // 压黑增加通透感
     const double kSat = dz / 100.0 * 0.25;
-    for (size_t i = 0; i + 2 < buf->data.size(); i += 3) {
-      const double l = perceptualLum(&buf->data[i]);
-      double mean = (buf->data[i] + buf->data[i + 1] + buf->data[i + 2]) / 3.0;
+    for (size_t i = 0; i + 2 < buf->channelCount(); i += 3) {
+      const double l = perceptualLumAt(*buf, i);
+      const double mean = (imaging::codeAt(*buf, i) + imaging::codeAt(*buf, i + 1) +
+                           imaging::codeAt(*buf, i + 2)) /
+                          3.0;
       for (int c = 0; c < 3; ++c) {
-        double v = buf->data[i + c];
+        double v = imaging::codeAt(*buf, i + c);
         v += kShadow * wShadow(l) + kBlack * (1.0 - smooth01(l, 0.0, 0.25));
         v = mean + (v - mean) * (1.0 + kSat);  // 轻度饱和
-        buf->data[i + c] = static_cast<uint16_t>(std::clamp(v, 0.0, 65535.0) + 0.5);
+        imaging::setCodeAt(*buf, i + c, v);
       }
     }
     return true;
@@ -206,19 +205,24 @@ class SaturationOp : public ParamOp {
     if (!checkBuf(buf, err)) return false;
     const double amt = num(n_, 0.0);
     if (amt == 0.0) return true;
-    for (size_t i = 0; i + 2 < buf->data.size(); i += 3) {
-      const double mean = (buf->data[i] + buf->data[i + 1] + buf->data[i + 2]) / 3.0;
+    for (size_t i = 0; i + 2 < buf->channelCount(); i += 3) {
+      const double mean = (imaging::codeAt(*buf, i) + imaging::codeAt(*buf, i + 1) +
+                           imaging::codeAt(*buf, i + 2)) /
+                          3.0;
       double factor = 1.0 + amt / 100.0;
       if (vib_) {
         // 自然饱和：饱和度越低增益越大（保护高饱和像素）
-        const double mx = std::max(buf->data[i], std::max(buf->data[i + 1], buf->data[i + 2]));
-        const double mn = std::min(buf->data[i], std::min(buf->data[i + 1], buf->data[i + 2]));
+        const double r = imaging::codeAt(*buf, i);
+        const double g = imaging::codeAt(*buf, i + 1);
+        const double b = imaging::codeAt(*buf, i + 2);
+        const double mx = std::max(r, std::max(g, b));
+        const double mn = std::min(r, std::min(g, b));
         const double sat = (mx - mn) / (mx + mn + 1.0);
         factor = 1.0 + amt / 100.0 * (1.0 - sat) * 0.6;
       }
       for (int c = 0; c < 3; ++c) {
-        double v = mean + (buf->data[i + c] - mean) * factor;
-        buf->data[i + c] = static_cast<uint16_t>(std::clamp(v, 0.0, 65535.0) + 0.5);
+        const double v = mean + (imaging::codeAt(*buf, i + c) - mean) * factor;
+        imaging::setCodeAt(*buf, i + c, v);
       }
     }
     return true;

@@ -32,6 +32,14 @@ bool compilePlan(int64_t photoId,
                  const std::vector<std::pair<std::string, std::string>>& params,
                  RenderPlan* plan, std::string* err);
 
+// T1.5：JsonValue 值重载（导出/develop.render 统一入口）。
+// 标量/字符串/布尔原样进 paramsByOp（算子 asDouble/asBool 直接消费）；
+// 曲线等数组值原样进 paramsByOp（PointCurveOp 消费 {x,y}[] 数组）；
+// 缓存键取值的稳定文本形式：字符串原样，其余 serialize()。
+bool compilePlan(int64_t photoId,
+                 const std::vector<std::pair<std::string, json::JsonValue>>& params,
+                 RenderPlan* plan, std::string* err);
+
 // 求值：按 opSequence 经 OpTable 求值（需 registerBuiltinOps 已执行）。
 bool executePlan(const RenderPlan& plan, imaging::ImageBuf* buf, std::string* err);
 

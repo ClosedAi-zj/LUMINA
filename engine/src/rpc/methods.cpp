@@ -16,6 +16,7 @@
 #include "map/map_service.h"
 #include "metadata/exif_reader.h"
 #include "metadata/video_probe.h"
+#include "plan/render_exec.h"
 #include "raw/embedded_proxy.h"
 #include "rpc/version.h"
 #include "specialty/denoise_service.h"
@@ -497,6 +498,105 @@ void registerMethods(Dispatcher* d, EngineServices* s) {
                       out.setItem("source", source);
                       return out;
                     });
+  // ================= 5.4 develop.render（T1.5：Plan CPU 后端 / 导出同实现） =================
+  // 入参：photoId（生产路径：解码原片）或 inputPath（断言/harness：指定位图文件，口径
+  //       = 预览底图，保证与 GPU 预览逐像素同输入）；params = EditParams（缺省时读
+  //       sidecar）；longEdge 缺省 1600（只缩不放，0 = 保持原尺寸）。
+  // 出参：{ path, width, height }；PNG 营业目录 rendersDir/develop/，文件名含 kDisplay
+  //       缓存键（同参数同图自动复用）。求值失败零静默（kInternalError + 原文）。
+  d->registerMethod("develop.render",
+                    [s](const json::JsonValue& params, RpcError* err) -> json::JsonValue {
+                      const std::string inputPath = params.get("inputPath").asString();
+                      const int64_t id = params.get("photoId").asInt();
+                      PhotoRecord p;
+                      std::string file = inputPath;
+                      if (file.empty()) {
+                        std::string dbErr;
+                        if (!s->photos->getById(id, &p, &dbErr)) {
+                          *err = RpcError(kFileNotFound, "photo not found: " + std::to_string(id));
+                          return json::JsonValue::nullValue();
+                        }
+                        if (!fileExists(p.filePath)) {
+                          *err = RpcError(kFileNotFound, "original file missing: " + p.filePath);
+                          return json::JsonValue::nullValue();
+                        }
+                        file = p.filePath;
+                      }
+                      int longEdge = static_cast<int>(params.get("longEdge").asInt(1600));
+                      if (longEdge < 0 || longEdge > 20000) longEdge = 1600;
+
+                      imaging::Image image;
+                      std::string ext = extensionOf(file);
+                      std::string decodeErr;
+                      bool ok = false;
+                      if (raw::isSupportedExtension(ext) && ext != "jpg" && ext != "jpeg" &&
+                          ext != "png") {
+                        ok = s->decoder->decodeToBitmap(file, true, &image, &decodeErr);
+                      } else {
+                        ok = imaging::decodeImageFile(file, &image, &decodeErr);
+                      }
+                      if (!ok) {
+                        *err = RpcError(kRawDecodeFailed, decodeErr);
+                        return json::JsonValue::nullValue();
+                      }
+                      if (longEdge > 0) {
+                        const int nativeLong = std::max(image.width, image.height);
+                        if (nativeLong > 0 && longEdge < nativeLong) {
+                          imaging::Image scaled;
+                          if (!imaging::resizeImage(
+                                  image, &scaled, longEdge,
+                                  thumbScaledHeight(image.width, image.height, longEdge))) {
+                            *err = RpcError(kInternalError, "develop.render 缩放失败");
+                            return json::JsonValue::nullValue();
+                          }
+                          image = scaled;
+                        }
+                      }
+
+                      // 参数：显式 params 优先；否则读 sidecar（photoId 路径）
+                      json::JsonValue editParams = params.get("params");
+                      if (!editParams.isObject()) {
+                        if (id <= 0) {
+                          *err = RpcError(kInvalidParams, "develop.render 需要 params 或 photoId");
+                          return json::JsonValue::nullValue();
+                        }
+                        std::string loadErr;
+                        if (!s->xmp->loadParams(id, &editParams, &loadErr)) {
+                          *err = RpcError(kInternalError, "sidecar 参数读取失败: " + loadErr);
+                          return json::JsonValue::nullValue();
+                        }
+                      }
+
+                      imaging::ImageBuf buf = plan::displayToPlanBuf(image);
+                      plan::RenderPlan renderPlan;
+                      std::string planErr;
+                      if (!plan::runEditPlan(editParams, &buf, &renderPlan, &planErr)) {
+                        *err = RpcError(kInternalError, "Plan 求值失败: " + planErr);
+                        return json::JsonValue::nullValue();
+                      }
+                      imaging::Image outImage;
+                      if (!plan::planBufToDisplay(buf, &outImage, &planErr)) {
+                        *err = RpcError(kInternalError, "Plan 输出编码失败: " + planErr);
+                        return json::JsonValue::nullValue();
+                      }
+
+                      const std::string outDir =
+                          joinPath(s->config->rendersDir(), "develop");
+                      if (!dirExists(outDir)) makeDirs(outDir);
+                      // 文件名 = kDisplay 缓存键（含上游 kTone 键；同图同参自动复用）
+                      const std::string target =
+                          joinPath(outDir, "develop-" + renderPlan.cacheKeys[2] + ".png");
+                      std::string writeErr;
+                      if (!imaging::encodePng(target, outImage, &writeErr)) {
+                        *err = RpcError(kIoError, writeErr);
+                        return json::JsonValue::nullValue();
+                      }
+                      json::JsonValue out = json::JsonValue::objectValue();
+                      out.setItem("path", target);
+                      out.setItem("width", outImage.width);
+                      out.setItem("height", outImage.height);
+                      return out;
+                    });
   d->registerMethod("cache.clear",
                     [s](const json::JsonValue& params, RpcError* err) -> json::JsonValue {
                       std::string scope = params.get("scope").asString("thumbs");
@@ -855,14 +955,22 @@ void registerMethods(Dispatcher* d, EngineServices* s) {
                         return json::JsonValue::nullValue();
                       }
                       if (edited) {
+                        // T1.5：edited 直方图与导出/预览同一 Plan 实现（旧 applyToneApprox 已销毁）
                         json::JsonValue params2;
                         std::string loadErr;
                         if (s->xmp->loadParams(id, &params2, &loadErr)) {
-                          imaging::ToneAdjust adjust;
-                          adjust.exposure = params2.get("exposure").asDouble();
-                          adjust.contrast = params2.get("contrast").asDouble();
-                          adjust.saturation = params2.get("saturation").asDouble();
-                          imaging::applyToneApprox(&image, adjust);
+                          imaging::ImageBuf buf = plan::displayToPlanBuf(image);
+                          std::string planErr;
+                          if (!plan::runEditPlan(params2, &buf, nullptr, &planErr)) {
+                            logWarn("analysis", "histogram Plan 求值失败，按原片直方图: " + planErr);
+                          } else {
+                            imaging::Image rendered;
+                            if (plan::planBufToDisplay(buf, &rendered, &planErr)) {
+                              image = std::move(rendered);
+                            } else {
+                              logWarn("analysis", "histogram 输出编码失败，按原片直方图: " + planErr);
+                            }
+                          }
                         }
                       }
                       int64_t r[256], g[256], b[256];

@@ -20,18 +20,27 @@ bool applyMasked(const Operator& op, const imaging::ImageBuf& base,
                  std::string* err) {
   imaging::ImageBuf layer = base;
   if (!op.apply(&layer, err)) return false;
-  if (out->w != layer.w || out->h != layer.h || out->data.size() != layer.data.size()) {
+  if (out->w != layer.w || out->h != layer.h ||
+      out->channelCount() != layer.channelCount() ||
+      out->floatMode() != layer.floatMode()) {
     out->w = layer.w;
     out->h = layer.h;
     out->space = layer.space;
     out->logStep = layer.logStep;
-    out->data.assign(layer.data.size(), 0);
+    out->data.clear();
+    out->dataF.clear();
+    if (layer.floatMode()) {
+      out->dataF.assign(layer.dataF.size(), 0.0f);
+    } else {
+      out->data.assign(layer.data.size(), 0);
+    }
   }
   const double a = std::max(0.0, std::min(1.0, opacity / 100.0));
   const bool normalOnly = (mask == nullptr);
-  for (size_t i = 0; i < layer.data.size(); ++i) {
-    double lv = layer.data[i];
-    const double bv = base.data[i];
+  const size_t n = layer.channelCount();
+  for (size_t i = 0; i < n; ++i) {
+    const double lv = imaging::codeAt(layer, i);
+    const double bv = imaging::codeAt(base, i);
     double blended = lv;
     if (blendMode == "multiply") {
       blended = bv * lv / 65535.0;
@@ -47,8 +56,7 @@ bool applyMasked(const Operator& op, const imaging::ImageBuf& base,
     if (!normalOnly) {
       alpha *= (*mask)[i / 3];  // 蒙版平面 per-pixel（交错 RGB 共用）
     }
-    const double v = bv + (blended - bv) * alpha;
-    out->data[i] = static_cast<uint16_t>(std::clamp(v, 0.0, 65535.0) + 0.5);
+    imaging::setCodeAt(*out, i, bv + (blended - bv) * alpha);
   }
   return true;
 }

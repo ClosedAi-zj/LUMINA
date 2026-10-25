@@ -11,13 +11,13 @@ namespace lumina {
 namespace plan {
 namespace {
 
-// 平面提取/回写辅助
+// 平面提取/回写辅助（T1.5：经 codeAt/setCodeAt 兼容 float 工作链）
 void extractPlane(const imaging::ImageBuf& buf, int c, std::vector<float>* out) {
   out->resize(static_cast<size_t>(buf.w) * buf.h);
   for (int y = 0; y < buf.h; ++y) {
     for (int x = 0; x < buf.w; ++x) {
       (*out)[static_cast<size_t>(y) * buf.w + x] =
-          static_cast<float>(buf.data[(static_cast<size_t>(y) * buf.w + x) * 3 + c]);
+          imaging::codeAt(buf, (static_cast<size_t>(y) * buf.w + x) * 3 + c);
     }
   }
 }
@@ -25,8 +25,9 @@ void writePlaneDelta(imaging::ImageBuf* buf, int c, const std::vector<float>& de
   for (int y = 0; y < buf->h; ++y) {
     for (int x = 0; x < buf->w; ++x) {
       const size_t idx = (static_cast<size_t>(y) * buf->w + x) * 3 + c;
-      const double v = buf->data[idx] + delta[static_cast<size_t>(y) * buf->w + x];
-      buf->data[idx] = static_cast<uint16_t>(std::clamp(v, 0.0, 65535.0) + 0.5);
+      imaging::setCodeAt(*buf, idx,
+                         static_cast<double>(imaging::codeAt(*buf, idx)) +
+                             delta[static_cast<size_t>(y) * buf->w + x]);
     }
   }
 }
@@ -47,9 +48,11 @@ class DenoiseOp : public ParamOp {
     std::vector<float> lum(static_cast<size_t>(w) * h);
     for (int y = 0; y < h; ++y) {
       for (int x = 0; x < w; ++x) {
-        const uint16_t* p = &buf->data[(static_cast<size_t>(y) * w + x) * 3];
-        lum[static_cast<size_t>(y) * w + x] =
-            static_cast<float>((p[0] + p[1] + p[2]) / 3.0);
+        const size_t p = (static_cast<size_t>(y) * w + x) * 3;
+        lum[static_cast<size_t>(y) * w + x] = static_cast<float>(
+            (imaging::codeAt(*buf, p) + imaging::codeAt(*buf, p + 1) +
+             imaging::codeAt(*buf, p + 2)) /
+            3.0);
       }
     }
     const int chromaR = std::max(1, static_cast<int>(cnr / 100.0 * 5.0 + 0.5));

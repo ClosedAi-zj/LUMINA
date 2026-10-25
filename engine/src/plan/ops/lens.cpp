@@ -22,7 +22,9 @@ class ManualDistortionOp : public ParamOp {
     const int w = buf->w;
     const int h = buf->h;
     std::vector<float> lin(buf->channelCount());
-    imaging::fromLog16(buf->data.data(), lin.data(), buf->channelCount(), buf->logStep);
+    for (size_t i = 0; i < lin.size(); ++i) {
+      lin[i] = imaging::log16DecodeF(imaging::codeAt(*buf, i), buf->logStep);
+    }
     std::vector<float> out(buf->channelCount(), 0.0f);
     const double cx = (w - 1) / 2.0;
     const double cy = (h - 1) / 2.0;
@@ -54,7 +56,12 @@ class ManualDistortionOp : public ParamOp {
         }
       }
     }
-    imaging::toLog16(out.data(), buf->data.data(), buf->data.size(), buf->logStep);
+    // 写回：log16Encode 自带 round-to-栅格（编码点量化，TS oracle 同式）；
+    // float 链下 setCodeAt 直写整数码值 float，uint16 路径语义不变。
+    for (size_t i = 0; i < out.size(); ++i) {
+      imaging::setCodeAt(*buf, i,
+                         static_cast<double>(imaging::log16Encode(out[i], buf->logStep)));
+    }
     return true;
   }
 };

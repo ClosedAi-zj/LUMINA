@@ -31,8 +31,9 @@ class VignetteOp : public ParamOp {
         for (int c = 0; c < 3; ++c) {
           const size_t idx = (static_cast<size_t>(y) * buf->w + x) * 3 + c;
           // 感知码域缩放（amount 负 → 边缘变暗）
-          const double v = buf->data[idx] * std::clamp(f, 0.0, 2.0);
-          buf->data[idx] = static_cast<uint16_t>(std::clamp(v, 0.0, 65535.0) + 0.5);
+          imaging::setCodeAt(*buf, idx,
+                             static_cast<double>(imaging::codeAt(*buf, idx)) *
+                                 std::clamp(f, 0.0, 2.0));
         }
       }
     }
@@ -58,8 +59,8 @@ class GrainOp : public ParamOp {
         const double d = n * amp;
         for (int c = 0; c < 3; ++c) {
           const size_t idx = (static_cast<size_t>(y) * buf->w + x) * 3 + c;
-          const double v = buf->data[idx] + d;  // 亮度颗粒：RGB 同偏移
-          buf->data[idx] = static_cast<uint16_t>(std::clamp(v, 0.0, 65535.0) + 0.5);
+          // 亮度颗粒：RGB 同偏移
+          imaging::setCodeAt(*buf, idx, static_cast<double>(imaging::codeAt(*buf, idx)) + d);
         }
       }
     }

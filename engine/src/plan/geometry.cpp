@@ -32,7 +32,8 @@ Mat3 mul3(const Mat3& a, const Mat3& b) {
 
 // 双线性域插值采样（log16 码值域近似——仅用于窗口内核插值；
 // 主重采样质量由独立 resampleImage16 保证，见架构 §10 一致性门槛）
-void sampleBilinear(const ImageBuf& src, double x, double y, uint16_t out[3]) {
+// T1.5：float 工作链读 codeAt、写 float 码值（不 quantize）；uint16 路径保持历史语义。
+void sampleBilinear(const ImageBuf& src, double x, double y, double out[3]) {
   const int x0 = static_cast<int>(std::floor(x));
   const int y0 = static_cast<int>(std::floor(y));
   const double fx = x - x0;
@@ -42,14 +43,13 @@ void sampleBilinear(const ImageBuf& src, double x, double y, uint16_t out[3]) {
   const int cx0 = std::max(0, std::min(x0, src.w - 1));
   const int cy0 = std::max(0, std::min(y0, src.h - 1));
   for (int c = 0; c < 3; ++c) {
-    const double p00 = src.data[(static_cast<size_t>(cy0) * src.w + cx0) * 3 + c];
-    const double p10 = src.data[(static_cast<size_t>(cy0) * src.w + x1) * 3 + c];
-    const double p01 = src.data[(static_cast<size_t>(y1) * src.w + cx0) * 3 + c];
-    const double p11 = src.data[(static_cast<size_t>(y1) * src.w + x1) * 3 + c];
+    const double p00 = imaging::codeAt(src, (static_cast<size_t>(cy0) * src.w + cx0) * 3 + c);
+    const double p10 = imaging::codeAt(src, (static_cast<size_t>(cy0) * src.w + x1) * 3 + c);
+    const double p01 = imaging::codeAt(src, (static_cast<size_t>(y1) * src.w + cx0) * 3 + c);
+    const double p11 = imaging::codeAt(src, (static_cast<size_t>(y1) * src.w + x1) * 3 + c);
     const double top = p00 + (p10 - p00) * fx;
     const double bot = p01 + (p11 - p01) * fx;
-    const double v = top + (bot - top) * fy;
-    out[c] = static_cast<uint16_t>(std::lround(std::max(0.0, std::min(65535.0, v))));
+    out[c] = std::max(0.0, std::min(65535.0, top + (bot - top) * fy));
   }
 }
 
@@ -193,7 +193,14 @@ bool applyGeometry(const ImageBuf& src, const GeometryParams& p,
   out->whitePoint = src.whitePoint;
   out->iccProfileId = src.iccProfileId;
   out->logStep = src.logStep;
-  out->data.assign(static_cast<size_t>(outW) * outH * 3, 0u);
+  out->data.clear();
+  out->dataF.clear();
+  const bool floatChain = src.floatMode();
+  if (floatChain) {
+    out->dataF.assign(static_cast<size_t>(outW) * outH * 3, 0.0f);
+  } else {
+    out->data.assign(static_cast<size_t>(outW) * outH * 3, 0u);
+  }
   uint64_t samples = 0;
   for (int dy = 0; dy < outH; ++dy) {
     for (int dx = 0; dx < outW; ++dx) {
@@ -204,17 +211,21 @@ bool applyGeometry(const ImageBuf& src, const GeometryParams& p,
       // 裁剪坐标 → 全图坐标（补回 crop 偏移）
       const double fullX = sx + std::max(0, p.cropX);
       const double fullY = sy + std::max(0, p.cropY);
-      uint16_t px[3];
+      double px[3] = {0.0, 0.0, 0.0};
       if (fullX >= 0.0 && fullY >= 0.0 && fullX <= src.w - 1 &&
           fullY <= src.h - 1) {
         sampleBilinear(src, fullX, fullY, px);
+      }  // 出界填黑
+      const size_t q = (static_cast<size_t>(dy) * outW + dx) * 3;
+      if (floatChain) {
+        out->dataF[q] = static_cast<float>(px[0]);
+        out->dataF[q + 1] = static_cast<float>(px[1]);
+        out->dataF[q + 2] = static_cast<float>(px[2]);
       } else {
-        px[0] = px[1] = px[2] = 0u;  // 出界填黑
+        out->data[q] = static_cast<uint16_t>(std::lround(px[0]));
+        out->data[q + 1] = static_cast<uint16_t>(std::lround(px[1]));
+        out->data[q + 2] = static_cast<uint16_t>(std::lround(px[2]));
       }
-      uint16_t* q = &out->data[(static_cast<size_t>(dy) * outW + dx) * 3];
-      q[0] = px[0];
-      q[1] = px[1];
-      q[2] = px[2];
       ++samples;  // 每 dst 像素恰好一次采样
     }
   }

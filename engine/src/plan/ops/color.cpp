@@ -36,10 +36,10 @@ class HslOp : public ParamOp {
       if (bands[i].hue != 0.0 || bands[i].sat != 0.0 || bands[i].lum != 0.0) any = true;
     }
     if (!any) return true;
-    for (size_t px = 0; px + 2 < buf->data.size(); px += 3) {
-      double r = buf->data[px] / 65535.0;
-      double g = buf->data[px + 1] / 65535.0;
-      double b = buf->data[px + 2] / 65535.0;
+    for (size_t px = 0; px + 2 < buf->channelCount(); px += 3) {
+      const double r = imaging::codeAt(*buf, px) / 65535.0;
+      const double g = imaging::codeAt(*buf, px + 1) / 65535.0;
+      const double b = imaging::codeAt(*buf, px + 2) / 65535.0;
       double h, s, l;
       rgbToHsl(r, g, b, &h, &s, &l);
       if (s > 1e-6) {
@@ -57,10 +57,12 @@ class HslOp : public ParamOp {
         s = std::clamp(s * (1.0 + dSat), 0.0, 1.0);
         l = std::clamp(l + dLum * 0.3, 0.0, 1.0);
       }
-      hslToRgb(h, s, l, &r, &g, &b);
-      buf->data[px] = static_cast<uint16_t>(std::clamp(r, 0.0, 1.0) * 65535.0 + 0.5);
-      buf->data[px + 1] = static_cast<uint16_t>(std::clamp(g, 0.0, 1.0) * 65535.0 + 0.5);
-      buf->data[px + 2] = static_cast<uint16_t>(std::clamp(b, 0.0, 1.0) * 65535.0 + 0.5);
+      double rr = r, gg = g, bb = b;
+      hslToRgb(h, s, l, &rr, &gg, &bb);
+      // TS oracle 同式：写回前 round 到 65535 栅格（float 链下保持该量化语义）
+      imaging::setCodeAt(*buf, px, std::round(std::clamp(rr, 0.0, 1.0) * 65535.0));
+      imaging::setCodeAt(*buf, px + 1, std::round(std::clamp(gg, 0.0, 1.0) * 65535.0));
+      imaging::setCodeAt(*buf, px + 2, std::round(std::clamp(bb, 0.0, 1.0) * 65535.0));
     }
     return true;
   }
@@ -84,12 +86,13 @@ class ColorGradeOp : public ParamOp {
     // 三分区边界随 balance 移动（±50 → ±0.15），blend 展宽交叠（0..100 → 0..0.5）
     const double b = balance / 100.0 * 0.15;
     const double spread = 0.25 + blend / 100.0 * 0.25;
-    for (size_t px = 0; px + 2 < buf->data.size(); px += 3) {
-      double r = buf->data[px] / 65535.0;
-      double g = buf->data[px + 1] / 65535.0;
-      double bch = buf->data[px + 2] / 65535.0;
+    for (size_t px = 0; px + 2 < buf->channelCount(); px += 3) {
+      const double r0 = imaging::codeAt(*buf, px) / 65535.0;
+      const double g0 = imaging::codeAt(*buf, px + 1) / 65535.0;
+      const double b0 = imaging::codeAt(*buf, px + 2) / 65535.0;
       double h, s, l;
-      rgbToHsl(r, g, bch, &h, &s, &l);
+      rgbToHsl(r0, g0, b0, &h, &s, &l);
+      double r = r0, g = g0, bch = b0;
       if (s > 1e-6 || shs != 0 || ms != 0 || hs != 0) {
         // 分区权重（balance 上移高光边界）
         const double wHi = smooth01(l, 0.5 - b - spread / 2.0, 0.5 - b + spread / 2.0);
@@ -113,11 +116,12 @@ class ColorGradeOp : public ParamOp {
         if (h < 0.0) h += 1.0;
         if (h >= 1.0) h -= 1.0;
         s = std::clamp(s * (1.0 + dSat), 0.0, 1.0);
+        hslToRgb(h, s, l, &r, &g, &bch);
       }
-      hslToRgb(h, s, l, &r, &g, &bch);
-      buf->data[px] = static_cast<uint16_t>(std::clamp(r, 0.0, 1.0) * 65535.0 + 0.5);
-      buf->data[px + 1] = static_cast<uint16_t>(std::clamp(g, 0.0, 1.0) * 65535.0 + 0.5);
-      buf->data[px + 2] = static_cast<uint16_t>(std::clamp(bch, 0.0, 1.0) * 65535.0 + 0.5);
+      // TS oracle 同式：写回前 round 到 65535 栅格（float 链下保持该量化语义）
+      imaging::setCodeAt(*buf, px, std::round(std::clamp(r, 0.0, 1.0) * 65535.0));
+      imaging::setCodeAt(*buf, px + 1, std::round(std::clamp(g, 0.0, 1.0) * 65535.0));
+      imaging::setCodeAt(*buf, px + 2, std::round(std::clamp(bch, 0.0, 1.0) * 65535.0));
     }
     return true;
   }

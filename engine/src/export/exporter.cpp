@@ -18,6 +18,7 @@
 #include "export/text_raster.h"
 #include "imaging/imaging.h"
 #include "import/rename.h"
+#include "plan/render_exec.h"
 
 namespace lumina {
 namespace exporter {
@@ -713,7 +714,9 @@ bool Exporter::exportOne(const PhotoRecord& record, const ExportSpec& spec,
     image = scaled;
   }
 
-  // ---- 3. 应用 sidecar 参数（CPU 近似渲染：曝光/对比/饱和度；失败只记 warning） ----
+  // ---- 3. 应用 sidecar 参数（T1.5：统一走 Plan —— compilePlan/executePlan，
+  //      与预览 GPU 管线/develop.render 同一实现；旧 applyToneApprox/applyHslApprox
+  //      近似公式已销毁，导出像素 = Plan 在导出分辨率下的求值） ----
   if (xmp_) {
     const std::string sidecar = record.sidecarPath.empty()
                                     ? xmp_->sidecarPathFor(record.filePath)
@@ -721,24 +724,17 @@ bool Exporter::exportOne(const PhotoRecord& record, const ExportSpec& spec,
     json::JsonValue params;
     std::string paramErr;
     if (xmp_->loadParamsFromPath(record.filePath, sidecar, &params, &paramErr)) {
-      imaging::ToneAdjust adjust;
-      adjust.exposure = params.get("exposure").asDouble(0.0);
-      adjust.contrast = params.get("contrast").asDouble(0.0);
-      adjust.saturation = params.get("saturation").asDouble(0.0);
-      imaging::applyToneApprox(&image, adjust);
-      // WP-A3：HSL 8 色带导出管线（hsl.{band}.{hue,sat,lum} → CPU 近似渲染；
-      // 全 0 跳过，避免无谓的逐像素 RGB↔HSL 往返）
-      const json::JsonValue& hsl = params.get("hsl");
-      if (hsl.isObject()) {
-        imaging::HslBands bands;
-        for (const auto& band : hsl.objectItems()) {
-          const int idx = imaging::HslBands::bandIndex(band.first);
-          if (idx < 0 || !band.second.isObject()) continue;
-          bands.hue[idx] = band.second.get("hue").asDouble(0.0);
-          bands.sat[idx] = band.second.get("sat").asDouble(0.0);
-          bands.lum[idx] = band.second.get("lum").asDouble(0.0);
-        }
-        if (bands.any()) imaging::applyHslApprox(&image, bands);
+      imaging::ImageBuf buf = plan::displayToPlanBuf(image);
+      plan::RenderPlan renderPlan;
+      std::string planErr;
+      if (!plan::runEditPlan(params, &buf, &renderPlan, &planErr)) {
+        // Plan 求值失败 = 该张导出失败（零静默；不允许回退旧近似公式伪造成功）
+        if (error) *error = "Plan 求值失败: " + planErr;
+        return false;
+      }
+      if (!plan::planBufToDisplay(buf, &image, &planErr)) {
+        if (error) *error = "Plan 输出编码失败: " + planErr;
+        return false;
       }
     } else {
       appendWarning(warning, "sidecar 参数读取失败，按原片导出: " + paramErr);

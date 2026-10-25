@@ -46,12 +46,12 @@ class PointCurveOp : public ParamOp {
       if (std::fabs(lut[i] - i) > 1e-9) identity = false;
     }
     if (identity) return true;
-    for (size_t i = 0; i < buf->data.size(); ++i) {
+    for (size_t i = 0; i < buf->channelCount(); ++i) {
       const bool applies = ch_ < 0 || (i % 3) == static_cast<size_t>(ch_);
       if (!applies) continue;
-      const double u = buf->data[i] / 65535.0 * 255.0;
+      const double u = imaging::codeAt(*buf, i) / 65535.0 * 255.0;
       const double v = lut[std::clamp(static_cast<int>(u + 0.5), 0, 255)];
-      buf->data[i] = static_cast<uint16_t>(std::clamp(v / 255.0 * 65535.0, 0.0, 65535.0) + 0.5);
+      imaging::setCodeAt(*buf, i, v / 255.0 * 65535.0);
     }
     return true;
   }
@@ -74,8 +74,8 @@ class ParametricOp : public ParamOp {
     const double s0 = num("parametric.shadowSplit", 25.0) / 100.0 * 255.0;
     const double s1 = num("parametric.midSplit", 75.0) / 100.0 * 255.0;
     const double sL = num("parametric.lightSplit", 50.0) / 100.0 * 255.0;
-    for (size_t i = 0; i < buf->data.size(); ++i) {
-      const double u = buf->data[i] / 65535.0 * 255.0;
+    for (size_t i = 0; i < buf->channelCount(); ++i) {
+      const double u = imaging::codeAt(*buf, i) / 65535.0 * 255.0;
       // 四分区权重（平滑互补分区；b0=shadowSplit, b1=lightSplit, b2=midSplit）
       const double t0 = smooth01(u, 0.0, s0);
       const double t1 = smooth01(u, s0, sL);
@@ -85,8 +85,7 @@ class ParametricOp : public ParamOp {
       const double wDa = t0 - t1;
       const double wSh = 1.0 - t0;
       const double delta = (hi * wHi + li * wLi + da * wDa + sh * wSh) / 100.0 * 60.0;
-      const double v = std::clamp(u + delta, 0.0, 255.0);
-      buf->data[i] = static_cast<uint16_t>(v / 255.0 * 65535.0 + 0.5);
+      imaging::setCodeAt(*buf, i, (u + delta) / 255.0 * 65535.0);
     }
     return true;
   }
