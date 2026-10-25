@@ -18,17 +18,17 @@ import { PanelCard, GroupLabel, ParamSlider, ParamToggle, ParamSegmented, Pendin
 import { PanelEntries } from './LeftRail';
 import type { CurvePoint, EditParams, HslBand } from '../../../api/protocol';
 
-/**
- * 尚未参与渲染的叶数（93 − 39）。
- * 来源：team-lead 派工口径「引擎只有 39/93 参数参与渲染」；93 来自架构文档 §4 叶表。
- * 若引擎侧数字变化，只改这一处常量与文案。
- */
-export const PENDING_RENDER_COUNT: number | null = null;
-/** 提示文案：数字待引擎 docs/param-leaves.json（93 条 × previewRendered/exportRendered）到位后替换 */
-export const PENDING_RENDER_HINT = '部分参数尚未参与渲染，v1.2.0 M1 交付';
-
 /** 叶子总数（便于自检：与架构文档 93 对齐） */
 export const TOTAL_LEAF_COUNT = 93;
+
+/**
+ * 真实渲染口径（来源：docs/param-leaves.json，引擎 parseCurve P0 修复后实测）：
+ * 93 叶中预览管线渲染 39 项、导出管线渲染 27 项；其余随 v1.2.0 M1 求值器交付。
+ * M1 交付后此常量替换为运行时读取 param-leaves.json。
+ */
+export const PENDING_RENDER_COUNT: { preview: number; export: number } = { preview: 39, export: 27 };
+/** 提示文案：与 PENDING_RENDER_COUNT 同源（docs/param-leaves.json），改数字须两处同步 */
+export const PENDING_RENDER_HINT = `预览管线已渲染 ${PENDING_RENDER_COUNT.preview} / ${TOTAL_LEAF_COUNT} 项参数，其余随 v1.2.0 M1 求值器交付`;
 
 const HSL_BANDS: { value: HslBand; label: string }[] = [
   { value: 'red', label: '红' },
