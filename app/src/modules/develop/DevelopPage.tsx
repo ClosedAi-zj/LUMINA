@@ -13,7 +13,7 @@ import { errText } from '../../api/rpc-client';
 import { Button, Segmented } from '../../components/primitives';
 import { Dialog, EmptyState, KeycapBar } from '../../components/shell';
 import ViewerCanvas from './ViewerCanvas';
-import HistogramPanel, { type Histogram } from './panels/HistogramPanel';
+import { type Histogram } from './panels/HistogramPanel';
 import FastPanel from './panels/FastPanel';
 import ProPanel from './panels/ProPanel';
 import HistoryPanel from './panels/HistoryPanel';
@@ -21,6 +21,8 @@ import LayersPanel from './panels/LayersPanel';
 import RangeMaskBar from './panels/RangeMaskBar';
 import TransformBar from './panels/TransformBar';
 import Filmstrip from '../library/Filmstrip';
+import { PanelCard } from './panels/panelKit';
+import { NavigatorCard, PresetCard } from './panels/LeftRail';
 import { fileUrl } from '../../api/rpc-client';
 import { useMemo } from 'react';
 import type { EditParams } from '../../api/protocol';
@@ -236,16 +238,24 @@ function DevelopLoaded({
       </div>
 
       {mode === 'pro' ? (
-        /* 专业模式：左 = 图层栈 + 历史；中 = 直方图 + 画面 + 范围蒙版/变换工具条；右 = 7 标签面板 */
-        <div className="flex-1 min-h-0 flex">
+        /* 专业模式（v1.2.0 阶段 3）：左栏 240px 卡片（导航器/预设/历史/图层）+ 中 直方图/画面 +
+           右栏 8 组折叠卡片（含直方图卡与诚实提示） */
+        <div className="flex-1 min-h-0 flex gap-1.5 p-2" style={{ background: 'var(--Lumina-Tokens-canvas)' }}>
           {panels.left && (
-            <aside className="w-[300px] shrink-0 border-r border-line overflow-y-auto" style={{ background: 'var(--Lumina-Tokens-panel)' }}>
-              <LayersPanel />
-              <HistoryPanel />
+            /* R7 M1：左侧轨道栏 = 通透侧栏材质（玻璃底色/模糊走 .glass-m1 组合类，令牌供色） */
+            <aside className="glass-m1 w-60 shrink-0 overflow-y-auto flex flex-col gap-1.5 rounded-lgC p-1">
+              <NavigatorCard />
+              <PresetCard />
+              <PanelCard title="历史" defaultOpen hint="撤销 / 重做 / 快照">
+                {/* 历史/快照条目可能上百条：卡片内限高滚动，避免把整个左栏顶长 */}
+                <div className="max-h-[420px] overflow-y-auto">
+                  <HistoryPanel />
+                </div>
+              </PanelCard>
             </aside>
           )}
-          <section className="flex-1 min-w-0 flex flex-col">
-            <HistogramPanel histogram={histogram} />
+          <section className="flex-1 min-w-0 flex flex-col rounded-lgC overflow-hidden border border-line" style={{ background: 'var(--Lumina-Tokens-panel)', boxShadow: 'var(--Lumina-Tokens-shadow1)' }}>
+            <ViewerToolbar />
             <div className="relative flex-1 min-h-0 flex flex-col">
               <div className="relative flex-1 min-h-0 flex">
                 <ViewerCanvas onHistogram={onHist} />
@@ -256,31 +266,34 @@ function DevelopLoaded({
             </div>
           </section>
           {panels.right && (
-            <aside className="w-[340px] shrink-0 border-l border-line overflow-y-auto" style={{ background: 'var(--Lumina-Tokens-panel)' }}>
-              <ProPanel />
+            <aside className="w-[320px] shrink-0 overflow-y-auto">
+              <ProPanel histogram={histogram} />
             </aside>
           )}
         </div>
       ) : (
-        /* 快捷模式：Phase 1 形态原样保留 */
-        <div className="flex-1 min-h-0 flex">
-          {/* 左：历史/快照/虚拟副本 */}
+        /* 快捷模式：Phase 1 形态保留（左 历史 / 中 直方图+画面 / 右 快速面板） */
+        <div className="flex-1 min-h-0 flex gap-1.5 p-2" style={{ background: 'var(--Lumina-Tokens-canvas)' }}>
           {panels.left && (
-            <aside className="w-52 shrink-0 border-r border-line overflow-y-auto" style={{ background: 'var(--Lumina-Tokens-panel)' }}>
-              <HistoryPanel />
+            /* R7 M1：快捷模式左栏同套通透侧栏材质 */
+            <aside className="glass-m1 w-52 shrink-0 overflow-y-auto flex flex-col gap-1.5 rounded-lgC p-1">
+              <PanelCard title="历史" defaultOpen hint="撤销 / 重做 / 快照">
+                {/* 历史/快照条目可能上百条：卡片内限高滚动，避免把整个左栏顶长 */}
+                <div className="max-h-[420px] overflow-y-auto">
+                  <HistoryPanel />
+                </div>
+              </PanelCard>
             </aside>
           )}
 
-          {/* 中：直方图 + 画面 */}
-          <section className="flex-1 min-w-0 flex flex-col">
-            <HistogramPanel histogram={histogram} />
+          <section className="flex-1 min-w-0 flex flex-col rounded-lgC overflow-hidden border border-line" style={{ background: 'var(--Lumina-Tokens-panel)', boxShadow: 'var(--Lumina-Tokens-shadow1)' }}>
+            <ViewerToolbar />
             <ViewerCanvas onHistogram={onHist} />
           </section>
 
-          {/* 右：快速面板 */}
           {panels.right && (
-            <aside className="w-[296px] shrink-0 border-l border-line overflow-y-auto" style={{ background: 'var(--Lumina-Tokens-panel)' }}>
-              <FastPanel />
+            <aside className="w-[296px] shrink-0 overflow-y-auto">
+              <FastPanel histogram={histogram} />
             </aside>
           )}
         </div>
@@ -342,6 +355,73 @@ function DevelopLoaded({
 }
 
 /** WP-B7：快捷键表（UI 浮层与文档同源，DoD 要求表内按键全部生效） */
+/**
+ * 查看器顶部工具条（36px）：裁剪 / 修复 / 蒙版 + 同步 / 复位。
+ * 只做"入口"，不新造引擎能力：裁剪=开合裁剪框、修复=M1 交付提示、蒙版=进入画笔工具、
+ * 同步=把当前参数同步到图库所选、复位=重置参数（可撤销）。
+ */
+function ViewerToolbar() {
+  const params = useDevelop((s) => s.params);
+  const photoId = useDevelop((s) => s.photoId);
+  const selectedMaskId = useDevelop((s) => s.selectedMaskId);
+  const toast = useJobStore((s) => s.toast);
+  const cropped = params?.geometry.hasCrop ?? false;
+  const brushMaskSelected = params?.masks.some((m) => m.id === selectedMaskId && m.type === 'brush') ?? false;
+
+  const btn = 'h-7 px-2 rounded-mdC text-2xs text-txt2 hover:text-txt hover:bg-hover transition-colors';
+
+  return (
+    <div className="h-9 px-2 flex items-center gap-1 border-b border-line shrink-0" style={{ background: 'var(--Lumina-Tokens-panel)' }}>
+      <button
+        className={btn}
+        style={{ background: cropped ? 'var(--Lumina-Tokens-accentSoft)' : undefined, color: cropped ? 'var(--Lumina-Tokens-accent)' : undefined }}
+        onClick={() => void useDevelop.getState().setPath('geometry.hasCrop', !cropped, true, cropped ? '关闭裁剪' : '开启裁剪')}
+      >
+        裁剪
+      </button>
+      <button className={btn} onClick={() => toast('修复画笔（去物）随 v1.2.0 M1 交付', 'info', 3000)}>
+        修复
+      </button>
+      <button
+        className={btn}
+        onClick={() => {
+          if (!brushMaskSelected) {
+            toast('先在右栏「蒙版」组新建或选择一个画笔蒙版，再回来涂画', 'warn', 5000);
+            return;
+          }
+          useDevelop.getState().setMaskTool('brush');
+        }}
+      >
+        蒙版
+      </button>
+      <div className="flex-1" />
+      <button
+        className={btn}
+        onClick={async () => {
+          if (photoId === null) return;
+          const targets = useLibrary.getState().selectedIds.filter((id) => id !== photoId);
+          if (targets.length === 0) {
+            toast('先在素材库选中要应用的目标照片', 'warn', 4000);
+            return;
+          }
+          try {
+            const { api } = await import('../../api/engine');
+            const res = await api.edit.syncToSelection(photoId, targets, true);
+            toast(`已同步到 ${res.updated} 张`, 'success', 3000);
+          } catch (err) {
+            toast(`同步失败：${errText(err)}`, 'error', 6000);
+          }
+        }}
+      >
+        同步
+      </button>
+      <button className={btn} onClick={() => void useDevelop.getState().reset()}>
+        复位
+      </button>
+    </div>
+  );
+}
+
 const SHORTCUT_TABLE: { keys: string[]; label: string }[] = [
   { keys: ['Ctrl', 'Z'], label: '撤销' },
   { keys: ['Ctrl', '⇧', 'Z'], label: '重做' },
