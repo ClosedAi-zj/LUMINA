@@ -5,6 +5,7 @@
 
 import { app, BrowserWindow, ipcMain, Menu, shell, dialog } from 'electron';
 import path from 'node:path';
+import fs from 'node:fs';
 import { EngineBridge, RpcCallError, resolveEnginePath, resolveHomeDir, type BridgeLifecycle, type EngineNotification } from './engine-bridge';
 import { registerFileProtocol, registerFileScheme } from './file-protocol';
 
@@ -194,6 +195,19 @@ function createWindow(): void {
     // smoke：修图页跑通后自动截图存档（验证渲染结果肉眼可查，黑屏类问题不再靠猜）
     if (isSmoke && message.includes('[smoke-scenario] develop-xmp')) {
       captureTo(path.resolve(appRoot, 'build/smoke-develop.png'), 2);
+    }
+    // T1.4：93 叶 parity 报表落盘（渲染层单行 JSON → build/parity-report.json）
+    if (isSmoke && message.includes('[smoke-scenario] parity93-report: ')) {
+      try {
+        const json = message.slice(message.indexOf('parity93-report: ') + 'parity93-report: '.length).trim();
+        JSON.parse(json); // 完整性校验
+        const out = path.resolve(appRoot, 'build/parity-report.json');
+        fs.mkdirSync(path.dirname(out), { recursive: true });
+        fs.writeFileSync(out, json, 'utf8');
+        process.stdout.write(`[smoke] parity-report -> ${out}\n`);
+      } catch (err) {
+        process.stdout.write(`[smoke] parity-report write failed: ${String(err)}\n`);
+      }
     }
     // WP-B1：主题双截图。深色在 smoke 归位深色后拍（theme-pre 行，仍在修图台）；
     // 浅色在 theme 日志行后拍（smoke 已留 600ms 截图窗口）。

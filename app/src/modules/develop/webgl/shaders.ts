@@ -1,6 +1,8 @@
 /**
- * WebGL 参数近似渲染 · 着色器（架构 §1.2：UI 侧逐参数近似管线，切换快速/专业零解码零闪黑）。
- * 单 pass fragment shader；前/后对比通过 uSplit 在片元内混合两组参数。
+ * 【已退役 · T1.4】旧 WebGL 单 pass 参数近似 shader。
+ * T1.4 起 develop 预览走 ops/pipeline.ts（93 叶统一多 pass 管线，与引擎 oracle
+ * 逐叶 parity）；本文件仅为回溯参考保留，T1.5（销毁三套实现）时删除。
+ * 下方历史红线注释仍适用于 ops/glsl.ts 的新 pass shader，勿丢。
  *
  * GLSL ES 1.0 兼容性红线（曾导致修图台整体黑屏，2026-10-22 修复）：
  *  1) uniform 数组只允许「常量索引」或「无 break/continue 的可展开 for 循环索引」；

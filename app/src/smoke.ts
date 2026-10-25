@@ -508,6 +508,28 @@ export async function runSmokeScenario(): Promise<void> {
     const ping = await api.system.ping();
     log(`protocol-v101: selfTest ok=${selfTest.ok} sampled=${selfTest.sampled} succeeded=${selfTest.succeeded} mockAsset=${mockStatus.assetFormat} lastSelfTest=${mockStatus.lastSelfTest ? 'ok' : 'none'} pong=${ping.pong}`);
 
+    // ---------- ⑦ T1.4 全 93 叶 parity（CPU oracle vs GPU，门槛 mean<0.5/max≤3 LSB） ----------
+    try {
+      const { Parity93Runner } = await import('./modules/develop/webgl/ops/parity93');
+      const pCanvas = document.createElement('canvas');
+      const runner = new Parity93Runner();
+      if (runner.init(pCanvas)) {
+        const report = runner.run();
+        for (const c of report.cases) {
+          log(
+            `parity93-case: leaf=${c.leaf} mean=${c.mean.toFixed(4)} max=${c.max.toFixed(0)} px=${c.pixels} pass=${c.pass}`,
+          );
+        }
+        // 报表落盘：单行 JSON 由主进程捕获写 build/parity-report.json
+        log(`parity93-report: ${JSON.stringify(report)}`);
+        log(`parity93: allPass=${report.allPass} worstMean=${report.worstMean.toFixed(4)} worstMax=${report.worstMax.toFixed(0)} gpu=${report.gpuAvailable}`);
+      } else {
+        log('parity93: gpu-init-failed allPass=false');
+      }
+    } catch (perr) {
+      log(`parity93: error ${(perr as Error).message} allPass=false`);
+    }
+
     useUi.getState().navigate('library');
     log('DONE');
   } catch (err) {
