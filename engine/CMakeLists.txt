@@ -65,6 +65,7 @@ set(LUMINA_SOURCES
   src/imaging/imaging.cpp
   src/imaging/image_buffer.cpp
   src/imaging/resample.cpp
+  src/imaging/output_encode.cpp
   src/plan/op_table.cpp
   src/plan/geometry.cpp
   src/plan/cache_key.cpp
@@ -191,6 +192,12 @@ add_test(NAME parity
   COMMAND parity_harness
           ${CMAKE_CURRENT_BINARY_DIR}/parity_params.json
           ${CMAKE_BINARY_DIR}/parity-report.json)
+
+# T0.7：8bit TPDF 输出编码 + 缓存 v2
+add_executable(test_output_encode tests/test_output_encode.cpp)
+target_link_libraries(test_output_encode PRIVATE lumina_core)
+set_target_properties(test_output_encode PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME output_encode COMMAND test_output_encode)
 
 # M0 ΔE 基线工具（不入 ctest：依赖本机 RW2 样本；由 scripts/ci/deltae.py 编排）
 add_executable(deltae_baseline tests/color/delta_e_baseline.cpp)

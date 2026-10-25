@@ -27,6 +27,9 @@ json::JsonValue defaultSettings() {
   s.setItem("backupEnabled", false);
   s.setItem("backupTiming", "onImport");
   s.setItem("thumbCacheQuotaMB", 5120);
+  // T0.7：缓存格式版本（v2 = 16bit log16 地基 + 三键缓存）。升级时旧 v1 缓存
+  // 目录整体作废重建，禁止混读（格式不兼容时宁可重算，绝不静默降采样）。
+  s.setItem("cacheFormatVersion", 2);
   s.setItem("recentSources", json::JsonValue::arrayValue());
   s.setItem("mockLibraryRoot", std::string());  // 由 init() 按 {home}/mocklib 填充，避免硬编码绝对路径
   return s;
@@ -134,6 +137,13 @@ std::string Config::cacheDir() const { return joinPath(homeDir(), "cache"); }
 std::string Config::thumbsDir() const { return joinPath(cacheDir(), "thumbs"); }
 std::string Config::previewsDir() const { return joinPath(cacheDir(), "previews"); }
 std::string Config::rendersDir() const { return joinPath(cacheDir(), "renders"); }
+int Config::cacheFormatVersion() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return static_cast<int>(settings_.get("cacheFormatVersion").asInt(kCacheFormatVersion));
+}
+std::string Config::rendersVersionedDir() const {
+  return joinPath(rendersDir(), "v" + std::to_string(cacheFormatVersion()));
+}
 std::string Config::logsDir() const { return joinPath(homeDir(), "logs"); }
 std::string Config::galleryDir() const { return joinPath(homeDir(), "gallery"); }
 std::string Config::backupsDir() const { return joinPath(homeDir(), "backups"); }

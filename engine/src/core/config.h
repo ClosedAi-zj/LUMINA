@@ -39,6 +39,11 @@ class Config {
   std::string backupTarget() const;
   void setBackupTarget(const std::string& path);
   int thumbCacheQuotaMB() const;
+  // T0.7：缓存格式版本（v2 = 16bit log16 地基 + 三键缓存）
+  static constexpr int kCacheFormatVersion = 2;
+  int cacheFormatVersion() const;
+  // 版本化渲染缓存目录：{cache}/renders/v2（升级版本后旧目录作废不混读）
+  std::string rendersVersionedDir() const;
   std::string theme() const;
   int port() const { return port_; }
   void setPort(int port) { port_ = port; }
