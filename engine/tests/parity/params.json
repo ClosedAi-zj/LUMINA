@@ -1,0 +1,17 @@
+{
+  "comment": "T0.6 parity 参数集：12 组基础参数，覆盖 log16 域曝光 ±3EV 与 identity 组合",
+  "cases": [
+    { "name": "identity",              "exposure": 0.0,  "contrast": 0.0 },
+    { "name": "exposure+0.25",         "exposure": 0.25, "contrast": 0.0 },
+    { "name": "exposure-0.25",         "exposure": -0.25, "contrast": 0.0 },
+    { "name": "exposure+0.5",          "exposure": 0.5,  "contrast": 0.0 },
+    { "name": "exposure-0.5",          "exposure": -0.5, "contrast": 0.0 },
+    { "name": "exposure+1",            "exposure": 1.0,  "contrast": 0.0 },
+    { "name": "exposure-1",            "exposure": -1.0, "contrast": 0.0 },
+    { "name": "exposure+2",            "exposure": 2.0,  "contrast": 0.0 },
+    { "name": "exposure-2",            "exposure": -2.0, "contrast": 0.0 },
+    { "name": "exposure+3",            "exposure": 3.0,  "contrast": 0.0 },
+    { "name": "exposure-3",            "exposure": -3.0, "contrast": 0.0 },
+    { "name": "exposure+0.3+contrast", "exposure": 0.3,  "contrast": 1.0 }
+  ]
+}

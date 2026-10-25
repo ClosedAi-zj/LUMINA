@@ -182,6 +182,16 @@ target_link_libraries(test_plan_cache PRIVATE lumina_core)
 set_target_properties(test_plan_cache PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
 add_test(NAME plan_cache COMMAND test_plan_cache)
 
+# T0.6：parity harness（量化管线 vs double 参考；报表落 build 目录）
+configure_file(tests/parity/params.json ${CMAKE_CURRENT_BINARY_DIR}/parity_params.json COPYONLY)
+add_executable(parity_harness tests/parity/harness.cpp)
+target_link_libraries(parity_harness PRIVATE lumina_core)
+set_target_properties(parity_harness PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME parity
+  COMMAND parity_harness
+          ${CMAKE_CURRENT_BINARY_DIR}/parity_params.json
+          ${CMAKE_BINARY_DIR}/parity-report.json)
+
 # M0 ΔE 基线工具（不入 ctest：依赖本机 RW2 样本；由 scripts/ci/deltae.py 编排）
 add_executable(deltae_baseline tests/color/delta_e_baseline.cpp)
 target_link_libraries(deltae_baseline PRIVATE lumina_core)
