@@ -44,6 +44,17 @@
   --Lumina-Tokens-rejectOverlay: rgba(12, 13, 16, 0.5);
   --Lumina-Tokens-accentSoft: rgba(232, 194, 104, 0.14);
   --Lumina-Tokens-shadow: rgba(0, 0, 0, 0.45);
+  /* ---- v1.2.0 控件级圆角/面层阴影/玻璃底（新增，不改动上面任何既有令牌） ---- */
+  --Lumina-Tokens-radiusXs: 4px;
+  --Lumina-Tokens-radiusSmC: 6px;
+  --Lumina-Tokens-radiusMdC: 8px;
+  --Lumina-Tokens-radiusLgC: 12px;
+  --Lumina-Tokens-radiusXlC: 16px;
+  --Lumina-Tokens-radiusPill: 999px;
+  --Lumina-Tokens-shadow1: 0 1px 2px rgba(0, 0, 0, 0.55);
+  --Lumina-Tokens-shadow2: 0 8px 24px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.5);
+  /* 顶栏玻璃底色（模糊由组件 backdrop-blur-[18px] 提供，令牌只存底色） */
+  --Lumina-Tokens-glass: rgba(21, 23, 28, 0.72);
 }
 
 [data-theme='Light'] {
@@ -75,4 +86,33 @@
   --Lumina-Tokens-rejectOverlay: rgba(12, 13, 16, 0.5);
   --Lumina-Tokens-accentSoft: rgba(185, 138, 46, 0.12);
   --Lumina-Tokens-shadow: rgba(0, 0, 0, 0.18);
+  /* ---- v1.2.0（浅色）：圆角双主题同值；阴影改为暖调淡影，靠边框分层 ---- */
+  --Lumina-Tokens-radiusXs: 4px;
+  --Lumina-Tokens-radiusSmC: 6px;
+  --Lumina-Tokens-radiusMdC: 8px;
+  --Lumina-Tokens-radiusLgC: 12px;
+  --Lumina-Tokens-radiusXlC: 16px;
+  --Lumina-Tokens-radiusPill: 999px;
+  --Lumina-Tokens-shadow1: 0 1px 2px rgba(24, 20, 12, 0.06);
+  --Lumina-Tokens-shadow2: 0 10px 30px rgba(24, 20, 12, 0.1), 0 1px 2px rgba(24, 20, 12, 0.06);
+  --Lumina-Tokens-glass: rgba(255, 255, 255, 0.75);
 }
+
+/* ---- v1.2.0 R7 macOS 玻璃组合类（材质层，双主题底色走 --glass 令牌） ----
+   M1 通透侧栏：LeftRail / 二级导航 —— 半透明玻璃 + 模糊，不加阴影（贴文档流）。
+   M2 悬浮玻璃：顶栏 / 下拉菜单 / 模态 —— 同 M1 + shadow2（脱离文档流悬浮）。 */
+.glass-m1,
+.glass-m2 {
+  background: var(--Lumina-Tokens-glass);
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+}
+.glass-m2 {
+  box-shadow: var(--Lumina-Tokens-shadow2);
+}
+/* R7 §3-3：顶栏工具按钮 hover = accent 8% + 8px 圆角（accent 占比仍 ≤2%） */
+.hover-accent8:hover {
+  background: color-mix(in srgb, var(--Lumina-Tokens-accent) 8%, transparent);
+}
+
+
