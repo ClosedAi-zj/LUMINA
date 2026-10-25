@@ -64,7 +64,9 @@ set(LUMINA_SOURCES
   src/library/smart_collections.cpp
   src/imaging/imaging.cpp
   src/imaging/image_buffer.cpp
+  src/imaging/resample.cpp
   src/plan/op_table.cpp
+  src/plan/geometry.cpp
   src/plan/ops/basic.cpp
   src/plan/ops/curve.cpp
   src/plan/ops/color.cpp
@@ -165,6 +167,12 @@ add_executable(test_op_table tests/test_op_table.cpp)
 target_link_libraries(test_op_table PRIVATE lumina_core)
 set_target_properties(test_op_table PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
 add_test(NAME op_table COMMAND test_op_table)
+
+# T0.4：几何单应 + 一次重采样
+add_executable(test_geometry16 tests/test_geometry16.cpp)
+target_link_libraries(test_geometry16 PRIVATE lumina_core)
+set_target_properties(test_geometry16 PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME geometry16 COMMAND test_geometry16)
 
 # M0 ΔE 基线工具（不入 ctest：依赖本机 RW2 样本；由 scripts/ci/deltae.py 编排）
 add_executable(deltae_baseline tests/color/delta_e_baseline.cpp)
