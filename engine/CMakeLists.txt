@@ -63,6 +63,7 @@ set(LUMINA_SOURCES
   src/library/folder_tree.cpp
   src/library/smart_collections.cpp
   src/imaging/imaging.cpp
+  src/imaging/image_buffer.cpp
   src/thumb/thumbnail_service.cpp
   src/raw/raw_decoder.cpp
   src/raw/embedded_proxy.cpp
@@ -138,3 +139,9 @@ set_target_properties(test_xmp_curve PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}
 add_test(NAME xmp_roundtrip COMMAND test_xmp_roundtrip)
 add_test(NAME xmp_gps COMMAND test_xmp_gps)
 add_test(NAME xmp_curve COMMAND test_xmp_curve)
+
+# ---- M0：16bit 地基 ----
+add_executable(test_image16 tests/test_image16.cpp)
+target_link_libraries(test_image16 PRIVATE lumina_core)
+set_target_properties(test_image16 PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME image16 COMMAND test_image16)
