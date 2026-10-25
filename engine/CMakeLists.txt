@@ -130,5 +130,11 @@ add_executable(test_xmp_gps tests/test_xmp_gps.cpp)
 target_link_libraries(test_xmp_gps PRIVATE lumina_core)
 set_target_properties(test_xmp_gps PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
 
+# ToneCurve 文本编解码回归（v1.2.0 P0：parseCurve 全零修复）
+add_executable(test_xmp_curve tests/test_xmp_curve.cpp)
+target_link_libraries(test_xmp_curve PRIVATE lumina_core)
+set_target_properties(test_xmp_curve PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+
 add_test(NAME xmp_roundtrip COMMAND test_xmp_roundtrip)
 add_test(NAME xmp_gps COMMAND test_xmp_gps)
+add_test(NAME xmp_curve COMMAND test_xmp_curve)

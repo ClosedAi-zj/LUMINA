@@ -27,6 +27,12 @@ class XmpMapper {
   static bool processVersionTooNew(const XmpDocument& doc, std::string* found);
 };
 
+// 曲线文本 ↔ {x,y}[]（导出供测试）。Lightroom 风格文本："0, 0 255, 255"，
+// 兼容紧凑 "0,0" 与换行分隔。解析不出 ≥2 点时回退恒等曲线 (0,0)-(255,255)，
+// 绝不返回空数组/全零曲线（下游会把空数组当全黑）。
+std::string serializeCurve(const json::JsonValue& curve);
+json::JsonValue parseCurve(const std::string& text);
+
 }  // namespace xmp
 }  // namespace lumina
 

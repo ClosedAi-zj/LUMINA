@@ -3,7 +3,9 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <utility>
 
 #include "core/logger.h"
 #include "core/str_util.h"
@@ -287,6 +289,9 @@ void unflattenInto(const json::JsonValue& flat, json::JsonValue* out) {
 }
 
 }  // namespace
+}  // namespace
+// 匿名命名空间至此闭合：serializeCurve / parseCurve 导出供测试（xmp_mapper.h 有声明）；
+// formatNumber / setNumber 亦转为外部链接（仅本文件使用，无头文件声明）。
 
 std::string formatNumber(double v) {
   if (std::isnan(v) || std::isinf(v)) return "0";
@@ -316,11 +321,17 @@ std::string serializeCurve(const json::JsonValue& curve) {
 }
 
 json::JsonValue parseCurve(const std::string& text) {
-  json::JsonValue out = json::JsonValue::arrayValue();
-  std::string cur;
+  // v1.2.0 P0 修复：Lightroom 写出的坐标对是「x, y」（逗号+空格），点间以空格分隔，
+  // 也可紧凑为「x,y」或以换行分隔。旧实现按空白切词后，"0," 的 y 取 atof("")=0，
+  // 而无逗号的 y token 被直接丢弃 → 所有曲线读成全零，含曲线照片预览全黑。
+  // 现按坐标对解析：token 含 ',' → x 取逗号前段；y 取逗号后段，为空则消费下一个 token。
+  static const double kMin = 0.0;
+  static const double kMax = 255.0;
+  std::vector<std::pair<double, double>> points;
   std::vector<std::string> tokens;
+  std::string cur;
   for (char c : text) {
-    if (c == ' ' || c == '\t' || c == '\n') {
+    if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
       if (!cur.empty()) tokens.push_back(cur);
       cur.clear();
     } else {
@@ -328,12 +339,38 @@ json::JsonValue parseCurve(const std::string& text) {
     }
   }
   if (!cur.empty()) tokens.push_back(cur);
-  for (const std::string& t : tokens) {
+  for (size_t i = 0; i < tokens.size(); ++i) {
+    const std::string& t = tokens[i];
     size_t comma = t.find(',');
-    if (comma == std::string::npos) continue;
+    if (comma == std::string::npos) continue;  // 孤立 token（含被截断的 y）跳过
+    double x = atof(t.substr(0, comma).c_str());
+    std::string yText = t.substr(comma + 1);
+    if (yText.empty()) {
+      // "x, y" 形式：y 在下一个 token；末尾孤立的 "x," 为不完整对，跳过不崩
+      if (i + 1 >= tokens.size()) break;
+      yText = tokens[++i];
+    }
+    double y = atof(yText.c_str());
+    // clamp 到 0–255；不重排、不去重（重排会静默改用户数据）
+    if (x < kMin) x = kMin;
+    if (x > kMax) x = kMax;
+    if (y < kMin) y = kMin;
+    if (y > kMax) y = kMax;
+    points.push_back({x, y});
+  }
+  if (points.size() < 2) {
+    // 空串/乱码/单点 → 回退恒等曲线（空数组会被下游渲染当全黑，禁止）
+    logWarn("xmp", "curve parse got " + std::to_string(points.size()) +
+                       " point(s) from '" + text + "', falling back to identity curve");
+    points.clear();
+    points.push_back({0.0, 0.0});
+    points.push_back({255.0, 255.0});
+  }
+  json::JsonValue out = json::JsonValue::arrayValue();
+  for (const auto& pt : points) {
     json::JsonValue p = json::JsonValue::objectValue();
-    p.setItem("x", atof(t.substr(0, comma).c_str()));
-    p.setItem("y", atof(t.substr(comma + 1).c_str()));
+    p.setItem("x", pt.first);
+    p.setItem("y", pt.second);
     out.addItem(p);
   }
   return out;
@@ -343,8 +380,6 @@ json::JsonValue parseCurve(const std::string& text) {
 void setNumber(json::JsonValue* params, const std::string& key, double value) {
   params->setItem(key, value);
 }
-
-}  // namespace
 
 json::JsonValue XmpMapper::defaultParams() {
   json::JsonValue p = json::JsonValue::objectValue();
