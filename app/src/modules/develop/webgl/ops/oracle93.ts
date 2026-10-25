@@ -429,10 +429,13 @@ function applyToneColor(p: EditParams, buf: PlaneBuf): void {
       if (amt === 0) continue;
       const l = (t[i] + t[i + 1] + t[i + 2]) / 3;
       let w: number;
-      if (kind === 0) w = smooth01(l, 0.5, 1.0);
-      else if (kind === 1) w = 1 - smooth01(l, 0.0, 0.5);
-      else if (kind === 2) w = smooth01(l, 0.75, 1.0);
-      else w = 1 - smooth01(l, 0.0, 0.25);
+      // T1.5b：log16 t 域锚点（engine basic.cpp:26-29 定稿镜像，3945259）
+      // 显示白 t=0.3750；highlights 0.300 起坡(sRGB≈120)、whites 0.3456 起坡(75%)、
+      // shadows 0.306 归零(50%)、blacks 0.1689 归零(10%)
+      if (kind === 0) w = smooth01(l, 0.3000, 0.3750);
+      else if (kind === 1) w = 1 - smooth01(l, 0.2410, 0.3060);
+      else if (kind === 2) w = smooth01(l, 0.3456, 0.3750);
+      else w = 1 - smooth01(l, 0.0, 0.1689);
       const d = ((amt / 100) * 3000 * w) / 65535;
       for (let c = 0; c < 3; ++c) t[i + c] = clamp01(t[i + c] + d);
     }
@@ -446,7 +449,7 @@ function applyToneColor(p: EditParams, buf: PlaneBuf): void {
       const mean = (t[i] + t[i + 1] + t[i + 2]) / 3;
       for (let c = 0; c < 3; ++c) {
         let v = t[i + c] * 65535;
-        v += kShadow * (1 - smooth01(l, 0, 0.5)) + kBlack * (1 - smooth01(l, 0, 0.25));
+        v += kShadow * (1 - smooth01(l, 0.2410, 0.3060)) + kBlack * (1 - smooth01(l, 0.0, 0.1689));
         v = mean * 65535 + (v - mean * 65535) * (1 + kSat);
         t[i + c] = clamp01(v / 65535);
       }

@@ -334,21 +334,24 @@ void main() {
     t = clamp((mid + (t * 65535.0 - mid) * k) / 65535.0, 0.0, 1.0);
   }
   // 高光/阴影/白/黑（三分量亮度分区）
+  // T1.5b：log16 t 域锚点（engine basic.cpp:26-29 定稿镜像，3945259）
+  // 显示白 t=0.3750；highlights 0.300 起坡(sRGB≈120)、whites 0.3456 起坡(75%)、
+  // shadows 0.306 归零(50%)、blacks 0.1689 归零(10%)
   float l = (t.r + t.g + t.b) / 3.0;
-  if (uTone.z != 0.0) t = clamp(t + vec3(uTone.z / 100.0 * 3000.0 * smooth01(l, 0.5, 1.0) / 65535.0), 0.0, 1.0);
+  if (uTone.z != 0.0) t = clamp(t + vec3(uTone.z / 100.0 * 3000.0 * smooth01(l, 0.3000, 0.3750) / 65535.0), 0.0, 1.0);
   l = (t.r + t.g + t.b) / 3.0;
-  if (uTone.w != 0.0) t = clamp(t + vec3(uTone.w / 100.0 * 3000.0 * (1.0 - smooth01(l, 0.0, 0.5)) / 65535.0), 0.0, 1.0);
+  if (uTone.w != 0.0) t = clamp(t + vec3(uTone.w / 100.0 * 3000.0 * (1.0 - smooth01(l, 0.2410, 0.3060)) / 65535.0), 0.0, 1.0);
   l = (t.r + t.g + t.b) / 3.0;
-  if (uTone2.x != 0.0) t = clamp(t + vec3(uTone2.x / 100.0 * 3000.0 * smooth01(l, 0.75, 1.0) / 65535.0), 0.0, 1.0);
+  if (uTone2.x != 0.0) t = clamp(t + vec3(uTone2.x / 100.0 * 3000.0 * smooth01(l, 0.3456, 0.3750) / 65535.0), 0.0, 1.0);
   l = (t.r + t.g + t.b) / 3.0;
-  if (uTone2.y != 0.0) t = clamp(t + vec3(uTone2.y / 100.0 * 3000.0 * (1.0 - smooth01(l, 0.0, 0.25)) / 65535.0), 0.0, 1.0);
+  if (uTone2.y != 0.0) t = clamp(t + vec3(uTone2.y / 100.0 * 3000.0 * (1.0 - smooth01(l, 0.0, 0.1689)) / 65535.0), 0.0, 1.0);
   // 去雾
   if (uTone2.z != 0.0) {
     float dz = uTone2.z / 100.0;
     l = (t.r + t.g + t.b) / 3.0;
     float mean = l * 65535.0;
     vec3 v = t * 65535.0;
-    v += vec3(dz * 1500.0 * (1.0 - smooth01(l, 0.0, 0.5)) - dz * 500.0 * (1.0 - smooth01(l, 0.0, 0.25)));
+    v += vec3(dz * 1500.0 * (1.0 - smooth01(l, 0.2410, 0.3060)) - dz * 500.0 * (1.0 - smooth01(l, 0.0, 0.1689)));
     v = vec3(mean) + (v - vec3(mean)) * (1.0 + dz * 0.25);
     t = clamp(v / 65535.0, 0.0, 1.0);
   }
