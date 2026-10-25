@@ -226,6 +226,12 @@ target_link_libraries(test_render_exec PRIVATE lumina_core)
 set_target_properties(test_render_exec PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
 add_test(NAME render_exec COMMAND test_render_exec)
 
+# T1.5b：S2 分区算子锚点语义回归（log16 t 域显示参考标定；裁切高光/深阴影夹具）
+add_executable(test_tone_zones tests/test_tone_zones.cpp)
+target_link_libraries(test_tone_zones PRIVATE lumina_core)
+set_target_properties(test_tone_zones PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME tone_zones COMMAND test_tone_zones)
+
 # M0 ΔE 基线工具（不入 ctest：依赖本机 RW2 样本；由 scripts/ci/deltae.py 编排）
 add_executable(deltae_baseline tests/color/delta_e_baseline.cpp)
 target_link_libraries(deltae_baseline PRIVATE lumina_core)

@@ -12,9 +12,21 @@ namespace {
 
 constexpr double kMidCode = 65535.0 * 0.45;  // 感知中间调锚点（略低于中点，贴近 LR 观感）
 
-// 通道亮度权重（0..1 感知）
-inline double wShadow(double l) { return 1.0 - smooth01(l, 0.0, 0.5); }
-inline double wHigh(double l) { return smooth01(l, 0.5, 1.0); }
+// ---- S2 分区权重锚点（T1.5b：log16 t 域显示参考标定）----
+// t = code/65535（log16 场景线性码，t = (12+log2(L))/32）。显示参考点换算：
+//   显示白 sRGB255 → t=0.3750；75% → 0.3456；50% → 0.3059；25% → 0.2411；10% → 0.1689。
+// 旧实现把「显示参考域」阈值（0.5/1.0/0.75/0.25）直接用于 t 域：
+//   highlights/whites 对一切显示参考像素恒 0（死算子），shadows 打全图。
+// LR 语义定稿（四条锚点）：
+//   highlights：只吃接近白的高光——显示 ≈47%（t=0.300）起坡，显示白满权重，
+//               超白（RAW 裁切，t>0.375）恒满权重；
+//   whites：只吃最亮端——显示 75%（t=0.3456）起坡，显示白满权重；
+//   shadows：只吃暗部——显示 25% 以下满权重，显示 50% 以上归零；
+//   blacks：只吃最黑端——码 0 满权重，显示 10%（t=0.1689）以上归零。
+inline double wHigh(double t)   { return smooth01(t, 0.3000, 0.3750); }
+inline double wWhites(double t) { return smooth01(t, 0.3456, 0.3750); }
+inline double wShadow(double t) { return 1.0 - smooth01(t, 0.2410, 0.3060); }
+inline double wBlacks(double t) { return 1.0 - smooth01(t, 0.0, 0.1689); }
 
 // 曝光（S2）：log16 +EV = code += EV*logStep（整数精确，T0.3 语义不变）
 class ExposureOp : public ParamOp {
@@ -118,8 +130,8 @@ class ToneZoneOp : public ParamOp {
       switch (z_) {
         case kHighlights: w = wHigh(l); break;
         case kShadows: w = wShadow(l); break;
-        case kWhites: w = smooth01(l, 0.75, 1.0); break;
-        default: w = 1.0 - smooth01(l, 0.0, 0.25); break;
+        case kWhites: w = wWhites(l); break;
+        default: w = wBlacks(l); break;
       }
       const double d = k * w;
       for (int c = 0; c < 3; ++c) {
@@ -188,7 +200,7 @@ class DehazeOp : public ParamOp {
                           3.0;
       for (int c = 0; c < 3; ++c) {
         double v = imaging::codeAt(*buf, i + c);
-        v += kShadow * wShadow(l) + kBlack * (1.0 - smooth01(l, 0.0, 0.25));
+        v += kShadow * wShadow(l) + kBlack * wBlacks(l);  // T1.5b：同源 t 域锚点
         v = mean + (v - mean) * (1.0 + kSat);  // 轻度饱和
         imaging::setCodeAt(*buf, i + c, v);
       }
