@@ -11,12 +11,21 @@ import { Chip } from '../../components/primitives';
 import { Icon } from '../../components/shell';
 import type { Filter, PhotoFormat } from '../../api/protocol';
 
+/**
+ * 一级筛选 chips（阶段4 01-2 裁定：只保留 4 个一级，其余收进「筛选」浮层）：
+ *   全部 / 已调 / RAW / 有 GPS。
+ * 上一版把 7 个快筛 + 格式面 + 排序全部平铺在工具条上，超出设计稿口径。
+ */
 const QUICK: { key: string; label: string; patch: Filter; match: (f: Filter) => boolean }[] = [
   { key: 'all', label: '全部', patch: {}, match: (f) => Object.keys(f).length === 0 },
-  { key: 'rated', label: '已评级', patch: { minRating: 1 }, match: (f) => f.minRating === 1 },
+  { key: 'edited', label: '已调', patch: { edited: true }, match: (f) => f.edited === true },
   { key: 'raw', label: 'RAW', patch: { formats: ['RW2', 'DNG', 'ARW'] }, match: (f) => (f.formats ?? []).length === 3 },
-  { key: 'edited', label: '已编辑', patch: { edited: true }, match: (f) => f.edited === true },
-  { key: 'gps', label: 'GPS', patch: { located: true }, match: (f) => f.located === true },
+  { key: 'gps', label: '有 GPS', patch: { located: true }, match: (f) => f.located === true },
+];
+
+/** 二级筛选（收进「筛选」浮层）：其余快筛 + 格式面 + 排序 */
+const SECONDARY: { key: string; label: string; patch: Filter; match: (f: Filter) => boolean }[] = [
+  { key: 'rated', label: '已评级', patch: { minRating: 1 }, match: (f) => f.minRating === 1 },
   { key: 'video', label: '视频', patch: { isVideo: true }, match: (f) => f.isVideo === true },
   { key: 'missing', label: '缺失', patch: { missing: true }, match: (f) => f.missing === true },
 ];
@@ -81,9 +90,64 @@ export default function SearchBar() {
             }}
           />
         ))}
-        <FormatFacetChips />
-        <SortChip />
+        <FilterPopover />
       </div>
+    </div>
+  );
+}
+
+/**
+ * 「筛选」浮层（阶段4 01-2）：二级筛选 + 格式面 + 排序 收进 M2 玻璃浮层（R7 §3-6）。
+ * 点击浮层外自动收起；glass 底色/阴影/模糊全部走令牌组合类。
+ */
+function FilterPopover() {
+  const [open, setOpen] = useState(false);
+  const filter = useLibrary((s) => s.filter);
+  const activeCount = (filter.minRating ? 1 : 0) + (filter.isVideo !== undefined ? 1 : 0) + (filter.missing !== undefined ? 1 : 0) + (filter.formats ? 1 : 0);
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className={`h-6 px-2.5 rounded-pill border text-2xs transition-colors ${
+          open || activeCount > 0 ? 'border-accent text-accent' : 'border-line bg-card text-txt2 hover:text-txt hover:bg-hover'
+        }`}
+        aria-expanded={open}
+      >
+        筛选{activeCount > 0 ? ` · ${activeCount}` : ''}
+      </button>
+      {open && (
+        <>
+          {/* 透明点击捕获层：点击浮层外收起 */}
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div
+            className="glass-m2 animate-float-in absolute right-0 top-8 z-50 w-64 rounded-lgC border border-line p-2.5 flex flex-col gap-2"
+            role="dialog"
+            aria-label="筛选"
+          >
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {SECONDARY.map((q) => (
+                <Chip
+                  key={q.key}
+                  label={q.label}
+                  active={q.match(useLibrary.getState().filter)}
+                  onClick={() => {
+                    if (q.match(useLibrary.getState().filter)) {
+                      useLibrary.getState().clearFilterKey(q.key === 'rated' ? 'minRating' : q.key === 'video' ? 'isVideo' : 'missing');
+                    } else {
+                      useLibrary.getState().setFilter({ ...useLibrary.getState().filter, ...q.patch });
+                    }
+                  }}
+                />
+              ))}
+            </div>
+            <FormatFacetChips />
+            <SortChip />
+            <button className="text-2xs text-txt3 hover:text-txt text-left" onClick={() => useLibrary.getState().clearFilter()}>
+              清除全部筛选
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }

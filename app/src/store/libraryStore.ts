@@ -63,7 +63,8 @@ export const useLibrary = create<LibraryStore>((set, get) => ({
   filter: {},
   sort: { field: 'capturedAt', order: 'asc' },
   searchText: '',
-  zoom: 216,
+  // 阶段4（01-1）：默认卡片宽 132（设计稿 01 帧「5 列网格、卡片 ~132pt」）；用户仍可 120–320 连续缩放
+  zoom: 132,
   pages: {},
   thumbUrls: {},
   thumbsRequested: new Set(),

@@ -1,15 +1,20 @@
 /**
- * 左侧栏：文件夹树（5 根目录可折叠 + 计数 + 缺失红点）+ 智能收藏夹 + 时间线（按月柱状）。
+ * 左侧栏（阶段4 01-3）：文件夹树 + 智能收藏夹 + 时间线，目录树下方补
+ * 「收藏集」（albums kind=collection）与「关键词」两个分组。
+ * 零静默红线：引擎无关键词聚合接口（keywords 只在 PhotoDetail 单照片级），
+ * 关键词组显示空态「暂无」，不伪造数据。
  */
 
 import { useEffect, useState } from 'react';
 import { useLibrary } from '../../store/libraryStore';
+import { useUi } from '../../store/uiStore';
+import { usePortfolio } from '../portfolio/store/portfolioStore';
 import { api } from '../../api/engine';
 import { errText } from '../../api/rpc-client';
 import { useJobStore } from '../../store/jobStore';
 import { formatCount, formatMonth } from '../../utils/format';
 import { Icon } from '../../components/shell';
-import type { FolderNode, SmartCollection } from '../../api/protocol';
+import type { AlbumInfo, FolderNode, SmartCollection } from '../../api/protocol';
 
 export default function SidebarFolderTree() {
   const folderTree = useLibrary((s) => s.folderTree);
@@ -41,6 +46,12 @@ export default function SidebarFolderTree() {
           />
         ))}
       </div>
+
+      {/* 阶段4 01-3：目录树正下方补「收藏集」「关键词」两分组 */}
+      <Section title="收藏集" />
+      <CollectionsList />
+      <Section title="关键词" />
+      <KeywordsList />
 
       <Section title="收藏夹" />
       <div className="px-1.5 flex flex-col gap-px">
@@ -150,8 +161,51 @@ function SmartList() {
   );
 }
 
-function TimelineStrip() {
-  const timeline = useLibrary((s) => s.timeline);
+/** 收藏集（albums kind=collection）：点击跳转作品集工作区并选中该集合 */
+function CollectionsList() {
+  const [albums, setAlbums] = useState<AlbumInfo[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    api.albums
+      .list()
+      .then((list) => {
+        setAlbums(list.filter((a) => a.kind === 'collection'));
+        setErr(null);
+      })
+      .catch((e) => setErr(errText(e)));
+  }, []);
+  return (
+    <div className="px-1.5 flex flex-col gap-px">
+      {err && <div className="px-2 py-1 text-2xs" style={{ color: 'var(--Lumina-Tokens-danger)' }}>{err}</div>}
+      {!err && albums.length === 0 && <div className="px-2 py-1 text-2xs text-txt3">暂无</div>}
+      {albums.map((a) => (
+        <button
+          key={`coll-${a.id}`}
+          onClick={() => {
+            usePortfolio.getState().select(a.id);
+            useUi.getState().navigate('portfolio');
+          }}
+          className="flex items-center gap-2 h-7 px-2 rounded-md text-xs text-txt2 hover:bg-hover hover:text-txt text-left"
+          title="在作品集工作区打开"
+        >
+          <Icon name="folder" size={12} className="text-txt3" />
+          <span className="truncate flex-1">{a.name}</span>
+          <span className="num text-2xs text-txt3">{a.itemCount}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * 关键词分组：引擎无关键词聚合接口（keywords 仅在 PhotoDetail 单照片级返回），
+ * 按零静默红线显示空态「暂无」，不静默造假数据；聚合接口交付后在此接入。
+ */
+function KeywordsList() {
+  return <div className="px-2 py-1 text-2xs text-txt3">暂无</div>;
+}
+
+function TimelineStrip() {  const timeline = useLibrary((s) => s.timeline);
   const max = Math.max(1, ...timeline.map((t) => t.count));
   return (
     <div className="px-3 pb-4">
