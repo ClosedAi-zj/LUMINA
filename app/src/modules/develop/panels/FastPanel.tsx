@@ -5,7 +5,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { useDevelop, sliderLabel } from '../../../store/developStore';
+import { useDevelop, sliderLabel, temperatureToKelvin } from '../../../store/developStore';
 import { Button } from '../../../components/primitives';
 import CurveEditor from '../CurveEditor';
 import MaskPanel from './MaskPanel';
@@ -54,7 +54,8 @@ export default function FastPanel({ histogram }: { histogram?: Histogram | null 
         ))}
       </PanelCard>
 
-      <PanelCard title="白平衡" defaultOpen hint={params.whiteBalance === 'custom' ? `${params.temperature ?? 5500}K` : 'As Shot'}>
+      {/* temperature 单位契约：store 内为归一化值，UI 显示/输入口径为开尔文 */}
+      <PanelCard title="白平衡" defaultOpen hint={params.whiteBalance === 'custom' ? `${Math.round(temperatureToKelvin(params.temperature ?? 0))}K` : 'As Shot'}>
         <div className="px-2 pb-1">
           <ParamSegmented
             value={params.whiteBalance}
@@ -69,7 +70,7 @@ export default function FastPanel({ histogram }: { histogram?: Histogram | null 
           <>
             <ParamSlider
               label="色温"
-              value={params.temperature ?? 5500}
+              value={temperatureToKelvin(params.temperature ?? 0)}
               min={2000}
               max={12000}
               defaultValue={5500}

@@ -47,8 +47,9 @@ function maskGeo(m: MaskLayer): { a: [number, number, number, number]; b: [numbe
   return { a: [0.5, 0.5, 0, 0], b: [0.5, 0.5, 0.001, 1] };
 }
 
-/** sRGB 画布像素 → log16 码 t 域（预览底图统一进管线输入域） */
-function imageToCodes(img: HTMLImageElement): { t: Float32Array; w: number; h: number } | null {
+/** sRGB 画布像素 → log16 码 t 域（预览底图统一进管线输入域）。
+ *  T1.5：导出=预览断言（smoke）复用同一函数，保证两端进域口径单一来源。 */
+export function imageToCodes(img: HTMLImageElement): { t: Float32Array; w: number; h: number } | null {
   const k = Math.min(1, MAX_PREVIEW / Math.max(img.naturalWidth, img.naturalHeight));
   const w = Math.max(1, Math.round(img.naturalWidth * k));
   const h = Math.max(1, Math.round(img.naturalHeight * k));

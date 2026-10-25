@@ -39,6 +39,29 @@ export function blendLabel(v: string): string {
   return BLEND_MODES.find((b) => b.value === v)?.label ?? v;
 }
 
+// ---------- temperature 单位契约（v1.2.0 T1.7 收敛，全应用单点） ----------
+// 引擎/oracle 把 basic.temperature 当「0 为中性」的归一化值（basic.cpp TemperatureOp:
+// ev = t*0.002，±100 ≈ ±0.2EV，t>0 暖）；开尔文只是 UI/预设/侧车的显示口径。
+// Kelvin → 归一化转换只在本文件发生：
+//  - applyPatch 入口把 Kelvin 大值归一化后再本地合并 + edit.setParams 落盘（引擎边界收到归一化值）；
+//  - 引擎回传（normalizeParams：beginSession / undo / redo / 侧车读回，mock 为 5200–6400K）同样归一化后进 store；
+//  - 面板显示用 temperatureToKelvin 还原开尔文（UI 口径仍可开尔文）。
+export const WB_KELVIN_MIN = 2000;
+export const WB_KELVIN_NEUTRAL = 5500;
+export const WB_KELVIN_SPAN = 6500; // 5500K（中性）→ 12000K 映射归一化 0 → +100
+
+export function kelvinToTemperature(k: number): number {
+  return ((k - WB_KELVIN_NEUTRAL) / WB_KELVIN_SPAN) * 100;
+}
+export function temperatureToKelvin(t: number): number {
+  return (t / 100) * WB_KELVIN_SPAN + WB_KELVIN_NEUTRAL;
+}
+/** 双口径归一：绝对色温（|v| ≥ 2000K）→ 归一化；已是归一化口径（|v| ≤ 100）原样返回。
+ *  两口径区间天然不重叠（归一化上限 +100），判定无歧义；快照回放/引擎回传已归一化的值不会被二次转换。 */
+export function normalizeTemperature(v: number): number {
+  return Math.abs(v) >= WB_KELVIN_MIN ? kelvinToTemperature(v) : v;
+}
+
 interface DevelopStore {
   photoId: number | null;
   sessionId: number | null;
@@ -200,6 +223,11 @@ export const useDevelop = create<DevelopStore>((set, get) => ({
   applyPatch: async (patch, commit, label) => {
     const { sessionId, params } = get();
     if (!sessionId || !params) return;
+    // temperature 单位契约：Kelvin 大值（UI/预设/工装）→ 归一化（见 normalizeTemperature），
+    // 之后本地合并与 edit.setParams 落盘均为引擎归一化口径；快照回放等已归一化的值原样通过。
+    if (typeof patch.temperature === 'number') {
+      patch = { ...patch, temperature: normalizeTemperature(patch.temperature) };
+    }
     // 本地乐观合并（与引擎 deepMerge 语义一致：对象递归、数组替换）
     const local = deepMergeLocal(params, patch);
     set({ params: local, revision: get().revision + 1 });
@@ -251,7 +279,14 @@ export const useDevelop = create<DevelopStore>((set, get) => ({
   },
 
   setNumeric: async (key, value, commit) => {
-    await get().applyPatch({ [key]: value } as Partial<EditParams>, commit, commit ? `${sliderLabel(key)} ${formatEv(value)}` : undefined);
+    // Lightroom 语义（T1.7 裁定）：用户手动动 temperature/tint 时，whiteBalance 自动升为
+    // 'custom'（预览管线 gate 在 custom 档；原预设档位值保留为基线不动）。预设/快照回放
+    // 走 applyPatch 不经过这里，不会误升级。
+    const patch: Partial<EditParams> = { [key]: value } as Partial<EditParams>;
+    if ((key === 'temperature' || key === 'tint') && get().params && get().params!.whiteBalance !== 'custom') {
+      patch.whiteBalance = 'custom';
+    }
+    await get().applyPatch(patch, commit, commit ? `${sliderLabel(key)} ${formatEv(value)}` : undefined);
   },
 
   setHsl: async (band, key, value, commit) => {
@@ -549,7 +584,11 @@ const DEFAULT_PARAMS_SHAPE: EditParams = {
  *  直接塞进 store 会让读取这些键的组件（WebGL 曲线 LUT 等）拿到 undefined。
  *  undo/redo/快照恢复等所有"引擎参数 → store"的入口都必须过这一层。 */
 export function normalizeParams(p: EditParams): EditParams {
-  return deepMergeLocal(structuredClone(DEFAULT_PARAMS_SHAPE), p as unknown as Partial<EditParams>);
+  const merged = deepMergeLocal(structuredClone(DEFAULT_PARAMS_SHAPE), p as unknown as Partial<EditParams>);
+  // temperature 单位契约：引擎/侧车回传为 Kelvin 口径（mock 5200–6400K / LR 2000–12000K）→
+  // 归一化后进 store；undo/redo 回传的已是归一化值（|t|≤100），原样通过。
+  if (typeof merged.temperature === 'number') merged.temperature = normalizeTemperature(merged.temperature);
+  return merged;
 }
 
 function deepMergeLocal<T>(base: T, patch: Partial<T> | Record<string, unknown> | undefined): T {
@@ -558,6 +597,9 @@ function deepMergeLocal<T>(base: T, patch: Partial<T> | Record<string, unknown> 
   if (typeof base === 'object' && base !== null && typeof patch === 'object') {
     const out: Record<string, unknown> = { ...(base as Record<string, unknown>) };
     for (const [k, v] of Object.entries(patch as Record<string, unknown>)) {
+      // undefined = patch 未携带该键（如预设缺 hsl），语义是"不修改"而非"删除"——
+      // 曾直接 out[k]=v 把对象组整体置 undefined，ProPanel 读 params.hsl.red 崩掉整页
+      if (v === undefined) continue;
       const bv = out[k];
       if (bv !== null && typeof bv === 'object' && !Array.isArray(bv) && v !== null && typeof v === 'object' && !Array.isArray(v)) {
         out[k] = deepMergeLocal(bv, v as Record<string, unknown>);

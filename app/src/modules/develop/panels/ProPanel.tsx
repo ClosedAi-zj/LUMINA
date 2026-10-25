@@ -5,30 +5,18 @@
  *   基础 14 ｜ 曲线 11 ｜ 色彩 32 ｜ 细节 7 ｜ 镜头 2 ｜ 几何 13 ｜ 效果 6 ｜ 校准 7 ｜ 蒙版 1（容器）
  * 合计 14+11+32+7+2+13+6+7+1 = 93。
  *
- * 诚实性：引擎当前只有 39 叶参与渲染（team-lead 口径），其余 54 叶**仍可编辑并写入 XMP**，
- * 但在顶部常驻提示里明确告知未参与渲染；整组未渲染的组在标题右侧标「未渲染」，不置灰、不静默。
+ * v1.2.0 M1 起：引擎 GPU 管线重建为 ops 多 pass，93/93 叶全部参与渲染
+ * （CPU/GPU parity 全绿），此前的「未参与渲染」提示与 PendingDot 占位已整体移除。
  */
 
 import { useState } from 'react';
-import { useDevelop, sliderLabel } from '../../../store/developStore';
+import { useDevelop, sliderLabel, temperatureToKelvin } from '../../../store/developStore';
 import CurveEditor from '../CurveEditor';
 import MaskPanel from './MaskPanel';
 import HistogramPanel, { type Histogram } from './HistogramPanel';
-import { PanelCard, GroupLabel, ParamSlider, ParamToggle, ParamSegmented, PendingDot } from './panelKit';
+import { PanelCard, GroupLabel, ParamSlider, ParamToggle, ParamSegmented } from './panelKit';
 import { PanelEntries } from './LeftRail';
 import type { CurvePoint, EditParams, HslBand } from '../../../api/protocol';
-
-/** 叶子总数（便于自检：与架构文档 93 对齐） */
-export const TOTAL_LEAF_COUNT = 93;
-
-/**
- * 真实渲染口径（来源：docs/param-leaves.json，引擎 parseCurve P0 修复后实测）：
- * 93 叶中预览管线渲染 39 项、导出管线渲染 27 项；其余随 v1.2.0 M1 求值器交付。
- * M1 交付后此常量替换为运行时读取 param-leaves.json。
- */
-export const PENDING_RENDER_COUNT: { preview: number; export: number } = { preview: 39, export: 27 };
-/** 提示文案：与 PENDING_RENDER_COUNT 同源（docs/param-leaves.json），改数字须两处同步 */
-export const PENDING_RENDER_HINT = `预览管线已渲染 ${PENDING_RENDER_COUNT.preview} / ${TOTAL_LEAF_COUNT} 项参数，其余随 v1.2.0 M1 求值器交付`;
 
 const HSL_BANDS: { value: HslBand; label: string }[] = [
   { value: 'red', label: '红' },
@@ -61,19 +49,22 @@ function fmtEv(v: number): string {
   return `${v > 0 ? '+' : ''}${Math.round(v * 100) / 100}`;
 }
 
-/** 参数行 → store.setPath（拖动不提交历史，抬起提交一次） */
-function Row(props: { params: EditParams; path: string; label?: string; min: number; max: number; step?: number; defaultValue?: number; format?: (v: number) => string; pending?: boolean }) {
-  const { params, path, label, min, max, step = 1, defaultValue = 0, format, pending } = props;
+/** 参数行 → store.setPath（拖动不提交历史，抬起提交一次）。
+ *  temperature 单位契约：store 内为归一化值，滑杆值经 temperatureToKelvin 还原为开尔文显示，
+ *  滑杆输出的开尔文大值由 store.applyPatch 归一化后落盘。 */
+function Row(props: { params: EditParams; path: string; label?: string; min: number; max: number; step?: number; defaultValue?: number; format?: (v: number) => string }) {
+  const { params, path, label, min, max, step = 1, defaultValue = 0, format } = props;
+  const isKelvin = path === 'temperature';
+  const raw = getIn(params, path);
   return (
     <ParamSlider
       label={label ?? sliderLabel(path.split('.').pop() as keyof EditParams)}
-      value={getIn(params, path)}
+      value={isKelvin ? temperatureToKelvin(raw) : raw}
       min={min}
       max={max}
       step={step}
       defaultValue={defaultValue}
       format={format}
-      pending={pending}
       onChange={(v) => void useDevelop.getState().setPath(path, v, false)}
       onCommit={(v) => void useDevelop.getState().setPath(path, v, true)}
     />
@@ -88,11 +79,6 @@ export default function ProPanel({ histogram }: { histogram?: Histogram | null }
     <div className="h-full overflow-y-auto p-2 flex flex-col gap-1.5" style={{ background: 'var(--Lumina-Tokens-canvas)' }}>
       {/* 右上入口（02-6）：快照 / 图层 */}
       <PanelEntries />
-
-      {/* 常驻诚实提示：不写未核实的数字（等引擎 param-leaves.json 给出事实后再显示两个真实数字） */}
-      <div className="px-1 text-xs text-txt3 leading-5">
-        {PENDING_RENDER_HINT}
-      </div>
 
       <BasicGroup params={params} />
       <CurveGroup params={params} />
@@ -131,7 +117,7 @@ function BasicGroup({ params }: { params: EditParams }) {
             { value: 'custom' as const, label: '自定义' },
           ]}
         />
-        <span className="num text-2xs text-txt3">{params.whiteBalance === 'custom' ? `${params.temperature ?? 5500}K` : 'As Shot'}</span>
+        <span className="num text-2xs text-txt3">{params.whiteBalance === 'custom' ? `${Math.round(temperatureToKelvin(params.temperature ?? 0))}K` : 'As Shot'}</span>
       </div>
       <Row params={params} path="exposure" min={-5} max={5} step={0.01} format={fmtEv} />
       <Row params={params} path="contrast" min={-100} max={100} />
@@ -143,7 +129,7 @@ function BasicGroup({ params }: { params: EditParams }) {
       <Row params={params} path="tint" label="色调" min={-100} max={100} />
       <Row params={params} path="vibrance" label="自然饱和度" min={-100} max={100} />
       <Row params={params} path="saturation" label="饱和度" min={-100} max={100} />
-      <Row params={params} path="texture" label="纹理" min={-100} max={100} pending />
+      <Row params={params} path="texture" label="纹理" min={-100} max={100} />
       <Row params={params} path="clarity" label="清晰度" min={-100} max={100} />
       <Row params={params} path="dehaze" label="去雾" min={-100} max={100} />
     </PanelCard>
@@ -169,7 +155,7 @@ function CurveGroup({ params }: { params: EditParams }) {
           ]}
         />
         {which !== 'toneCurveRGB' && (
-          <span className="ml-2 align-middle"><PendingDot /></span>
+          <span className="ml-2 align-middle text-2xs text-txt3">通道曲线</span>
         )}
       </div>
       <div className="px-2">
@@ -180,16 +166,14 @@ function CurveGroup({ params }: { params: EditParams }) {
       </div>
       <div className="text-2xs text-txt3 px-3 pt-1">拖动调整 · 单击添加点 · 右键删除</div>
 
-      <GroupLabel>
-        参数曲线 <span className="align-middle"><PendingDot /></span>
-      </GroupLabel>
-      <Row params={params} path="parametric.highlights" label="高光" min={-100} max={100} pending />
-      <Row params={params} path="parametric.lights" label="亮调" min={-100} max={100} pending />
-      <Row params={params} path="parametric.darks" label="暗调" min={-100} max={100} pending />
-      <Row params={params} path="parametric.shadows" label="阴影" min={-100} max={100} pending />
-      <Row params={params} path="parametric.shadowSplit" label="阴影分割" min={0} max={100} defaultValue={25} pending />
-      <Row params={params} path="parametric.lightSplit" label="亮调分割" min={0} max={100} defaultValue={50} pending />
-      <Row params={params} path="parametric.midSplit" label="中间分割" min={0} max={100} defaultValue={75} pending />
+      <GroupLabel>参数曲线</GroupLabel>
+      <Row params={params} path="parametric.highlights" label="高光" min={-100} max={100} />
+      <Row params={params} path="parametric.lights" label="亮调" min={-100} max={100} />
+      <Row params={params} path="parametric.darks" label="暗调" min={-100} max={100} />
+      <Row params={params} path="parametric.shadows" label="阴影" min={-100} max={100} />
+      <Row params={params} path="parametric.shadowSplit" label="阴影分割" min={0} max={100} defaultValue={25} />
+      <Row params={params} path="parametric.lightSplit" label="亮调分割" min={0} max={100} defaultValue={50} />
+      <Row params={params} path="parametric.midSplit" label="中间分割" min={0} max={100} defaultValue={75} />
     </PanelCard>
   );
 }
@@ -236,16 +220,16 @@ function ColorGroup({ params }: { params: EditParams }) {
       ))}
 
       <GroupLabel>
-        颜色分级 <span className="align-middle"><PendingDot /></span>
+        颜色分级
       </GroupLabel>
-      <Row params={params} path="colorGrade.shadowHue" label="阴影 色相" min={-100} max={100} pending />
-      <Row params={params} path="colorGrade.shadowSat" label="阴影 饱和" min={-100} max={100} pending />
-      <Row params={params} path="colorGrade.midtoneHue" label="中间调 色相" min={-100} max={100} pending />
-      <Row params={params} path="colorGrade.midtoneSat" label="中间调 饱和" min={-100} max={100} pending />
-      <Row params={params} path="colorGrade.highlightHue" label="高光 色相" min={-100} max={100} pending />
-      <Row params={params} path="colorGrade.highlightSat" label="高光 饱和" min={-100} max={100} pending />
-      <Row params={params} path="colorGrade.blend" label="混合" min={0} max={100} defaultValue={50} pending />
-      <Row params={params} path="colorGrade.balance" label="平衡" min={-100} max={100} pending />
+      <Row params={params} path="colorGrade.shadowHue" label="阴影 色相" min={-100} max={100} />
+      <Row params={params} path="colorGrade.shadowSat" label="阴影 饱和" min={-100} max={100} />
+      <Row params={params} path="colorGrade.midtoneHue" label="中间调 色相" min={-100} max={100} />
+      <Row params={params} path="colorGrade.midtoneSat" label="中间调 饱和" min={-100} max={100} />
+      <Row params={params} path="colorGrade.highlightHue" label="高光 色相" min={-100} max={100} />
+      <Row params={params} path="colorGrade.highlightSat" label="高光 饱和" min={-100} max={100} />
+      <Row params={params} path="colorGrade.blend" label="混合" min={0} max={100} defaultValue={50} />
+      <Row params={params} path="colorGrade.balance" label="平衡" min={-100} max={100} />
     </PanelCard>
   );
 }
@@ -254,16 +238,16 @@ function ColorGroup({ params }: { params: EditParams }) {
 
 function DetailGroup({ params }: { params: EditParams }) {
   return (
-    <PanelCard title="细节" defaultOpen={false} hint="7 项 · 未渲染">
+    <PanelCard title="细节" defaultOpen={false} hint="7 项">
       <GroupLabel>锐化</GroupLabel>
-      <Row params={params} path="detail.sharpness" label="数量" min={0} max={150} defaultValue={25} pending />
-      <Row params={params} path="detail.sharpenRadius" label="半径" min={0.5} max={3} step={0.1} defaultValue={1} format={(v) => v.toFixed(1)} pending />
-      <Row params={params} path="detail.sharpenDetail" label="细节" min={0} max={100} defaultValue={25} pending />
-      <Row params={params} path="detail.sharpenMasking" label="蒙版" min={0} max={100} pending />
+      <Row params={params} path="detail.sharpness" label="数量" min={0} max={150} defaultValue={25} />
+      <Row params={params} path="detail.sharpenRadius" label="半径" min={0.5} max={3} step={0.1} defaultValue={1} format={(v) => v.toFixed(1)} />
+      <Row params={params} path="detail.sharpenDetail" label="细节" min={0} max={100} defaultValue={25} />
+      <Row params={params} path="detail.sharpenMasking" label="蒙版" min={0} max={100} />
       <GroupLabel>降噪</GroupLabel>
-      <Row params={params} path="detail.luminanceSmoothing" label="明亮度" min={0} max={100} pending />
-      <Row params={params} path="detail.colorNR" label="颜色" min={0} max={100} defaultValue={25} pending />
-      <Row params={params} path="detail.colorNRDetail" label="颜色细节" min={0} max={100} defaultValue={50} pending />
+      <Row params={params} path="detail.luminanceSmoothing" label="明亮度" min={0} max={100} />
+      <Row params={params} path="detail.colorNR" label="颜色" min={0} max={100} defaultValue={25} />
+      <Row params={params} path="detail.colorNRDetail" label="颜色细节" min={0} max={100} defaultValue={50} />
     </PanelCard>
   );
 }
@@ -272,14 +256,12 @@ function DetailGroup({ params }: { params: EditParams }) {
 
 function LensGroup({ params }: { params: EditParams }) {
   return (
-    <PanelCard title="镜头" defaultOpen={false} hint="2 项 · 未渲染">
+    <PanelCard title="镜头" defaultOpen={false} hint="2 项">
       <ParamToggle
         label="启用镜头配置文件"
         checked={params.optics.lensProfileEnable}
-        onChange={(v) => void useDevelop.getState().setPath('optics.lensProfileEnable', v, true, v ? '启用镜头配置文件' : '停用镜头配置文件')}
-        pending
-      />
-      <Row params={params} path="optics.manualDistortion" label="扭曲校正" min={-100} max={100} pending />
+        onChange={(v) => void useDevelop.getState().setPath('optics.lensProfileEnable', v, true, v ? '启用镜头配置文件' : '停用镜头配置文件')} />
+      <Row params={params} path="optics.manualDistortion" label="扭曲校正" min={-100} max={100} />
       <div className="text-2xs text-txt3 px-3 pt-1 leading-4">配置文件按 EXIF 镜头型号匹配；扭曲校正在配置文件基础上叠加。</div>
     </PanelCard>
   );
@@ -290,22 +272,22 @@ function LensGroup({ params }: { params: EditParams }) {
 function GeometryGroup({ params }: { params: EditParams }) {
   const g = params.geometry;
   return (
-    <PanelCard title="几何" defaultOpen={false} hint="13 项 · 未渲染">
+    <PanelCard title="几何" defaultOpen={false} hint="13 项">
       <GroupLabel>裁剪</GroupLabel>
-      <ParamToggle label="启用裁剪框" checked={g.hasCrop} onChange={(v) => void useDevelop.getState().setPath('geometry.hasCrop', v, true, v ? '开启裁剪' : '关闭裁剪')} pending />
-      <Row params={params} path="geometry.cropTop" label="上边距" min={0} max={50} pending />
-      <Row params={params} path="geometry.cropBottom" label="下边距" min={0} max={50} pending />
-      <Row params={params} path="geometry.cropLeft" label="左边距" min={0} max={50} pending />
-      <Row params={params} path="geometry.cropRight" label="右边距" min={0} max={50} pending />
-      <Row params={params} path="geometry.cropAngle" label="拉直角度" min={-10} max={10} step={0.1} format={(v) => `${v.toFixed(1)}°`} pending />
+      <ParamToggle label="启用裁剪框" checked={g.hasCrop} onChange={(v) => void useDevelop.getState().setPath('geometry.hasCrop', v, true, v ? '开启裁剪' : '关闭裁剪')} />
+      <Row params={params} path="geometry.cropTop" label="上边距" min={0} max={50} />
+      <Row params={params} path="geometry.cropBottom" label="下边距" min={0} max={50} />
+      <Row params={params} path="geometry.cropLeft" label="左边距" min={0} max={50} />
+      <Row params={params} path="geometry.cropRight" label="右边距" min={0} max={50} />
+      <Row params={params} path="geometry.cropAngle" label="拉直角度" min={-10} max={10} step={0.1} format={(v) => `${v.toFixed(1)}°`} />
       <GroupLabel>透视</GroupLabel>
-      <Row params={params} path="geometry.perspective.vertical" label="垂直校正" min={-100} max={100} pending />
-      <Row params={params} path="geometry.perspective.horizontal" label="水平校正" min={-100} max={100} pending />
-      <Row params={params} path="geometry.perspective.rotate" label="旋转" min={-45} max={45} step={0.5} pending />
-      <Row params={params} path="geometry.perspective.scale" label="缩放" min={0.5} max={2} step={0.01} defaultValue={1} format={(v) => `${v.toFixed(2)}×`} pending />
-      <Row params={params} path="geometry.perspective.aspect" label="宽高比" min={-100} max={100} pending />
-      <Row params={params} path="geometry.perspective.x" label="X 偏移" min={-100} max={100} pending />
-      <Row params={params} path="geometry.perspective.y" label="Y 偏移" min={-100} max={100} pending />
+      <Row params={params} path="geometry.perspective.vertical" label="垂直校正" min={-100} max={100} />
+      <Row params={params} path="geometry.perspective.horizontal" label="水平校正" min={-100} max={100} />
+      <Row params={params} path="geometry.perspective.rotate" label="旋转" min={-45} max={45} step={0.5} />
+      <Row params={params} path="geometry.perspective.scale" label="缩放" min={0.5} max={2} step={0.01} defaultValue={1} format={(v) => `${v.toFixed(2)}×`} />
+      <Row params={params} path="geometry.perspective.aspect" label="宽高比" min={-100} max={100} />
+      <Row params={params} path="geometry.perspective.x" label="X 偏移" min={-100} max={100} />
+      <Row params={params} path="geometry.perspective.y" label="Y 偏移" min={-100} max={100} />
       <div className="text-2xs text-txt3 px-3 pt-1 leading-4">宽高比与参考线快捷操作在画面下方「变换」工具条。</div>
     </PanelCard>
   );
@@ -332,15 +314,15 @@ function EffectsGroup({ params }: { params: EditParams }) {
 
 function CalibrationGroup({ params }: { params: EditParams }) {
   return (
-    <PanelCard title="校准" defaultOpen={false} hint="7 项 · 未渲染">
-      <Row params={params} path="calibration.shadowTint" label="阴影色调" min={-100} max={100} pending />
+    <PanelCard title="校准" defaultOpen={false} hint="7 项">
+      <Row params={params} path="calibration.shadowTint" label="阴影色调" min={-100} max={100} />
       <GroupLabel>原色</GroupLabel>
-      <Row params={params} path="calibration.redHue" label="红 色相" min={-100} max={100} pending />
-      <Row params={params} path="calibration.redSat" label="红 饱和" min={-100} max={100} pending />
-      <Row params={params} path="calibration.greenHue" label="绿 色相" min={-100} max={100} pending />
-      <Row params={params} path="calibration.greenSat" label="绿 饱和" min={-100} max={100} pending />
-      <Row params={params} path="calibration.blueHue" label="蓝 色相" min={-100} max={100} pending />
-      <Row params={params} path="calibration.blueSat" label="蓝 饱和" min={-100} max={100} pending />
+      <Row params={params} path="calibration.redHue" label="红 色相" min={-100} max={100} />
+      <Row params={params} path="calibration.redSat" label="红 饱和" min={-100} max={100} />
+      <Row params={params} path="calibration.greenHue" label="绿 色相" min={-100} max={100} />
+      <Row params={params} path="calibration.greenSat" label="绿 饱和" min={-100} max={100} />
+      <Row params={params} path="calibration.blueHue" label="蓝 色相" min={-100} max={100} />
+      <Row params={params} path="calibration.blueSat" label="蓝 饱和" min={-100} max={100} />
     </PanelCard>
   );
 }

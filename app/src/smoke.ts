@@ -9,9 +9,12 @@ import { api } from './api/engine';
 import { rpc } from './api/rpc-client';
 import { useDevelop } from './store/developStore';
 import { buildBrushField, FIELD_CELL } from './modules/develop/webgl/maskField';
+import { DevelopRenderer } from './modules/develop/webgl/renderer';
+import { fileUrl } from './api/rpc-client';
 
 import { useLibrary } from './store/libraryStore';
 import { useUi } from './store/uiStore';
+import type { EditParams } from './api/protocol';
 
 const log = (msg: string) => console.log(`[smoke-scenario] ${msg}`);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -95,6 +98,17 @@ export async function runSmokeScenario(): Promise<void> {
     }
     const sync = await api.edit.syncToSelection(firstId, [firstId + 1, firstId + 2], true);
     log(`develop-preset: presets=${presets.length} applied=${presets[0].name} snapshot=ok sync=${sync.updated}`);
+
+    // T1.7 验收截图：切专业模式（确认「部分参数尚未参与渲染」提示条已消失 + 8 组面板全接线形态）
+    useDevelop.getState().setMode('pro');
+    await sleep(600);
+    const proHintGone = !document.body.innerText.includes('尚未参与渲染');
+    const proPanelCount = document.body.innerText.split('\n').filter((l) => ['基础', '曲线', '色彩', '细节', '镜头', '几何', '效果', '校准'].includes(l.trim())).length;
+    log(`t17-pro: hintGone=${proHintGone} panelCards=${proPanelCount}`);
+    log('pro-shot'); // 主进程据此拍专业模式 → build/review-t17-develop-pro.png
+    await sleep(900);
+    useDevelop.getState().setMode('fast');
+    await sleep(300);
 
     // ---------- ⑥ WP-B7 工作流键回放（主进程 sendInputEvent 注入真实按键） ----------
     // 这一段的意义：验证的是「键在 UI 里真的生效」，不是「代码里写了 handler」。
@@ -324,6 +338,76 @@ export async function runSmokeScenario(): Promise<void> {
     await useDevelop.getState().setHsl('blue', 'lum', 0, true);
     await sleep(300);
 
+    // ---------- ⑦b T1.7 逐控件像素断言：改值→像素必须动；回默认→identity ----------
+    // 口径（架构文档 §11 T1.7）：每个可交互控件 改值 → 等预览刷新 → 断言像素变化；
+    // 默认值必须 identity（拖回 0/默认 = 恢复基线）。全部走真实 setNumeric/setPath →
+    // EditParams → paramsToGraph → RPC → GPU ops 渲染，与用户操作同链路。
+    {
+      await useDevelop.getState().applyPatch(
+        {
+          whiteBalance: 'custom',
+          exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0,
+          temperature: 5500, tint: 0, vibrance: 0, saturation: 0, clarity: 0, texture: 0, dehaze: 0,
+          toneCurveRGB: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+          masks: [],
+          hsl: {
+            red: { hue: 0, sat: 0, lum: 0 }, orange: { hue: 0, sat: 0, lum: 0 },
+            yellow: { hue: 0, sat: 0, lum: 0 }, green: { hue: 0, sat: 0, lum: 0 },
+            aqua: { hue: 0, sat: 0, lum: 0 }, blue: { hue: 0, sat: 0, lum: 0 },
+            purple: { hue: 0, sat: 0, lum: 0 }, magenta: { hue: 0, sat: 0, lum: 0 },
+          },
+          colorGrade: { shadowHue: 0, shadowSat: 0, midtoneHue: 0, midtoneSat: 0, highlightHue: 0, highlightSat: 0, blend: 50, balance: 0 },
+          calibration: { shadowTint: 0, redHue: 0, redSat: 0, greenHue: 0, greenSat: 0, blueHue: 0, blueSat: 0 },
+          detail: { sharpness: 0, sharpenRadius: 1, sharpenDetail: 25, sharpenMasking: 0, luminanceSmoothing: 0, colorNR: 0, colorNRDetail: 25 },
+          optics: { lensProfileEnable: false, manualDistortion: 0, vignetteAmount: 0, vignetteMidpoint: 50, vignetteFeather: 50, grainAmount: 0, grainFrequency: 1, grainSize: 1 },
+        },
+        true,
+        'T1.7 逐控件基线',
+      );
+      await sleep(700);
+      const num = (k: keyof EditParams, v: number) => () => useDevelop.getState().setNumeric(k, v, true);
+      const path = (p: string, v: number) => () => useDevelop.getState().setPath(p, v, true);
+      // minD = 该控件「变了」的最小像素阈值（max 通道差）；id 阈值统一 2.0
+      const controls: { name: string; apply: () => Promise<void>; reset: () => Promise<void>; minD: number }[] = [
+        { name: 'exposure+0.6', apply: num('exposure', 0.6), reset: num('exposure', 0), minD: 3 },
+        { name: 'contrast+35', apply: num('contrast', 35), reset: num('contrast', 0), minD: 2 },
+        { name: 'highlights-45', apply: num('highlights', -45), reset: num('highlights', 0), minD: 1.5 },
+        { name: 'shadows+45', apply: num('shadows', 45), reset: num('shadows', 0), minD: 1.5 },
+        { name: 'whites+35', apply: num('whites', 35), reset: num('whites', 0), minD: 1.5 },
+        { name: 'blacks-35', apply: num('blacks', -35), reset: num('blacks', 0), minD: 1.5 },
+        { name: 'temperature+2000K', apply: num('temperature', 7500), reset: num('temperature', 5500), minD: 2 },
+        { name: 'tint-25', apply: num('tint', -25), reset: num('tint', 0), minD: 1.5 },
+        { name: 'vibrance+45', apply: num('vibrance', 45), reset: num('vibrance', 0), minD: 2 },
+        { name: 'saturation+35', apply: num('saturation', 35), reset: num('saturation', 0), minD: 2 },
+        { name: 'clarity+45', apply: num('clarity', 45), reset: num('clarity', 0), minD: 1.5 },
+        { name: 'texture+45', apply: num('texture', 45), reset: num('texture', 0), minD: 1 },
+        { name: 'dehaze+35', apply: num('dehaze', 35), reset: num('dehaze', 0), minD: 1.5 },
+        { name: 'detail.sharpness+80', apply: path('detail.sharpness', 80), reset: path('detail.sharpness', 0), minD: 1 },
+        { name: 'detail.colorNR+50', apply: path('detail.colorNR', 50), reset: path('detail.colorNR', 0), minD: 1.5 },
+        { name: 'optics.vignette-60', apply: path('optics.vignetteAmount', -60), reset: path('optics.vignetteAmount', 0), minD: 3 },
+        { name: 'optics.grain+50', apply: path('optics.grainAmount', 50), reset: path('optics.grainAmount', 0), minD: 1.5 },
+        { name: 'colorGrade.midtoneSat+50', apply: path('colorGrade.midtoneSat', 50), reset: path('colorGrade.midtoneSat', 0), minD: 1.5 },
+        { name: 'calibration.blueSat+40', apply: path('calibration.blueSat', 40), reset: path('calibration.blueSat', 0), minD: 1.5 },
+      ];
+      const t17: string[] = [];
+      let t17Failed = 0;
+      for (const c of controls) {
+        const base = sampleMean();
+        await c.apply();
+        await sleep(650);
+        const after = sampleMean();
+        const d = dist(base, after);
+        await c.reset();
+        await sleep(500);
+        const back = sampleMean();
+        const dId = dist(back, base);
+        const ok = d >= c.minD && dId < 2.0;
+        if (!ok) t17Failed++;
+        t17.push(`${c.name} d=${d.toFixed(1)} id=${dId.toFixed(1)}${ok ? '' : ' FAILED'}`);
+      }
+      log(`t17-controls: ${t17Failed === 0 ? 'ALL-OK' : `${t17Failed}-FAILED`} n=${controls.length} | ${t17.join(' · ')}`);
+    }
+
     // ---------- ⑧ WP-B5 画笔逐笔 SDF：三笔交叉 + 浮层边界一致 ----------
     useDevelop.getState().setMaskTool('brush');
     await useDevelop.getState().addMask('brush');
@@ -510,11 +594,15 @@ export async function runSmokeScenario(): Promise<void> {
 
     // ---------- ⑦ T1.4 全 93 叶 parity（CPU oracle vs GPU，门槛 mean<0.5/max≤3 LSB） ----------
     try {
+      log('parity93-step: import-begin');
       const { Parity93Runner } = await import('./modules/develop/webgl/ops/parity93');
+      log('parity93-step: import-ok');
       const pCanvas = document.createElement('canvas');
       const runner = new Parity93Runner();
       if (runner.init(pCanvas)) {
+        log('parity93-step: init-ok run-begin');
         const report = runner.run();
+        log('parity93-step: run-done');
         for (const c of report.cases) {
           log(
             `parity93-case: leaf=${c.leaf} mean=${c.mean.toFixed(4)} max=${c.max.toFixed(0)} px=${c.pixels} pass=${c.pass}`,
@@ -528,6 +616,190 @@ export async function runSmokeScenario(): Promise<void> {
       }
     } catch (perr) {
       log(`parity93: error ${(perr as Error).message} allPass=false`);
+    }
+
+    // ---------- ⑦c T1.5 导出=预览像素断言（销毁三套实现后的验收，进 CI） ----------
+    // 口径（写进报表 note）：同一输入位图（preview base 经渲染进程解码一次导出的**无损 PNG**，
+    // 两端共享同一份文件，消除浏览器/引擎对有损 JPEG 的双解码差）+
+    // 同一参数集 P（覆盖非几何非蒙版全部叶）。预览侧 = GPU 管线（DevelopRenderer/
+    // PipelineGL 多 pass，imageToCodes sRGB→linear→log16 进域）；导出侧 = develop.render
+    // （与 export 完全同一代码路径 displayToPlanBuf → runEditPlan → planBufToDisplay）。
+    // 逐像素 8bit RGB LSB 比对，门槛同 §10 parity：mean<0.5 / max≤3。超门槛即冒烟失败。
+    {
+      // ⑦c 跑在 closePhoto 之后（协议契约段尾），先重开一张照片拿 preview base 路径
+      const stOpen = useDevelop.getState();
+      if (!stOpen.baseImageUrl) {
+        await stOpen.openPhoto(firstId);
+        await sleep(1200);
+      }
+      const stNow = useDevelop.getState();
+      const base = stNow.baseImageUrl;
+      if (!base) {
+        log('export-parity: FAILED no-base-image');
+      } else {
+        const P: EditParams = {
+          processVersion: '15.4',
+          whiteBalance: 'custom',
+          temperature: 24,
+          tint: -14,
+          exposure: 0.55,
+          contrast: 28,
+          highlights: -38,
+          shadows: 32,
+          whites: 18,
+          blacks: -22,
+          clarity: 26,
+          texture: 18,
+          dehaze: 16,
+          vibrance: 32,
+          saturation: 12,
+          toneCurveRGB: [{ x: 0, y: 8 }, { x: 64, y: 60 }, { x: 192, y: 200 }, { x: 255, y: 248 }],
+          parametric: { highlights: 10, lights: -8, darks: 6, shadows: -12, shadowSplit: 25, lightSplit: 50, midSplit: 75 },
+          hsl: {
+            red: { hue: 10, sat: 14, lum: -6 },
+            orange: { hue: -8, sat: 20, lum: 0 },
+            yellow: { hue: 0, sat: -18, lum: 6 },
+            green: { hue: 12, sat: 10, lum: 0 },
+            aqua: { hue: 0, sat: 0, lum: 0 },
+            blue: { hue: -14, sat: 24, lum: 10 },
+            purple: { hue: 0, sat: 0, lum: 0 },
+            magenta: { hue: 6, sat: 0, lum: 0 },
+          },
+          colorGrade: { shadowHue: 210, shadowSat: 18, midtoneHue: 40, midtoneSat: 10, highlightHue: 55, highlightSat: 14, blend: 50, balance: 0 },
+          calibration: { shadowTint: 8, redHue: -6, redSat: 10, greenHue: 4, greenSat: -8, blueHue: -4, blueSat: 12 },
+          detail: { sharpness: 45, sharpenRadius: 1.2, sharpenDetail: 30, sharpenMasking: 10, luminanceSmoothing: 0, colorNR: 0, colorNRDetail: 25 },
+          optics: { lensProfileEnable: false, manualDistortion: 0, vignetteAmount: -35, vignetteMidpoint: 50, vignetteFeather: 50, grainAmount: 28, grainFrequency: 50, grainSize: 1.2 },
+          geometry: { hasCrop: false, perspective: { vertical: 0, horizontal: 0, rotate: 0, scale: 1, aspect: 0, x: 0, y: 0 } },
+          masks: [],
+        };
+        const loadImg = (src: string): Promise<HTMLImageElement> =>
+          new Promise((res, rej) => {
+            const im = new Image();
+            im.onload = () => res(im);
+            im.onerror = () => rej(new Error(`img load failed: ${src}`));
+            im.src = src;
+          });
+        const grab = (src: HTMLCanvasElement | HTMLImageElement, w: number, h: number): Uint8ClampedArray => {
+          const c = document.createElement('canvas');
+          c.width = w;
+          c.height = h;
+          const ctx = c.getContext('2d', { willReadFrequently: true });
+          if (!ctx) throw new Error('2d context unavailable');
+          ctx.drawImage(src, 0, 0, w, h);
+          return ctx.getImageData(0, 0, w, h).data;
+        };
+        try {
+          // 工装修复（⑦c 双解码差）：原口径 JPEG 底图被两端各自解码（浏览器 vs 引擎 stb），
+          // 有损 4:2:0 进域前字节即不同（identity 非零差即证据），sharpen/HSL 再放大边缘/色度差。
+          // 修复：渲染进程解码一次 → 导出无损 PNG（主进程按行内路径落盘）→ 两端统一喂同一份 PNG。
+          const img = await loadImg(fileUrl(base));
+          const losslessPath = base.replace(/\.(jpe?g)$/i, '.parity.png');
+          const lc = document.createElement('canvas');
+          lc.width = img.naturalWidth;
+          lc.height = img.naturalHeight;
+          const lctx = lc.getContext('2d', { willReadFrequently: true });
+          if (!lctx) throw new Error('2d context unavailable');
+          lctx.drawImage(img, 0, 0);
+          log(`export-parity-base ${losslessPath}: ${lc.toDataURL('image/png')}`);
+          await sleep(400); // 等主进程落盘
+          const imgL = await loadImg(fileUrl(losslessPath));
+          // 预览侧：GPU 管线（与 ViewerCanvas 同一类、同进域函数）
+          const glCanvas = document.createElement('canvas');
+          const dr = new DevelopRenderer();
+          if (!dr.init(glCanvas) || !dr.setImage(imgL)) throw new Error('gpu pipeline init failed');
+          // 两级断言：先 identity 参数（域往返/编码对照，定位进域/出域/toneMap 系统差），
+          // 再全叶参数集 P（叶公式对照）。
+          const P0: EditParams = {
+            ...P,
+            whiteBalance: 'asShot',
+            temperature: 0,
+            tint: 0,
+            exposure: 0,
+            contrast: 0,
+            highlights: 0,
+            shadows: 0,
+            whites: 0,
+            blacks: 0,
+            clarity: 0,
+            texture: 0,
+            dehaze: 0,
+            vibrance: 0,
+            saturation: 0,
+            toneCurveRGB: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+            parametric: { highlights: 0, lights: 0, darks: 0, shadows: 0, shadowSplit: 25, lightSplit: 50, midSplit: 75 },
+            hsl: {
+              red: { hue: 0, sat: 0, lum: 0 }, orange: { hue: 0, sat: 0, lum: 0 },
+              yellow: { hue: 0, sat: 0, lum: 0 }, green: { hue: 0, sat: 0, lum: 0 },
+              aqua: { hue: 0, sat: 0, lum: 0 }, blue: { hue: 0, sat: 0, lum: 0 },
+              purple: { hue: 0, sat: 0, lum: 0 }, magenta: { hue: 0, sat: 0, lum: 0 },
+            },
+            colorGrade: { shadowHue: 0, shadowSat: 0, midtoneHue: 0, midtoneSat: 0, highlightHue: 0, highlightSat: 0, blend: 50, balance: 0 },
+            calibration: { shadowTint: 0, redHue: 0, redSat: 0, greenHue: 0, greenSat: 0, blueHue: 0, blueSat: 0 },
+            detail: { sharpness: 0, sharpenRadius: 1, sharpenDetail: 25, sharpenMasking: 0, luminanceSmoothing: 0, colorNR: 0, colorNRDetail: 25 },
+            optics: { lensProfileEnable: false, manualDistortion: 0, vignetteAmount: 0, vignetteMidpoint: 50, vignetteFeather: 50, grainAmount: 0, grainFrequency: 50, grainSize: 1 },
+          };
+          const comparePair = async (tag: string, params: EditParams): Promise<void> => {
+            if (!dr.render(glCanvas, { params })) throw new Error('gpu render failed');
+            const er = await api.develop.render({ inputPath: losslessPath, params, longEdge: 0 });
+            const eimg = await loadImg(fileUrl(er.path));
+            if (eimg.naturalWidth !== glCanvas.width || eimg.naturalHeight !== glCanvas.height) {
+              log(`export-parity: FAILED size-mismatch [${tag}] gpu=${glCanvas.width}x${glCanvas.height} engine=${eimg.naturalWidth}x${eimg.naturalHeight}`);
+              return;
+            }
+            const w = glCanvas.width;
+            const h = glCanvas.height;
+            const a = grab(glCanvas, w, h);
+            const b = grab(eimg, w, h);
+            const inp = grab(imgL, w, h);
+            if (tag === 'identity') {
+              const pts0: [number, number][] = [[0, 0], [Math.floor(w / 4), Math.floor(h / 2)], [Math.floor(w / 2), Math.floor(h / 2)], [w - 1, h - 1]];
+              log(`export-parity-dump: [input] ` + pts0.map(([x, y]) => `(${x},${y})=${inp[(y * w + x) * 4]},${inp[(y * w + x) * 4 + 1]},${inp[(y * w + x) * 4 + 2]}`).join(' | '));
+            }
+            let sum = 0;
+            let maxv = 0;
+            for (let i = 0; i < w * h * 4; i += 4) {
+              for (let c = 0; c < 3; ++c) {
+                const d = Math.abs(a[i + c] - b[i + c]);
+                sum += d;
+                if (d > maxv) maxv = d;
+              }
+            }
+            const mean = sum / (w * h * 3);
+            const pass = mean < 0.5 && maxv <= 3;
+            const px = (d: Uint8ClampedArray, x: number, y: number): string =>
+              `${d[(y * w + x) * 4]},${d[(y * w + x) * 4 + 1]},${d[(y * w + x) * 4 + 2]}`;
+            const pts: [number, number][] = [[0, 0], [Math.floor(w / 4), Math.floor(h / 2)], [Math.floor(w / 2), Math.floor(h / 2)], [w - 1, h - 1]];
+            log(
+              `export-parity-dump: [${tag}] ` +
+                pts.map(([x, y]) => `(${x},${y}) gpu=${px(a, x, y)} eng=${px(b, x, y)}`).join(' | '),
+            );
+            log(`export-parity: [${tag}] size=${w}x${h} mean=${mean.toFixed(4)} max=${maxv} pass=${pass}`);
+            if (tag === 'full-leaf-P') {
+              log(
+                `export-parity: size=${w}x${h} mean=${mean.toFixed(4)} max=${maxv} pass=${pass} ` +
+                  `(口径: 无损 PNG 底图（同一次解码导出，消除浏览器/引擎双解码差）+参数集P；预览=GPU PipelineGL；导出=develop.render→Plan；门槛 mean<0.5/max≤3 LSB)`,
+              );
+              log(
+                `export-parity-report: ${JSON.stringify({
+                  scenario: 'T1.5 export=preview',
+                  leafScope: '非几何非蒙版全部叶（basic14+WB2+curve+parametric+hsl8+colorGrade+calibration+detail+optics）',
+                  size: { w, h },
+                  mean,
+                  max: maxv,
+                  pass,
+                  threshold: { meanLsb: 0.5, maxLsb: 3 },
+                  identity: { note: 'identity 对照见 export-parity [identity] 行' },
+                  note: '底图经渲染进程解码一次导出无损 PNG（build 同目录 .parity.png），两端共享同一份无损输入，消除浏览器/引擎对有损 JPEG 的双解码差；预览=GPU PipelineGL 多 pass（imageToCodes 进域）；导出=develop.render（displayToPlanBuf→runEditPlan→planBufToDisplay，与 export 同一代码路径）；逐像素 8bit RGB LSB 比对',
+                })}`,
+              );
+            }
+          };
+          await comparePair('identity', P0);
+          await comparePair('full-leaf-P', P);
+        } catch (eperr) {
+          log(`export-parity: FAILED ${(eperr as Error).message}`);
+        }
+      }
     }
 
     useUi.getState().navigate('library');

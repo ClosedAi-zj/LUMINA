@@ -7,12 +7,12 @@ import { useEffect, useRef, useState } from 'react';
 import { useDevelop } from '../../store/developStore';
 import { useJobStore } from '../../store/jobStore';
 import { DevelopRenderer } from './webgl/renderer';
-import { renderCpu } from './webgl/cpu-render';
 import { buildBrushField, FIELD_CELL } from './webgl/maskField';
 import { fileUrl } from '../../api/rpc-client';
 import { api } from '../../api/engine';
 import { ViewerSurface } from '../../theme/ThemeProvider';
 import { Icon } from '../../components/shell';
+import type { EditParams } from '../../api/protocol';
 
 /** C1 基线诊断开关（?baseline=1）：修图台画布在基线走查中纯黑（px=0,0,0），需要链路日志定位 */
 const IS_BASELINE = new URLSearchParams(window.location.search).get('baseline') === '1';
@@ -34,6 +34,72 @@ function drawFallback2d(canvas: HTMLCanvasElement, img: HTMLImageElement): boole
   ctx.clearRect(0, 0, w, h);
   ctx.drawImage(img, 0, 0, w, h);
   return true;
+}
+
+/**
+ * T1.5：CPU 降级渲染 = 引擎 develop.render（compilePlan/executePlan，与导出同一实现）。
+ * 旧 webgl/cpu-render.ts 近似公式已销毁——应用侧不再维护第二套 CPU 参数公式。
+ * 异步语义：渲染序号防串台（慢请求返回后不覆盖新请求）；RPC 失败由调用方回退纯底图。
+ */
+async function renderViaEngine(
+  canvas: HTMLCanvasElement,
+  seqRef: { current: number },
+  opts: { params: EditParams; split?: number | null; beforeParams?: EditParams | null },
+): Promise<boolean> {
+  const seq = ++seqRef.current;
+  const st = useDevelop.getState();
+  const inputPath = st.baseImageUrl ?? '';
+  if (!inputPath) return false;
+  const photoId = st.photoId ?? 0;
+  const loadImg = async (p: EditParams): Promise<HTMLImageElement | null> => {
+    const r = await api.develop.render({ photoId, inputPath, params: p });
+    if (seq !== seqRef.current) return null;
+    const im = new Image();
+    im.src = fileUrl(r.path);
+    await im.decode();
+    if (seq !== seqRef.current) return null;
+    return im;
+  };
+  try {
+    const afterImg = await loadImg(opts.params);
+    if (!afterImg) return true; // 已被更新的渲染请求取代（非失败）
+    const w = afterImg.naturalWidth;
+    const h = afterImg.naturalHeight;
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+    // CSS 尺寸与 GPU 路径同口径：量宿主容器 [data-viewer-host]，contain 适配
+    const host = (canvas.closest('[data-viewer-host]') as HTMLElement | null) ?? canvas.parentElement;
+    const hostRect = host ? host.getBoundingClientRect() : canvas.getBoundingClientRect();
+    const availW = Math.max(64, hostRect.width || w);
+    const availH = Math.max(64, hostRect.height || h * (availW / w));
+    let cssW = availW;
+    let cssH = cssW * (h / w);
+    if (cssH > availH) {
+      cssH = availH;
+      cssW = cssH * (w / h);
+    }
+    canvas.style.width = `${Math.round(cssW)}px`;
+    canvas.style.height = `${Math.round(cssH)}px`;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return false;
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(afterImg, 0, 0);
+    if (opts.split !== null && opts.split !== undefined && opts.beforeParams) {
+      const beforeImg = await loadImg(opts.beforeParams);
+      if (!beforeImg) return true;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, Math.round(w * opts.split), h);
+      ctx.clip();
+      ctx.drawImage(beforeImg, 0, 0);
+      ctx.restore();
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export default function ViewerCanvas({ onHistogram }: { onHistogram?: (h: { r: number[]; g: number[]; b: number[] }) => void }) {
@@ -63,6 +129,8 @@ export default function ViewerCanvas({ onHistogram }: { onHistogram?: (h: { r: n
   const histTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** CPU 软渲染最近一次耗时（ms，诊断/冒烟用） */
   const cpuMsRef = useRef<number | null>(null);
+  /** 引擎 CPU 渲染请求序号（防慢请求串台覆盖新渲染） */
+  const engineRenderSeq = useRef(0);
   const logCpuOnce = (ms: number | null): void => {
     cpuMsRef.current = ms;
     if (ms !== null && window.lumina?.isSmoke) console.log(`[smoke-scenario] cpu-render: ms=${ms}`);
@@ -120,12 +188,15 @@ export default function ViewerCanvas({ onHistogram }: { onHistogram?: (h: { r: n
             console.log(`[smoke-scenario] shader: warnings=${r.warnings.length > 0 ? r.warnings : 'none'}`);
           }
         } else {
-          // 无 WebGL：CPU 软渲染保底（参数近似生效，WP-B6），保证不黑屏
+          // 无 WebGL：引擎 Plan CPU 渲染保底（与导出同一实现，T1.5），保证不黑屏
           const p = useDevelop.getState().params;
-          if (p) {
-            cpuMsRef.current = renderCpu(canvas, img, { params: p });
-            logCpuOnce(cpuMsRef.current);
-          } else {
+          if (p && canvas) {
+            void renderViaEngine(canvas, engineRenderSeq, { params: p }).then((ok) => {
+              cpuMsRef.current = ok ? 0 : null;
+              logCpuOnce(cpuMsRef.current);
+              if (!ok) drawFallback2d(canvas, img);
+            });
+          } else if (canvas) {
             drawFallback2d(canvas, img);
           }
         }
@@ -153,11 +224,16 @@ export default function ViewerCanvas({ onHistogram }: { onHistogram?: (h: { r: n
         beforeParams: beforeParams ?? undefined,
       });
       if (!ok) {
-        // GPU 渲染失败：降级 CPU 软渲染并显式告知（不允许静默黑屏）
-        const ms = renderCpu(canvas, imgRef.current, { params, split: effectiveCompare ? split : null, beforeParams: beforeParams ?? undefined });
-        cpuMsRef.current = ms;
-        logCpuOnce(ms);
-        setRenderNotice('软件渲染模式：参数已生效（部分高级项除外）');
+        // GPU 渲染失败：降级引擎 Plan CPU 渲染并显式告知（不允许静默黑屏）
+        setRenderNotice('软件渲染模式：参数已生效（引擎 Plan 求值，与导出同实现）');
+        void renderViaEngine(canvas, engineRenderSeq, {
+          params,
+          split: effectiveCompare ? split : null,
+          beforeParams: beforeParams ?? undefined,
+        }).then((ok2) => {
+          cpuMsRef.current = ok2 ? 0 : null;
+          logCpuOnce(cpuMsRef.current);
+        });
       } else {
         setRenderNotice(null);
         // 直方图 150ms 防抖（架构 §8 性能要点）
@@ -168,10 +244,16 @@ export default function ViewerCanvas({ onHistogram }: { onHistogram?: (h: { r: n
         }, 150);
       }
     } else {
-      // 无 WebGL：CPU 软渲染（WP-B6），参数近似生效
-      const ms = renderCpu(canvas, imgRef.current, { params, split: effectiveCompare ? split : null, beforeParams: beforeParams ?? undefined });
-      cpuMsRef.current = ms;
-      logCpuOnce(ms);
+      // 无 WebGL：引擎 Plan CPU 渲染（与导出同一实现，T1.5）
+      void renderViaEngine(canvas, engineRenderSeq, {
+        params,
+        split: effectiveCompare ? split : null,
+        beforeParams: beforeParams ?? undefined,
+      }).then((ok) => {
+        cpuMsRef.current = ok ? 0 : null;
+        logCpuOnce(cpuMsRef.current);
+        if (!ok && imgRef.current) drawFallback2d(canvas, imgRef.current);
+      });
     }
   }, [params, effectiveCompare, split, beforeParams, renderTick, onHistogram]);
 

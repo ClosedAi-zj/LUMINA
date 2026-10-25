@@ -209,6 +209,34 @@ function createWindow(): void {
         process.stdout.write(`[smoke] parity-report write failed: ${String(err)}\n`);
       }
     }
+    // T1.5：导出=预览像素断言报表落盘（渲染层单行 JSON → build/export-parity-report.json）
+    if (isSmoke && message.includes('[smoke-scenario] export-parity-report: ')) {
+      try {
+        const json = message.slice(message.indexOf('export-parity-report: ') + 'export-parity-report: '.length).trim();
+        JSON.parse(json); // 完整性校验
+        const out = path.resolve(appRoot, 'build/export-parity-report.json');
+        fs.mkdirSync(path.dirname(out), { recursive: true });
+        fs.writeFileSync(out, json, 'utf8');
+        process.stdout.write(`[smoke] export-parity-report -> ${out}\n`);
+      } catch (err) {
+        process.stdout.write(`[smoke] export-parity-report write failed: ${String(err)}\n`);
+      }
+    }
+    // T1.5 ⑦c：两侧共享的无损底图落盘（渲染层 PNG dataURL + 行内目标路径 → 写盘），
+    // 消除浏览器/引擎对有损 JPEG 的双解码差（工装输入差，非管线差）
+    if (isSmoke && message.includes('[smoke-scenario] export-parity-base ')) {
+      const m = /\[smoke-scenario\] export-parity-base (.+?): data:image\/png;base64,([A-Za-z0-9+/=]+)/.exec(message);
+      if (m) {
+        try {
+          const out = m[1].trim();
+          fs.mkdirSync(path.dirname(out), { recursive: true });
+          fs.writeFileSync(out, Buffer.from(m[2], 'base64'));
+          process.stdout.write(`[smoke] export-parity-base -> ${out}\n`);
+        } catch (err) {
+          process.stdout.write(`[smoke] export-parity-base write failed: ${String(err)}\n`);
+        }
+      }
+    }
     // WP-B1：主题双截图。深色在 smoke 归位深色后拍（theme-pre 行，仍在修图台）；
     // 浅色在 theme 日志行后拍（smoke 已留 600ms 截图窗口）。
     if (isSmoke && message.includes('[smoke-scenario] theme-pre')) {
@@ -223,6 +251,10 @@ function createWindow(): void {
     // M-3：浮层（对话框）打开状态截图，验证玻璃材质 + 浮入动效
     if (isSmoke && message.includes('[smoke-scenario] overlay-shot')) {
       captureTo(path.resolve(appRoot, 'build/review-overlay.png'), 3, 600);
+    }
+    // T1.7：修图专业模式截图（确认占位提示条消失）
+    if (isSmoke && message.includes('[smoke-scenario] pro-shot')) {
+      captureTo(path.resolve(appRoot, 'build/review-t17-develop-pro.png'), 3, 600);
     }
     // WP-C1 视觉基线：`[baseline] shot <id>-<name> dark|light`
     if (isBaseline) {

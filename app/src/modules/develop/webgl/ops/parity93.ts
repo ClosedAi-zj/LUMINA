@@ -67,7 +67,7 @@ export function defaultParams(): EditParams {
     calibration: { shadowTint: 0, redHue: 0, redSat: 0, greenHue: 0, greenSat: 0, blueHue: 0, blueSat: 0 },
     detail: { sharpness: 0, sharpenRadius: 1, sharpenDetail: 25, sharpenMasking: 0, luminanceSmoothing: 0, colorNR: 0, colorNRDetail: 50 },
     optics: { lensProfileEnable: false, manualDistortion: 0, vignetteAmount: 0, vignetteMidpoint: 50, vignetteFeather: 50, grainAmount: 0, grainFrequency: 0, grainSize: 0 },
-    geometry: { hasCrop: false, cropTop: 0, cropBottom: 100, cropLeft: 0, cropRight: 100, cropAngle: 0, perspective: { vertical: 0, horizontal: 0, rotate: 0, scale: 100, aspect: 0, x: 0, y: 0 } },
+    geometry: { hasCrop: false, cropTop: 0, cropBottom: 100, cropLeft: 0, cropRight: 100, cropAngle: 0, perspective: { vertical: 0, horizontal: 0, rotate: 0, scale: 1, aspect: 0, x: 0, y: 0 } },
     masks: [],
   };
 }
@@ -254,8 +254,10 @@ export class Parity93Runner {
     for (const { leaf, mut } of buildLeafCases()) {
       const params = defaultParams();
       mut(params);
+      const t0 = performance.now();
       // CPU
       const cpu = oracle93(params, this.src);
+      const t1 = performance.now();
       // GPU
       const curve = buildCurveTexture(params);
       this.pipeline.setCurves(curve.data, curve.skip);
@@ -270,6 +272,7 @@ export class Parity93Runner {
         opacity: new Float32Array(6),
       };
       const ok = this.pipeline.render(canvas, params, null, null, masks);
+      const t2 = performance.now();
       const w = canvas.width;
       const h = canvas.height;
       let mean = -1;
@@ -285,8 +288,9 @@ export class Parity93Runner {
         let sumCpu = 0;
         for (let y = 0; y < h; ++y) {
           for (let x = 0; x < w; ++x) {
-            // readPixels 行 0 = 纹理数据行 0 = CPU 数组行 0（全链 vUv 同向，无需翻行）
-            const gy = y;
+            // composite 已翻 uA/uB 采样（画布呈现方向 = 源图方向），readPixels 行 0 =
+            // GL 帧缓冲底行 = 图像底行 → 对 CPU 行序做 y 翻转后再比
+            const gy = h - 1 - y;
             const gIdx = (gy * w + x) * 4;
             const cIdx = (y * w + x) * 3;
             for (let c = 0; c < 3; ++c) {
@@ -305,7 +309,8 @@ export class Parity93Runner {
         const worst: { x: number; y: number; g: number; c: number }[] = [];
         for (let y = 0; y < h; ++y) {
           for (let x = 0; x < w; ++x) {
-            const gIdx = (y * w + x) * 4;
+            const gy = h - 1 - y;  // 与上方主对比同口径（composite 翻转后的行序对齐）
+            const gIdx = (gy * w + x) * 4;
             const cIdx = (y * w + x) * 3;
             for (let c = 0; c < 3; ++c) {
               const d = Math.abs(px[gIdx + c] - cpu.out8[cIdx + c]);
@@ -334,6 +339,12 @@ export class Parity93Runner {
       if (mean > worstMean) worstMean = mean;
       if (max > worstMax) worstMax = max;
       cases.push({ leaf, mean, max, pixels: w * h, pass, dbg: dbg || undefined });
+      if (window.lumina?.isSmoke) {
+        console.log(
+          `[smoke-scenario] parity93-run: ${leaf} mean=${mean.toFixed(4)} max=${max.toFixed(0)} pass=${pass} ` +
+            `cpuMs=${(t1 - t0).toFixed(0)} gpuMs=${(t2 - t1).toFixed(0)} cmpMs=${(performance.now() - t2).toFixed(0)}`,
+        );
+      }
     }
     return {
       gpuAvailable: true,

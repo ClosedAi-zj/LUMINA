@@ -89,6 +89,11 @@ export const api = {
   preview: {
     getBase: (id: number) => rpc.request<PreviewBase>('preview.getBase', { id }),
   },
+  // T1.5：develop.render —— Plan CPU 后端（与导出同一实现；WebGL 降级 / 导出=预览断言）
+  develop: {
+    render: (req: { photoId?: number; inputPath?: string; params: EditParams; longEdge?: number }) =>
+      rpc.request<{ path: string; width: number; height: number }>('develop.render', req),
+  },
   cache: {
     clear: (scope: 'thumbs' | 'previews' | 'renders') => rpc.request<{ freedBytes: number }>('cache.clear', { scope }),
   },

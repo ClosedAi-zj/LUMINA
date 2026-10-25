@@ -694,7 +694,12 @@ vec3 applyMask5(vec3 c, vec2 uv, float a) {
 }
 
 void main() {
-  vec3 cA = texture2D(uA, vUv).rgb;
+  // 图像采样翻转：GL 帧缓冲行 0 = 显示底部，而源纹理数据行 0 = 图像顶部（imageToCodes
+  // 顶行在前），不翻转则画布呈现为上下镜像（合成图是渐变长期未被发现；parity93 的
+  // readPixels 对比恰好同为 GL 行序而互相抵消）。只翻 uA/uB——蒙版 uv 保持 vUv，
+  // 与红色浮层（display 域）的对齐关系不变。
+  vec2 iUv = vec2(vUv.x, 1.0 - vUv.y);
+  vec3 cA = texture2D(uA, iUv).rgb;
   float mc = float(uMaskCount);
   cA = applyMask0(cA, vUv, step(0.5, mc));
   cA = applyMask1(cA, vUv, step(1.5, mc));
@@ -706,7 +711,7 @@ void main() {
   if (uSplit < 0.0) {
     c = cA;
   } else {
-    vec3 cB = texture2D(uB, vUv).rgb;
+    vec3 cB = texture2D(uB, iUv).rgb;
     c = vUv.x < uSplit ? cB : cA;
   }
   gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);

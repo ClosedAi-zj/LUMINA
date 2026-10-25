@@ -68,24 +68,12 @@ export function PanelCard({
   );
 }
 
-/** 组内小标题（如「暗角」「颗粒」），保持 8 组归属清晰 */
+/**
+ * 组内小标题（如「暗角」「颗粒」），保持 8 组归属清晰。
+ * （v1.2.0 M1：93/93 叶全部参与渲染，PendingDot「未参与渲染」占位已移除。）
+ */
 export function GroupLabel({ children }: { children: ReactNode }) {
   return <div className="text-2xs text-txt3 px-3 pt-2 pb-1">{children}</div>;
-}
-
-/**
- * 未参与渲染的标记：行级只给 6px 灰点 + tooltip（文字说明放组标题，避免每行刷"未渲染"）。
- * 控件仍然可编辑并写入 XMP —— 只标注事实，不置灰、不隐藏。
- */
-export function PendingDot() {
-  return (
-    <span
-      className="inline-block rounded-full shrink-0"
-      style={{ width: 6, height: 6, background: 'var(--Lumina-Tokens-textMuted)' }}
-      title="M1 接入（当前未参与渲染）"
-      aria-label="未参与渲染，M1 接入"
-    />
-  );
 }
 
 // ---------- 参数行 + 滑块 ----------
@@ -102,10 +90,9 @@ export interface ParamSliderProps {
   onChange: (v: number) => void;
   /** 抬起（提交一次历史） */
   onCommit: (v: number) => void;
-  pending?: boolean;
 }
 
-export function ParamSlider({ label, value, min, max, step = 1, defaultValue = 0, format, onChange, onCommit, pending }: ParamSliderProps) {
+export function ParamSlider({ label, value, min, max, step = 1, defaultValue = 0, format, onChange, onCommit }: ParamSliderProps) {
   const trackRef = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState(false);
   const [hover, setHover] = useState(false);
@@ -151,7 +138,6 @@ export function ParamSlider({ label, value, min, max, step = 1, defaultValue = 0
     >
       <div className="flex items-center h-[15px] pt-1.5">
         <span className={`text-[11.5px] truncate ${isDefault ? 'text-txt2' : 'text-txt'}`}>{label}</span>
-        {pending && <span className="ml-1.5"><PendingDot /></span>}
         <span className="flex-1" />
         <span className="num text-[11px] text-txt2 shrink-0">{text}</span>
       </div>
@@ -207,11 +193,10 @@ export function ParamSlider({ label, value, min, max, step = 1, defaultValue = 0
 
 // ---------- 开关行 ----------
 
-export function ParamToggle({ label, checked, onChange, pending }: { label: string; checked: boolean; onChange: (v: boolean) => void; pending?: boolean }) {
+export function ParamToggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
     <div className="h-6 mx-1 px-2 rounded-mdC hover:bg-hover transition-colors flex items-center gap-2" style={{ transitionTimingFunction: EASE }}>
       <span className="text-[11.5px] text-txt2 flex-1 truncate">{label}</span>
-      {pending && <PendingDot />}
       <button
         onClick={() => onChange(!checked)}
         className="relative rounded-pill shrink-0 transition-colors"
@@ -238,7 +223,7 @@ export function ParamToggle({ label, checked, onChange, pending }: { label: stri
 
 // ---------- 复选框（macOS 式：16px / 5px 圆角，选中 accent 填充 + 白勾） ----------
 
-export function ParamCheckbox({ label, checked, onChange, pending }: { label: string; checked: boolean; onChange: (v: boolean) => void; pending?: boolean }) {
+export function ParamCheckbox({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
     <div className="h-6 mx-1 px-2 rounded-mdC hover:bg-hover transition-colors flex items-center gap-2" style={{ transitionTimingFunction: EASE }}>
       <button
@@ -263,7 +248,6 @@ export function ParamCheckbox({ label, checked, onChange, pending }: { label: st
         )}
       </button>
       <span className="text-[11.5px] text-txt2 flex-1 truncate">{label}</span>
-      {pending && <PendingDot />}
     </div>
   );
 }
