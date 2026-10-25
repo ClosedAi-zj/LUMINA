@@ -94,9 +94,25 @@ bool OpTable::evaluate(const std::vector<std::string>& opNames, imaging::ImageBu
   return true;
 }
 
-// ---- 骨架算子注册：8 节点骨架（plan/ops/*.cpp）+ S7 输出占位 ----
+// ---- 骨架算子注册：8 节点骨架（plan/ops/*.cpp）+ iccInput 预留 + S7 输出占位 ----
 
 namespace {
+
+// iccInput 预留位（lead 裁决：ICC 输入 profile 提前到 M2）。
+// stage = S4Color 前段：调用方（compilePlan/求值序列）必须把它排在 S4 首位。
+// 骨架期 identity；M2 实装：按 buf->iccProfileId 做输入 profile → 工作域转换。
+class IccInputOp : public Operator {
+ public:
+  const char* name() const override { return "iccInput"; }
+  Stage stage() const override { return Stage::S4Color; }
+  bool apply(imaging::ImageBuf* buf, std::string* err) const override {
+    if (!buf || !buf->valid()) {
+      if (err) *err = "iccInput: invalid buffer";
+      return false;
+    }
+    return true;  // M2 前占位 identity
+  }
+};
 
 // 输出编码占位（S7）：骨架 identity；M0 T0.7 实现 8bit TPDF/16bit 线性写出
 class OutputOp : public Operator {
@@ -125,6 +141,7 @@ bool registerBuiltinOps(OpTable* table, std::string* err) {
   ok = registerGeometryOps(table, err) && ok;
   ok = registerEffectsOps(table, err) && ok;
   ok = registerMaskOps(table, err) && ok;
+  ok = table->registerOp(std::make_shared<IccInputOp>(), err) && ok;
   ok = table->registerOp(std::make_shared<OutputOp>(), err) && ok;
   return ok;
 }

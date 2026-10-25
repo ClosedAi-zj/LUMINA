@@ -67,6 +67,8 @@ set(LUMINA_SOURCES
   src/imaging/resample.cpp
   src/plan/op_table.cpp
   src/plan/geometry.cpp
+  src/plan/cache_key.cpp
+  src/plan/render_plan.cpp
   src/plan/ops/basic.cpp
   src/plan/ops/curve.cpp
   src/plan/ops/color.cpp
@@ -173,6 +175,12 @@ add_executable(test_geometry16 tests/test_geometry16.cpp)
 target_link_libraries(test_geometry16 PRIVATE lumina_core)
 set_target_properties(test_geometry16 PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
 add_test(NAME geometry16 COMMAND test_geometry16)
+
+# T0.5：三键缓存 + Plan
+add_executable(test_plan_cache tests/test_plan_cache.cpp)
+target_link_libraries(test_plan_cache PRIVATE lumina_core)
+set_target_properties(test_plan_cache PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME plan_cache COMMAND test_plan_cache)
 
 # M0 ΔE 基线工具（不入 ctest：依赖本机 RW2 样本；由 scripts/ci/deltae.py 编排）
 add_executable(deltae_baseline tests/color/delta_e_baseline.cpp)
