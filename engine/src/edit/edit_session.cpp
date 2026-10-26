@@ -11,6 +11,7 @@ EditSessionManager::EditSessionManager(xmp::XmpService* xmp, db::PhotoDao* photo
     : xmp_(xmp),
       photos_(photos),
       developSettings_(photos ? photos->database() : nullptr),
+      history_(photos ? photos->database() : nullptr),
       running_(true) {}
 
 EditSessionManager::~EditSessionManager() { shutdown(); }
@@ -36,9 +37,65 @@ json::JsonValue EditSessionManager::begin(int64_t photoId, rpc::RpcError* err) {
   auto session = std::make_shared<SessionState>();
   session->photoId = photoId;
   session->params = params;
-  session->history.push(params);
   session->lastChangeMs = nowMs();
   session->dirty = false;
+
+  // ---- T2.4 跨会话历史恢复（架构 §4.2）----
+  // 持久化历史 = base（最近 checkpoint 的完整参数）+ Σdiff；sidecar 是参数唯一真相源。
+  // 重放结果与 sidecar 参数指纹一致才采用；否则整段丢弃并显式 warning（零静默）。
+  std::string histWarning;
+  bool historyRestored = false;
+  {
+    db::HistoryStateRow st;
+    std::string hErr;
+    const bool stateOk = history_.state(photoId, &st, &hErr);
+    if (!stateOk && !hErr.empty()) {
+      logWarn("edit", "history state 读取失败（派生层，本次会话仅内存 undo/redo）: " + hErr);
+    }
+    if (stateOk && st.exists) {
+      json::JsonValue base;
+      std::string pErr;
+      bool replayable = json::JsonValue::parse(st.baseJson, &base, &pErr);
+      std::vector<db::HistoryEntryRow> rows;
+      std::string lErr;
+      if (replayable && !history_.list(photoId, &rows, &lErr)) replayable = false;
+      json::JsonValue ops = json::JsonValue::arrayValue();
+      if (replayable) {
+        for (const auto& row : rows) {
+          if (row.seq > st.currentSeq) continue;  // redo 分支不跨会话（HistoryStack.push 同语义）
+          json::JsonValue op;
+          if (!json::JsonValue::parse(row.opJson, &op, &pErr)) {
+            replayable = false;
+            break;
+          }
+          ops.addItem(op);
+        }
+      }
+      if (replayable) {
+        json::JsonValue replayed;
+        if (applyOps(base, ops, &replayed) &&
+            db::DevelopSettingsDao::hashParams(replayed) ==
+                db::DevelopSettingsDao::hashParams(params) &&
+            session->history.restoreFrom(base, ops, static_cast<int>(st.currentSeq))) {
+          historyRestored = true;
+        }
+      }
+      if (!historyRestored) {
+        // 外部改过 sidecar / 崩溃后 sidecar 落后 / undo 穿越折叠点 → 显式重置
+        histWarning = "历史记录与当前参数不一致，已重置";
+        logWarn("edit", "photo " + std::to_string(photoId) + ": " + histWarning);
+        std::string cErr;
+        if (!history_.clear(photoId, &cErr)) logWarn("edit", "history 重置失败: " + cErr);
+      }
+    }
+    if (!historyRestored) {
+      session->history.push(params);
+      std::string iErr;
+      if (!history_.initBase(photoId, params, &iErr)) {
+        logWarn("edit", "history base 初始化失败（派生层，不影响编辑）: " + iErr);
+      }
+    }
+  }
   {
     std::lock_guard<std::mutex> lock(mutex_);
     session->sessionId = nextSessionId_++;
@@ -73,8 +130,11 @@ json::JsonValue EditSessionManager::begin(int64_t photoId, rpc::RpcError* err) {
   out.setItem("sessionId", session->sessionId);
   out.setItem("params", session->params);
   out.setItem("revision", session->history.index());
-  out.setItem("historyLength", session->history.length());
+  // M18：historyLength 取持久化口径（恢复后 = current_seq+1，含折叠点前的灰字虚拟步）
+  out.setItem("historyLength", session->history.totalSteps());
+  out.setItem("historyRestored", historyRestored);
   out.setItem("cacheState", cacheState);
+  if (!histWarning.empty()) cacheWarnings.addItem(histWarning);
   out.setItem("warnings", cacheWarnings);
   logInfo("edit", "session " + std::to_string(session->sessionId) + " begin for photo " +
                       std::to_string(photoId));
@@ -95,11 +155,33 @@ json::JsonValue EditSessionManager::setParams(int64_t sessionId, const json::Jso
   }
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    const json::JsonValue before = session->params;
     session->params.mergePatch(p);
     session->lastChangeMs = nowMs();
     session->dirty = true;
     if (commitHistory) {
-      session->history.push(session->params);
+      // T2.4：diff op 落盘（单 op 一条事务 ≤1ms；每 kFoldEvery 步折叠为 checkpoint）。
+      // 持久化失败只 logWarn——内存 undo/redo 与 sidecar 参数不受影响（可丢弃派生口径）。
+      std::string label;
+      const json::JsonValue op = diffOps(before, session->params, &label);
+      session->history.pushCommitted(session->params, op);  // op=null（无差异）时等价 push
+      if (!op.isNull()) {
+        int64_t seq = 0;
+        std::string hErr;
+        if (history_.append(session->photoId, op, label, sessionId, &seq, &hErr)) {
+          if (seq > 0 && seq % db::HistoryDao::kFoldEvery == 0) {
+            std::string cpErr;
+            if (history_.checkpoint(session->photoId, seq, session->params, &cpErr)) {
+              logInfo("edit", "history checkpoint: photo " + std::to_string(session->photoId) +
+                                  " 折叠于 seq " + std::to_string(seq));
+            } else {
+              logWarn("edit", "history 折叠失败（派生层，不影响编辑）: " + cpErr);
+            }
+          }
+        } else {
+          logWarn("edit", "history append 失败（派生层，内存 undo/redo 不受影响）: " + hErr);
+        }
+      }
     } else {
       // 滑块拖动中间态：覆盖当前栈顶，不新增历史
       session->history.replaceCurrent(session->params);
@@ -108,6 +190,7 @@ json::JsonValue EditSessionManager::setParams(int64_t sessionId, const json::Jso
   json::JsonValue out = json::JsonValue::objectValue();
   out.setItem("params", session->params);
   out.setItem("revision", session->history.index());
+  out.setItem("historyLength", session->history.totalSteps());
   return out;
 }
 
@@ -127,11 +210,18 @@ json::JsonValue EditSessionManager::undo(int64_t sessionId, rpc::RpcError* err) 
     session->params = previous;
     session->dirty = true;
     session->lastChangeMs = nowMs();
+    // T2.4：持久化游标同步（current_seq = virtualBase + index；undo 向后移动）
+    std::string hErr;
+    if (!history_.updateSeq(session->photoId,
+                            session->history.virtualBase() + session->history.index(), &hErr)) {
+      logWarn("edit", "history 游标更新失败（派生层，内存 undo/redo 不受影响）: " + hErr);
+    }
   }
   json::JsonValue out = json::JsonValue::objectValue();
   out.setItem("params", session->params);
   out.setItem("revision", session->history.index());
   out.setItem("historyIndex", session->history.index());
+  out.setItem("historyLength", session->history.totalSteps());
   return out;
 }
 
@@ -151,11 +241,18 @@ json::JsonValue EditSessionManager::redo(int64_t sessionId, rpc::RpcError* err) 
     session->params = next;
     session->dirty = true;
     session->lastChangeMs = nowMs();
+    // T2.4：持久化游标同步（redo 向前移动）
+    std::string hErr;
+    if (!history_.updateSeq(session->photoId,
+                            session->history.virtualBase() + session->history.index(), &hErr)) {
+      logWarn("edit", "history 游标更新失败（派生层，内存 undo/redo 不受影响）: " + hErr);
+    }
   }
   json::JsonValue out = json::JsonValue::objectValue();
   out.setItem("params", session->params);
   out.setItem("revision", session->history.index());
   out.setItem("historyIndex", session->history.index());
+  out.setItem("historyLength", session->history.totalSteps());
   return out;
 }
 

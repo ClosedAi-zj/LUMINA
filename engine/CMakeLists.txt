@@ -58,6 +58,7 @@ set(LUMINA_SOURCES
   src/db/migrations.cpp
   src/db/image_dao.cpp
   src/db/develop_settings_dao.cpp
+  src/db/history_dao.cpp
   src/db/photo_dao.cpp
   src/db/fts_indexer.cpp
   src/db/album_dao.cpp
@@ -262,6 +263,13 @@ add_executable(test_develop_settings tests/test_develop_settings.cpp)
 target_link_libraries(test_develop_settings PRIVATE lumina_core)
 set_target_properties(test_develop_settings PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
 add_test(NAME develop_settings COMMAND test_develop_settings)
+
+# M2 T2.4：history 落盘（H1 跨会话 20 步逐级 undo max|Δ|=0 / H2 删表参数不变 /
+# H4 事务无半写 + 崩溃后参数以 sidecar 为准 / 每 50 步折叠正确）
+add_executable(test_history_persist tests/test_history_persist.cpp)
+target_link_libraries(test_history_persist PRIVATE lumina_core)
+set_target_properties(test_history_persist PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME history_persist COMMAND test_history_persist)
 
 # M0 ΔE 基线工具（不入 ctest：依赖本机 RW2 样本；由 scripts/ci/deltae.py 编排）
 add_executable(deltae_baseline tests/color/delta_e_baseline.cpp)

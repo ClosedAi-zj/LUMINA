@@ -12,6 +12,7 @@
 
 #include "core/thread_pool.h"
 #include "db/develop_settings_dao.h"
+#include "db/history_dao.h"
 #include "db/photo_dao.h"
 #include "edit/history.h"
 #include "json/json_value.h"
@@ -58,6 +59,8 @@ class EditSessionManager {
   // M2 T2.3：参数派生缓存。构造时由 photos->database() 现取，避免改动调用方签名
   // （main.cpp / test_rpc_smoke.cpp 都按两参构造）。
   db::DevelopSettingsDao developSettings_;
+  // M2 T2.4：编辑历史持久化（可丢弃派生；sidecar 仍是参数唯一真相源）
+  db::HistoryDao history_;
   std::mutex mutex_;
   std::map<int64_t, std::shared_ptr<SessionState>> sessions_;
   int64_t nextSessionId_ = 1;

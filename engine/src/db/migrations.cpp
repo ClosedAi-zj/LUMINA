@@ -354,6 +354,69 @@ bool applyMigration003DevelopSettings(Database* db, MigrationReport* report, int
   return true;
 }
 
+// ---------------- 004：history 派生日志（T2.4）----------------
+// 与 003 同模式：只做 DDL（两表 + 一索引，全部 IF NOT EXISTS 幂等），不扫数据。
+// history 是可丢弃派生日志：崩溃/损坏的最坏后果是丢失 undo 深度，参数真相源
+// 永远在 sidecar（恢复时指纹不一致会显式重置，见 EditSessionManager::begin）。
+bool applyMigration004History(Database* db, MigrationReport* report, int* err) {
+  if (!db || !db->isOpen()) {
+    if (err) *err = kMigrationNotOpen;
+    return false;
+  }
+  MigrationReport local;
+  MigrationReport& rep = report ? *report : local;
+  std::string e;
+
+  const bool existed = tableHasColumn(db, "history_entries", "photo_id");
+
+  const char* kCreateEntries =
+      "CREATE TABLE IF NOT EXISTS history_entries("
+      "  id INTEGER PRIMARY KEY,"
+      "  photo_id INT NOT NULL REFERENCES photos(id),"
+      "  seq INT NOT NULL,"       // 单图内单调（=重放游标），UNIQUE
+      "  op_json TEXT NOT NULL,"   // diff op（edit/history.cpp diffOps 编码）
+      "  label TEXT,"              // UI 显示名（"exposure: 0.1 → 0.15"）
+      "  created_at INT NOT NULL,"
+      "  session_id TEXT,"
+      "  UNIQUE(photo_id, seq)"
+      ");";
+  if (!db->exec(kCreateEntries, &e)) {
+    if (err) *err = kMigrationDdlFailed;
+    rep.detail = "create history_entries failed: " + e;
+    logError("migrate", rep.detail);
+    return false;
+  }
+  ++rep.statementsRun;
+  if (!db->exec("CREATE INDEX IF NOT EXISTS idx_hist_photo ON history_entries(photo_id, seq);",
+                &e)) {
+    if (err) *err = kMigrationDdlFailed;
+    rep.detail = "create idx_hist_photo failed: " + e;
+    logError("migrate", rep.detail);
+    return false;
+  }
+  ++rep.statementsRun;
+  const char* kCreateState =
+      "CREATE TABLE IF NOT EXISTS history_state("
+      "  photo_id INTEGER PRIMARY KEY REFERENCES photos(id),"
+      "  current_seq INT NOT NULL,"  // undo/redo 重放游标
+      "  base_json TEXT NOT NULL,"   // 最近 checkpoint 的完整参数
+      "  base_hash TEXT NOT NULL,"   // hashOf(base_json)（canonical 指纹，T2.3 同口径）
+      "  updated_at INT"
+      ");";
+  if (!db->exec(kCreateState, &e)) {
+    if (err) *err = kMigrationDdlFailed;
+    rep.detail = "create history_state failed: " + e;
+    logError("migrate", rep.detail);
+    return false;
+  }
+  ++rep.statementsRun;
+  if (!existed) rep.histTableCreated = 1;
+
+  logInfo("migrate", "004: history ready" +
+                         std::string(rep.histTableCreated ? " (created)" : " (already present)"));
+  return true;
+}
+
 // ---------------- 版本化调度 ----------------
 bool runVersionedMigrations(Database* db, int* err) {
   return runVersionedMigrations(db, err, nullptr, nullptr, nullptr);
@@ -410,8 +473,15 @@ bool runVersionedMigrations(Database* db, int* err, MigrationReport* report,
                            " (develop_settings " +
                            std::string(rep.devTableCreated ? "created" : "present") + ")");
   }
-  // 004 扩展点：T2.4（history）在此按同一模式续写，版本号取 kDbVersionHistory，
-  // 写完后同步上调 kTargetDbVersion。
+  // 004：history 派生日志（T2.4；只建表，数据由 EditSessionManager 按需写入）
+  if (rep.fromVersion < kDbVersionHistory) {
+    if (!applyMigration004History(db, &rep, err)) return false;
+    rep.toVersion = kDbVersionHistory;
+    if (!writeDbVersion(db, rep.toVersion, err)) return false;
+    logInfo("migrate", "migrated to db_version=" + std::to_string(rep.toVersion) +
+                           " (history " +
+                           std::string(rep.histTableCreated ? "created" : "present") + ")");
+  }
   return true;
 }
 
