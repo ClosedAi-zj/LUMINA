@@ -51,6 +51,37 @@ class Operator {
   virtual void setParams(const json::JsonValue& params) { (void)params; }
 };
 
+// ---- 20 阶段顺序表（M2 T2.1 / 架构 §3.7）：唯一事实源 ----
+// 用途：O1 断言（kPipelineOrder 行序 + Plan opSequence 的 stage 单调不减 +
+//       opSequence 与算子级行构成子序列）；也是评审「顺序是否被改动」的比对基准。
+// 纪律（S10）：本表 CI 只读，开发侧不得重排、不得删行；只许在尾部追加新阶段
+//              （追加即改 kPipelineOrderCount，属口径变更，需先改架构文档）。
+// 域（S2）：S0–S2 = scene-linear log16 码域；S3 = 唯一域分界；S4–S6 = 感知码域。
+struct PipelineStageDesc {
+  int index = 0;          // 1..20（行号，O1 断言的稳定标识）
+  const char* label = "";  // 中文阶段名（日志/失败信息可读）
+  Stage stage = Stage::S0Decode;
+  // 本行覆盖的算子名，逗号分隔（算子级行的"构成子序列"断言按此匹配）。
+  // 空串 = 本行没有独立算子（全部落在 geometry.apply 的子步里）。
+  const char* ops = "";
+  // geometry.apply 内部子步号（1..6）；0 = 独立算子行。
+  // 子步顺序由 tests/test_geometry_chain.cpp 单独断言（T2.10），本表只登记。
+  int subStep = 0;
+  // 一行的结束 stage（仅第 20 行跨 S6Effects→S7Output；其余与 stage 相同）
+  Stage stageEnd = Stage::S0Decode;
+  const char* domain = "";  // 该阶段的像素域说明
+};
+
+// 行数常量（= 20）。O1 断言 `kPipelineOrderCount == 20`。
+constexpr int kPipelineOrderCount = 20;
+extern const PipelineStageDesc kPipelineOrder[kPipelineOrderCount];
+
+// 算子名 → 所在行号（1..20）；未登记返回 0。
+// 注：S1 的 4 个旧算子名（lens.profile / lens.manualDistortion /
+// geometry.crop / geometry.perspective）在 T2.10 合并为 geometry.apply 后退役，
+// 退役后删除本函数内的兼容映射即可（不删本函数）。
+int pipelineRowForOp(const std::string& opName);
+
 // 算子注册表 + 有序求值器（骨架；M0 期末由 Plan 求值器接管 evaluate）
 class OpTable {
  public:

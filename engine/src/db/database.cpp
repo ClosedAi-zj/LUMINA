@@ -5,6 +5,7 @@
 
 #include "core/logger.h"
 #include "core/str_util.h"
+#include "db/migrations.h"
 
 // 由 CMake 从 src/db/schema.sql 生成（见 CMakeLists.txt）
 #include "schema_sql.inc"
@@ -13,7 +14,8 @@ namespace lumina {
 namespace db {
 
 namespace {
-constexpr int kTargetSchemaVersion = 1;
+// M2 T2.2：目标库版本升到 2（四级表）。003/004 由 T2.3/T2.4 续写并上调本常量。
+constexpr int kTargetSchemaVersion = kTargetDbVersion;
 }  // namespace
 
 Stmt::~Stmt() {
@@ -171,28 +173,54 @@ int Database::schemaVersion() const {
 }
 
 bool Database::runMigrations(std::string* err) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (!db_) {
-    if (err) *err = "database not open";
+  // 阶段 1：全量幂等建表（schema.sql 是唯一事实源，CREATE ... IF NOT EXISTS）
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!db_) {
+      if (err) *err = "database not open";
+      return false;
+    }
+    char* msg = nullptr;
+    int rc = sqlite3_exec(db_, kSchemaSql, nullptr, nullptr, &msg);
+    if (rc != SQLITE_OK) {
+      if (err) *err = msg ? std::string("schema failed: ") + msg : std::string("schema failed");
+      sqlite3_free(msg);
+      return false;
+    }
+  }
+  // 阶段 2：版本化增量迁移（002 四级表；003/004 由 T2.3/T2.4 续写）。
+  // 必须在锁外调用：runVersionedMigrations 走 Database::exec/begin/commit，
+  // 它们自身要拿 mutex_（持锁调用会自死锁）。
+  int migErr = kMigrationOk;
+  MigrationReport report;
+  if (!runVersionedMigrations(this, &migErr, &report)) {
+    if (err) {
+      *err = "versioned migration failed (code " + std::to_string(migErr) + "): " + report.detail;
+    }
+    logError("db", "versioned migration failed, code=" + std::to_string(migErr) + " " +
+                       report.detail);
     return false;
   }
-  char* msg = nullptr;
-  int rc = sqlite3_exec(db_, kSchemaSql, nullptr, nullptr, &msg);
-  if (rc != SQLITE_OK) {
-    if (err) *err = msg ? std::string("schema failed: ") + msg : std::string("schema failed");
-    sqlite3_free(msg);
-    return false;
+  // 阶段 3：写 schema_meta.db_version（幂等 upsert）
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!db_) {
+      if (err) *err = "database not open";
+      return false;
+    }
+    std::string upsert = "INSERT INTO schema_meta(key,value) VALUES('db_version','" +
+                         std::to_string(kTargetSchemaVersion) +
+                         "') ON CONFLICT(key) DO UPDATE SET value=excluded.value;";
+    char* msg = nullptr;
+    int rc = sqlite3_exec(db_, upsert.c_str(), nullptr, nullptr, &msg);
+    if (rc != SQLITE_OK) {
+      if (err) *err = msg ? std::string("schema_meta failed: ") + msg : std::string("schema_meta");
+      sqlite3_free(msg);
+      return false;
+    }
   }
-  std::string upsert = "INSERT INTO schema_meta(key,value) VALUES('db_version','" +
-                       std::to_string(kTargetSchemaVersion) +
-                       "') ON CONFLICT(key) DO UPDATE SET value=excluded.value;";
-  rc = sqlite3_exec(db_, upsert.c_str(), nullptr, nullptr, &msg);
-  if (rc != SQLITE_OK) {
-    if (err) *err = msg ? std::string("schema_meta failed: ") + msg : std::string("schema_meta");
-    sqlite3_free(msg);
-    return false;
-  }
-  logInfo("db", "schema migrated to version " + std::to_string(kTargetSchemaVersion));
+  logInfo("db", "schema migrated to version " + std::to_string(kTargetSchemaVersion) +
+                    (report.upToDate ? " (already current)" : ""));
   return true;
 }
 

@@ -1,5 +1,6 @@
--- LUMINA 全库表结构（schema_version=1）
+-- LUMINA 全库表结构（schema_version=2，M2 T2.2：新增 files 表 + photos.file_id）
 -- 本文件是唯一事实源：由 CMake 在配置期生成 schema_sql.inc，运行时执行
+-- 版本化增量（002/003/004）在 db/migrations.cpp，本文件只负责「全量幂等建表」。
 PRAGMA journal_mode=WAL;
 PRAGMA busy_timeout=5000;
 
@@ -19,6 +20,24 @@ CREATE TABLE IF NOT EXISTS folders(
   missing INT DEFAULT 0,
   UNIQUE(root_id, rel_path)
 );
+
+-- 四级表 · 文件身份（M2 T2.2 / migration 002，Q1）
+-- 身份 = (folder_id, name)：文件夹改名/移动只改 folders.rel_path，文件 id 不变。
+-- 注意：photos 表**不重建**（它是 photos_fts 的外部内容表），photos.file_id 由
+-- migrations.cpp 用 PRAGMA 守卫后 ALTER 追加。两处列定义必须保持一致。
+CREATE TABLE IF NOT EXISTS files(
+  id INTEGER PRIMARY KEY,
+  folder_id INT NOT NULL REFERENCES folders(id),
+  name TEXT NOT NULL,
+  format TEXT,
+  file_size INT,
+  md5 TEXT,
+  mtime INT,
+  missing INT DEFAULT 0,
+  health TEXT DEFAULT 'unchecked',
+  UNIQUE(folder_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_files_folder ON files(folder_id, name);
 
 CREATE TABLE IF NOT EXISTS photos(
   id INTEGER PRIMARY KEY,

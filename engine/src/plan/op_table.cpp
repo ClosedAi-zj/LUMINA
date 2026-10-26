@@ -169,6 +169,79 @@ class OutputOp : public Operator {
 
 }  // namespace
 
+// ---------------- 20 阶段顺序表（M2 T2.1，架构 §3.7） ----------------
+// 纪律：CI 只读；重排/删行 = MR 拒绝（S10）。第 2–6 行是 geometry.apply 的内部子步
+// （subStep 1..6），算子级子序列断言只看 subStep == 0 的行。
+const PipelineStageDesc kPipelineOrder[kPipelineOrderCount] = {
+    {1, "白平衡通道增益", Stage::S0Decode,
+     "basic.whiteBalance,basic.temperature,basic.tint", 0, Stage::S0Decode,
+     "scene-linear camera"},
+    {2, "镜头 profile 畸变（k1–k3）", Stage::S1Geometry, "", 1, Stage::S1Geometry,
+     "scene-linear working"},
+    {3, "色差校正（CA）", Stage::S1Geometry, "", 2, Stage::S1Geometry, "scene-linear working"},
+    {4, "光学暗角校正", Stage::S1Geometry, "", 3, Stage::S1Geometry, "scene-linear working"},
+    {5, "透视/变换（含 aspect）", Stage::S1Geometry, "", 4, Stage::S1Geometry,
+     "scene-linear working"},
+    {6, "裁剪 + 拉直 + 唯一一次重采样", Stage::S1Geometry, "", 6, Stage::S1Geometry,
+     "scene-linear working"},
+    {7, "降噪（色度→亮度）", Stage::S15Denoise, "detail.denoise", 0, Stage::S15Denoise,
+     "scene-linear working"},
+    {8, "局部对比", Stage::S2Tone, "basic.clarity,basic.texture", 0, Stage::S2Tone,
+     "scene-linear working"},
+    {9, "曝光", Stage::S2Tone, "basic.exposure", 0, Stage::S2Tone, "scene-linear working"},
+    {10, "对比", Stage::S2Tone, "basic.contrast", 0, Stage::S2Tone, "scene-linear working"},
+    {11, "高光/阴影/白/黑场", Stage::S2Tone,
+     "basic.highlights,basic.shadows,basic.whites,basic.blacks", 0, Stage::S2Tone,
+     "scene-linear working"},
+    {12, "去雾", Stage::S2Tone, "basic.dehaze", 0, Stage::S2Tone, "scene-linear working"},
+    {13, "原色校准", Stage::S2Tone,
+     "calibration.shadowTint,calibration.red,calibration.green,calibration.blue", 0,
+     Stage::S2Tone, "scene-linear working"},
+    {14, "自然饱和度/饱和度", Stage::S2Tone, "basic.vibrance,basic.saturation", 0, Stage::S2Tone,
+     "scene-linear working"},
+    {15, "tone map（唯一域分界）", Stage::S3ToneMap, "pipeline.toneMap", 0, Stage::S3ToneMap,
+     "display-referred"},
+    {16, "曲线（复合/分通道/参数）", Stage::S4Color,
+     "curve.toneCurveRGB,curve.toneCurveR,curve.toneCurveG,curve.toneCurveB,curve.parametric", 0,
+     Stage::S4Color, "display"},
+    {17, "HSL / 颜色分级", Stage::S4Color, "color.hsl,color.colorGrade", 0, Stage::S4Color,
+     "display"},
+    {18, "蒙版局部调整（M2 新增）", Stage::S4Color, "mask.apply", 0, Stage::S4Color, "display"},
+    {19, "锐化", Stage::S5Detail, "detail.sharpen", 0, Stage::S5Detail, "display"},
+    {20, "裁后暗角/颗粒 + 输出编码", Stage::S6Effects,
+     "effects.vignette,effects.grain,output.encode", 0, Stage::S7Output, "display → 8/16bit"},
+};
+
+int pipelineRowForOp(const std::string& opName) {
+  if (opName.empty()) return 0;
+  // ① 精确匹配表内算子（含逗号分隔的多算子行）
+  for (int i = 0; i < kPipelineOrderCount; ++i) {
+    const std::string ops = kPipelineOrder[i].ops;
+    size_t start = 0;
+    while (start <= ops.size()) {
+      size_t comma = ops.find(',', start);
+      if (comma == std::string::npos) comma = ops.size();
+      if (ops.compare(start, comma - start, opName) == 0) return kPipelineOrder[i].index;
+      if (comma == ops.size()) break;
+      start = comma + 1;
+    }
+  }
+  // ② S1 旧算子名兼容映射（T2.10 合并进 geometry.apply 后整段删除）。
+  //    全部映射到第 2 行 = 「geometry.apply 块」的入口行：第 2–6 行是同一个算子的
+  //    内部子步，子序由 tests/test_geometry_chain.cpp 断言（T2.10），不在本表层面判。
+  //    注意：当前实现里 geometry.crop 排在 geometry.perspective 之前，而 M2 目标
+  //    子序是「透视 → 裁剪」——这正是 O3/L1 要收口的那处顺序不一致，T2.10 修。
+  if (opName == "geometry.apply") return 2;
+  if (opName == "lens.profile") return 2;
+  if (opName == "lens.manualDistortion") return 2;
+  if (opName == "lens.chromaticAberration") return 2;
+  if (opName == "geometry.crop") return 2;
+  if (opName == "geometry.perspective") return 2;
+  // ③ ICC 输入（M4 实装；S4 首位，暂归第 16 行之前）
+  if (opName == "iccInput") return 15;
+  return 0;
+}
+
 bool registerBuiltinOps(OpTable* table, std::string* err) {
   bool ok = true;
   ok = registerBasicOps(table, err) && ok;

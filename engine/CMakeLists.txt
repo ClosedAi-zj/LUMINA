@@ -30,6 +30,7 @@ set(LUMINA_LINK_FLAGS "-static-libgcc -static-libstdc++")
 
 include_directories(
   "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  "${CMAKE_CURRENT_SOURCE_DIR}/tests"   # 测试工装头（tests/support/*.h）
   "${THIRDPARTY_DIR}"
   "${THIRDPARTY_DIR}/libraw"
   "${CMAKE_CURRENT_BINARY_DIR}"
@@ -54,6 +55,8 @@ set(LUMINA_SOURCES
   src/rpc/dispatcher.cpp
   src/rpc/methods.cpp
   src/db/database.cpp
+  src/db/migrations.cpp
+  src/db/image_dao.cpp
   src/db/photo_dao.cpp
   src/db/fts_indexer.cpp
   src/db/album_dao.cpp
@@ -231,6 +234,24 @@ add_executable(test_tone_zones tests/test_tone_zones.cpp)
 target_link_libraries(test_tone_zones PRIVATE lumina_core)
 set_target_properties(test_tone_zones PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
 add_test(NAME tone_zones COMMAND test_tone_zones)
+
+# M2 T2.1：分区统计器 + 判据表（K2 10 叶 + K3 dehaze，Q5 前置闸门）
+add_executable(test_leaf_effects tests/test_leaf_effects.cpp tests/support/region_stats.cpp)
+target_link_libraries(test_leaf_effects PRIVATE lumina_core)
+set_target_properties(test_leaf_effects PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME leaf_effects COMMAND test_leaf_effects)
+
+# M2 T2.1：20 阶段顺序表（O1）+ 顺序敏感反例（O2）
+add_executable(test_pipeline_order tests/test_pipeline_order.cpp)
+target_link_libraries(test_pipeline_order PRIVATE lumina_core)
+set_target_properties(test_pipeline_order PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME pipeline_order COMMAND test_pipeline_order)
+
+# M2 T2.2：四级表迁移幂等 + 图像身份稳定（移动/重命名后 photos.id 不变）
+add_executable(test_image_identity tests/test_image_identity.cpp)
+target_link_libraries(test_image_identity PRIVATE lumina_core)
+set_target_properties(test_image_identity PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME image_identity COMMAND test_image_identity)
 
 # M0 ΔE 基线工具（不入 ctest：依赖本机 RW2 样本；由 scripts/ci/deltae.py 编排）
 add_executable(deltae_baseline tests/color/delta_e_baseline.cpp)
