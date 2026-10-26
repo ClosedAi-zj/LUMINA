@@ -49,6 +49,7 @@ struct MigrationReport {
   int statementsRun = 0;   // 实际执行的 DDL/DML 语句数
   bool cancelled = false;
   bool upToDate = false;   // true = 版本已达标，本次 0 变更
+  int64_t durationMs = 0;  // 002 回填耗时（启动阻塞路径必须可观测，QA 要求）
   std::string detail;      // 可读说明（失败原因 / 未归位行数等）
 };
 

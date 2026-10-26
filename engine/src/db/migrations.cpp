@@ -34,18 +34,11 @@ int64_t queryInt(Database* db, const std::string& sql, const std::string& errCtx
   return v;
 }
 
-// SQL 文本字面量转义（单引号翻倍）。文件名可能含引号，必须转义而非拼接裸串。
-std::string quoteLiteral(const std::string& s) {
-  std::string out;
-  out.reserve(s.size() + 2);
-  out += '\'';
-  for (char c : s) {
-    out += c;
-    if (c == '\'') out += '\'';
-  }
-  out += '\'';
-  return out;
-}
+// ⚠ 性能纪律（QA 在 6c6224f 实测出的问题）：`Database::prepareCached` 自线程安全修复
+// 起每次调用都**新建**语句（见 database.cpp 的说明，key 被显式忽略）。因此凡在
+// 行级循环里调 prepareCached = 每行两次 sqlite3_prepare，实测 0.4 ms/行 →
+// 18,192 张 ≈ 7 s 启动阻塞。回填/重建这类热循环必须把语句 prepare 一次后
+// 在循环外持有（shared_ptr<Stmt>），循环内只 bind/step/reset 复用。
 
 }  // namespace
 
@@ -159,6 +152,37 @@ bool applyMigration002FilesTable(Database* db, MigrationReport* report, std::ato
   }
   if (progress) progress(0, "回填文件行 0/" + std::to_string(total));
 
+  // 行级热路径的 4 条语句全部 prepare 一次、循环内复用（性能纪律见文件头注释）：
+  // 修复前每行 2 次 prepareCached（每次都新建语句），实测 0.4 ms/行 → 18,192 张 ≈ 7 s。
+  auto scan = db->prepareCached(
+      "backfillScan",
+      "SELECT id, folder_id, file_name, file_id FROM photos WHERE id > ? ORDER BY id LIMIT ?;",
+      &e);
+  auto ins = db->prepareCached(
+      "backfillInsert",
+      "INSERT OR IGNORE INTO files(folder_id,name,format,file_size) VALUES(?,?,NULL,NULL);", &e);
+  auto sel =
+      db->prepareCached("backfillSelect", "SELECT id FROM files WHERE folder_id=? AND name=? "
+                                          "LIMIT 1;",
+                        &e);
+  auto upd = db->prepareCached("backfillUpdate", "UPDATE photos SET file_id=? WHERE id=?;", &e);
+  if (!scan || !scan->valid() || !ins || !ins->valid() || !sel || !sel->valid() || !upd ||
+      !upd->valid()) {
+    if (err) *err = kMigrationBackfillFailed;
+    rep.detail = "backfill prepare failed: " + e;
+    logError("migrate", rep.detail);
+    return false;
+  }
+  struct Row {
+    int64_t id;
+    bool hasFolder;
+    int64_t folderId;
+    std::string name;
+    bool hasFile;
+    int64_t fileId;
+  };
+
+  const int64_t backfillT0 = nowMs();
   int64_t done = 0;
   int64_t lastId = 0;
   while (true) {
@@ -170,37 +194,24 @@ bool applyMigration002FilesTable(Database* db, MigrationReport* report, std::ato
       if (err) *err = kMigrationCancelled;
       return false;
     }
-    // 分页扫 photos（按 id 递增，避免一次 load 全表）
-    std::string sql =
-        "SELECT id, folder_id, file_name, file_id FROM photos WHERE id > " +
-        std::to_string(lastId) + " ORDER BY id LIMIT " + std::to_string(kBackfillChunk) + ";";
-    auto stmt = db->prepareCached("backfillScan", sql, &e);
-    if (!stmt || !stmt->valid()) {
-      if (err) *err = kMigrationBackfillFailed;
-      rep.detail = "backfill scan failed: " + e;
-      logError("migrate", rep.detail);
-      return false;
-    }
-    struct Row {
-      int64_t id;
-      bool hasFolder;
-      int64_t folderId;
-      std::string name;
-      bool hasFile;
-      int64_t fileId;
-    };
+    // 分页扫 photos（按 id 递增，避免一次 load 全表）。
+    // 语句在循环外 prepare 一次（性能纪律见文件头注释），分页参数走绑定。
     std::vector<Row> rows;
-    while (stmt->step(nullptr)) {
-      Row r;
-      r.id = stmt->columnInt64(0);
-      r.hasFolder = !stmt->columnIsNull(1);
-      r.folderId = stmt->columnInt64(1);
-      r.name = stmt->columnText(2);
-      r.hasFile = !stmt->columnIsNull(3);
-      r.fileId = stmt->columnInt64(3);
-      rows.push_back(r);
+    {
+      scan->bindInt64(1, lastId);
+      scan->bindInt64(2, kBackfillChunk);
+      while (scan->step(nullptr)) {
+        Row r;
+        r.id = scan->columnInt64(0);
+        r.hasFolder = !scan->columnIsNull(1);
+        r.folderId = scan->columnInt64(1);
+        r.name = scan->columnText(2);
+        r.hasFile = !scan->columnIsNull(3);
+        r.fileId = scan->columnInt64(3);
+        rows.push_back(r);
+      }
+      scan->reset();
     }
-    stmt->reset();
     if (rows.empty()) break;
     lastId = rows.back().id;
 
@@ -216,18 +227,8 @@ bool applyMigration002FilesTable(Database* db, MigrationReport* report, std::ato
         ++rep.photosUnlinked;
         continue;
       }
-      // files 行：INSERT OR IGNORE 后回查 id（幂等；冲突即已存在）
-      auto ins = db->prepareCached(
-          "backfillInsert",
-          "INSERT OR IGNORE INTO files(folder_id,name,format,file_size) VALUES(?,?,NULL,NULL);",
-          &e);
-      if (!ins || !ins->valid()) {
-        db->rollback(nullptr);
-        if (err) *err = kMigrationBackfillFailed;
-        rep.detail = "backfill insert prepare failed: " + e;
-        logError("migrate", rep.detail);
-        return false;
-      }
+      // files 行：INSERT OR IGNORE 后回查 id（幂等；冲突即已存在）。
+      // ins/sel/upd 三个语句全部在循环外 prepare，这里只绑定与执行。
       ins->bindInt64(1, r.folderId);
       ins->bindText(2, r.name);
       ins->step(nullptr);
@@ -235,10 +236,11 @@ bool applyMigration002FilesTable(Database* db, MigrationReport* report, std::ato
       ++rep.statementsRun;
       if (db->changes() > 0) ++rep.filesInserted;
 
-      const int64_t fileId = queryInt(
-          db, "SELECT id FROM files WHERE folder_id=" + std::to_string(r.folderId) + " AND name=" +
-                  quoteLiteral(r.name) + " LIMIT 1;",
-          "backfillSelect", err);
+      sel->bindInt64(1, r.folderId);
+      sel->bindText(2, r.name);
+      int64_t fileId = 0;
+      if (sel->step(nullptr)) fileId = sel->columnInt64(0);
+      sel->reset();
       if (fileId <= 0) {
         db->rollback(nullptr);
         if (err) *err = kMigrationBackfillFailed;
@@ -247,14 +249,6 @@ bool applyMigration002FilesTable(Database* db, MigrationReport* report, std::ato
         return false;
       }
       if (!r.hasFile || r.fileId != fileId) {
-        auto upd = db->prepareCached("backfillUpdate", "UPDATE photos SET file_id=? WHERE id=?;", &e);
-        if (!upd || !upd->valid()) {
-          db->rollback(nullptr);
-          if (err) *err = kMigrationBackfillFailed;
-          rep.detail = "backfill update prepare failed: " + e;
-          logError("migrate", rep.detail);
-          return false;
-        }
         upd->bindInt64(1, fileId);
         upd->bindInt64(2, r.id);
         upd->step(nullptr);
@@ -280,8 +274,18 @@ bool applyMigration002FilesTable(Database* db, MigrationReport* report, std::ato
     rep.detail = std::to_string(rep.photosUnlinked) + " 行 photos 缺少 folder_id/文件名，未建立文件身份";
     logWarn("migrate", rep.detail);
   }
+  // 耗时留痕：迁移是启动阻塞路径，回填耗时必须可观测（QA 要求，防再次退化）
+  const int64_t backfillMs = nowMs() - backfillT0;
+  rep.durationMs = backfillMs;
+  logInfo("migrate", "002 backfill: " + std::to_string(done) + " rows in " +
+                         std::to_string(backfillMs) + " ms" +
+                         (done > 0 ? " (" +
+                                         std::to_string((backfillMs * 1000) / std::max<int64_t>(done, 1)) +
+                                         " us/row)"
+                                   : ""));
   if (progress) progress(100, "回填完成：files +" + std::to_string(rep.filesInserted) + "，关联 " +
-                                 std::to_string(rep.photosLinked));
+                                 std::to_string(rep.photosLinked) + "，耗时 " +
+                                 std::to_string(backfillMs) + " ms");
   return true;
 }
 

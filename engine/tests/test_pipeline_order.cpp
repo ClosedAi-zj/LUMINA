@@ -603,6 +603,9 @@ int main() {
   testCompiledOrderMatchesO2();
   testOrderSensitiveCounterexamples();
   testClampDependency();
+  // CI 可见性（架构 §3.7：M2 出口 = 零 SKIP）：SKIP 数以可解析格式打到 stdout，
+  // 供 CI 统计；ctest 的 PASS 不代表 0 SKIP，必须看这一行。
+  std::printf("[SKIP-COUNT] %d\n", g_skip);
   std::printf("\n%s (%d failures, %d skipped)\n", g_fail == 0 ? "ALL PASS" : "FAILED", g_fail,
               g_skip);
   return g_fail == 0 ? 0 : 1;

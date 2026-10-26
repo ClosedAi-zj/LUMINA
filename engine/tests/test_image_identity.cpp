@@ -240,16 +240,19 @@ int main() {
     std::printf("    conflict relocate → ok=%d err=%s\n", conflictOk ? 1 : 0,
                 conflictErr.c_str());
     CHECK(!conflictOk && !conflictErr.empty(), "I6：目标 file_path 冲突时显式失败并给出原因");
-    // 冲突时不得留下半搬迁状态：p2 的 folder 归属必须还是原文件夹
-    CHECK(scalarInt(&db, "SELECT folder_id FROM photos WHERE id=" + std::to_string(p2Id) + ";") !=
-              folderB,
-          "I6：冲突失败后 folder 归属未被改写");
+    // 冲突时不得留下半搬迁状态：p2 的 folder 归属必须仍是原文件夹（folderA）
+    // 严格断言（QA 指出 != folderB 是弱断言：folder 归属被改去任何第三个文件夹也算过）
+    CHECK(scalarInt(&db, "SELECT folder_id FROM photos WHERE id=" + std::to_string(p2Id) + ";") ==
+              folderA,
+          "I6：冲突失败后 folder 归属仍是原文件夹（== folderA）");
   }
 
   db.close();
   removeFile(dbPath);
   removeFile(dbPath + "-wal");
   removeFile(dbPath + "-shm");
+  // CI 可见性：本测试无 SKIP 路径，仍按约定输出（缺失即 CI 无法统计）
+  std::printf("[SKIP-COUNT] 0\n");
   std::printf("\n%s (%d failures)\n", g_fail == 0 ? "ALL PASS" : "FAILED", g_fail);
   return g_fail == 0 ? 0 : 1;
 }

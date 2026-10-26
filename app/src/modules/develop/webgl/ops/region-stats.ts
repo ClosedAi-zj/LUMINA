@@ -1,8 +1,15 @@
 /**
  * M2 T2.1 · 分区统计器（GPU 侧同式实现）
  *
- * 与引擎 `engine/tests/support/region_stats.{h,cpp}` **逐字同式**：
- * 同一批指标、同一套阈值、同一套「生效 / 无操作」互斥语义。
+ * 与引擎 `engine/tests/support/region_stats.{h,cpp}` 同式（逐函数对应，可核对）：
+ *   computeRegionStats          ↔ computeRegionStats（8bit 入口，⑦c 口径回归用）
+ *   computeBlockVarPlane        ↔ computeBlockVarPlane（16×16 块方差平面，块内同值）
+ *   planeVarianceAt / planeMean ↔ planeVariance / planeMean（总体方差，除以 N）
+ *   compareRegionStats          ↔ compareRegionStats（基线桶归属复用）
+ *   LEAF_CRITERIA / assertEffective / assertNoOp ↔ leaf_effect_table.h（同一张表）
+ * 任何一侧改动都必须同步另一侧并给出两侧同值的对拍证据（QA 实测过一次 16.7 倍的分叉，
+ * 就是「逐字同式」没有可核对锚点的代价）。
+ *
  * 用途：smoke ⑦d「导出 = 预览（含蒙版）」读回像素后，用同一口径判定
  * 「蒙版局部调整是否真的生效」，而不是拿 8bit 整幅均值糊过去（K2/K3 教训）。
  *
@@ -46,6 +53,8 @@ export interface RegionStats {
   aPlane: Float64Array;
   bPlane: Float64Array;
   varPlane: Float64Array;
+  /** a-star 与 b-star 的 16×16 块方差之和（与引擎 chromaVarPlane 同式；降噪判据 chromaVarRelChange 的来源） */
+  chromaVarPlane: Float64Array;
   edgePlane: Float64Array;
   quartileOf: Uint8Array;
   globalMeanLum: number;
@@ -106,17 +115,6 @@ function planeMean(v: Float64Array): number {
   return s / v.length;
 }
 
-function planeVarianceAll(v: Float64Array): number {
-  if (v.length === 0) return 0;
-  const mean = planeMean(v);
-  let acc = 0;
-  for (let i = 0; i < v.length; i += 1) {
-    const d = v[i] - mean;
-    acc += d * d;
-  }
-  return acc / v.length;
-}
-
 function planeVarianceAt(v: Float64Array, idx: number[]): number {
   if (idx.length === 0) return 0;
   let s = 0;
@@ -128,6 +126,34 @@ function planeVarianceAt(v: Float64Array, idx: number[]): number {
     acc += d * d;
   }
   return acc / idx.length;
+}
+
+/**
+ * 16×16 块方差平面（与引擎 `computeBlockVarPlane` 同式）：
+ * 多平面各自求块方差后按权重相加，块内所有像素同值。
+ */
+function computeBlockVarPlane(
+  planes: Float64Array[],
+  weights: number[],
+  width: number,
+  height: number,
+  out: Float64Array,
+): void {
+  for (let by = 0; by < height; by += VAR_BLOCK) {
+    for (let bx = 0; bx < width; bx += VAR_BLOCK) {
+      const x1 = Math.min(width, bx + VAR_BLOCK);
+      const y1 = Math.min(height, by + VAR_BLOCK);
+      const idx: number[] = [];
+      for (let y = by; y < y1; y += 1) {
+        for (let x = bx; x < x1; x += 1) idx.push(y * width + x);
+      }
+      let v = 0;
+      for (let k = 0; k < planes.length; k += 1) {
+        v += weights[k] * planeVarianceAt(planes[k], idx);
+      }
+      for (const i of idx) out[i] = v;
+    }
+  }
 }
 
 function gridBoundary(i: number, n: number): number {
@@ -163,20 +189,16 @@ export function computeRegionStats(
     bPlane[i] = B;
   }
 
-  // 16×16 块方差（三通道平均，块内同值）
+  // 16×16 块方差平面（与引擎 computeBlockVarPlane 同式：多平面加权求和，块内同值）。
+  //   varPlane      = 三通道块方差 × 1/3（保均值算子判据）
+  //   chromaVarPlane= a*/b* 两平面块方差之和（权重 1.0；降噪判据，见下）
+  // ⚠ chromaVar 必须是「块方差的均值」而不是全图方差：全图方差会把大尺度色相结构
+  //   混进分母，对零均值色噪不灵敏（QA 实测同图同降噪：全图口径 −2.73% 漏判 vs
+  //   16×16 块口径 −45.54% 判出，差 16.7 倍）——这正是 K2 陷阱的 GPU 侧复刻。
   const varPlane = new Float64Array(n);
-  for (let by = 0; by < height; by += VAR_BLOCK) {
-    for (let bx = 0; bx < width; bx += VAR_BLOCK) {
-      const x1 = Math.min(width, bx + VAR_BLOCK);
-      const y1 = Math.min(height, by + VAR_BLOCK);
-      const idx: number[] = [];
-      for (let y = by; y < y1; y += 1) {
-        for (let x = bx; x < x1; x += 1) idx.push(y * width + x);
-      }
-      const v = (planeVarianceAt(rp, idx) + planeVarianceAt(gp, idx) + planeVarianceAt(bp, idx)) / 3;
-      for (const i of idx) varPlane[i] = v;
-    }
-  }
+  computeBlockVarPlane([rp, gp, bp], [1 / 3, 1 / 3, 1 / 3], width, height, varPlane);
+  const chromaVarPlane = new Float64Array(n);
+  computeBlockVarPlane([aPlane, bPlane], [1.0, 1.0], width, height, chromaVarPlane);
 
   // Sobel（亮度平面；边界记 0）
   const edgePlane = new Float64Array(n);
@@ -258,10 +280,12 @@ export function computeRegionStats(
     aPlane,
     bPlane,
     varPlane,
+    chromaVarPlane,
     edgePlane,
     quartileOf,
     globalMeanLum: planeMean(lumPlane),
-    chromaVar: planeVarianceAll(aPlane) + planeVarianceAll(bPlane),
+    // 与引擎 region_stats.cpp 同式：chromaVar = planeMean(computeBlockVarPlane({a,b}))
+    chromaVar: planeMean(chromaVarPlane),
   };
   stats.quartiles = aggregateBuckets(stats, quartileOf);
   return stats;
@@ -450,8 +474,20 @@ function conditionHolds(v: number, threshold: number, dir: Direction, noOp: bool
   }
 }
 
-/** 生效：所有条件按方向成立 */
+/**
+ * 方向性条件是否存在（与引擎 hasDirectionalCondition 同式）。
+ * 「生效/无操作」互斥的结构性来源：kIncrease 的两区间 [t,∞) 与 (−∞,0.5t] 不相交，
+ * kDecrease 同理；纯 kAtMost/kNone 行的「生效」条件对任何小值都成立，无法互斥，
+ * 必须被 assertEffective 结构性拒绝。
+ */
+function hasDirectionalCondition(c: LeafCriterion): boolean {
+  const directional = (d: Direction) => d === 'increase' || d === 'decrease';
+  return directional(c.dir1) || (c.metric2 !== 'none' && directional(c.dir2));
+}
+
+/** 生效：所有条件按方向成立（无方向性条件的退化行结构性拒绝，互斥不靠 assertNoOp 兜底） */
 export function assertEffective(d: LeafDelta, c: LeafCriterion): boolean {
+  if (!hasDirectionalCondition(c)) return false;
   if (!conditionHolds(metricValue(d, c.metric1), c.threshold1, c.dir1, false)) return false;
   if (c.metric2 !== 'none') {
     if (!conditionHolds(metricValue(d, c.metric2), c.threshold2, c.dir2, false)) return false;

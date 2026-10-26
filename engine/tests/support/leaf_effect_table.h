@@ -181,8 +181,28 @@ inline bool conditionHolds(double v, double threshold, Dir dir, bool noOp) {
   return true;
 }
 
+// 方向性条件（kIncrease/kDecrease）是否存在 —— 「生效/无操作」互斥的**结构性**来源：
+//   kIncrease：生效 v ≥ t，无操作 v ≤ t×0.5 —— 两区间不相交（t>0）
+//   kDecrease：生效 v ≤ t，无操作 v ≥ t×0.5 —— 两区间不相交（t<0）
+// kAtOnly / kNone（kAtMost / kNone）的「生效」条件 v ≤ t 对任何小值都成立，
+// 与无操作区间相交，**纯 kAtMost 行无法构成互斥判据**。因此 assertEffective 对
+// 没有方向性条件的行必须结构性拒绝（而不是靠 assertNoOp 的首行兜底）——
+// 否则互斥就是同义反复，测试恒真（QA 在 6c6224f 上实锤过这一点）。
+inline bool hasDirectionalCondition(const LeafCriterion& c) {
+  const auto directional = [](Dir d) { return d == Dir::kIncrease || d == Dir::kDecrease; };
+  return directional(c.dir1) || (c.metric2 != Metric::kNone && directional(c.dir2));
+}
+
 // 生效：所有条件按方向成立
 inline bool assertEffective(const LeafDelta& d, const LeafCriterion& c, std::string* why) {
+  // 结构性闸门：无方向性条件的行是「永真生效」的退化行，直接拒绝。
+  // 这一检查必须在读任何指标值**之前**——保证互斥不依赖 assertNoOp 的首行兜底。
+  if (!hasDirectionalCondition(c)) {
+    if (why) {
+      *why = std::string(c.leaf) + ": 判据行无效（无方向性条件，无法与「无操作」互斥）";
+    }
+    return false;
+  }
   const double v1 = metricValue(d, c.metric1);
   if (!conditionHolds(v1, c.threshold1, c.dir1, false)) {
     if (why) {
@@ -205,7 +225,9 @@ inline bool assertEffective(const LeafDelta& d, const LeafCriterion& c, std::str
   return true;
 }
 
-// 无操作：所有指标 ≤ 阈值 × 0.5，且必须与 assertEffective 互斥（内部兜底）
+// 无操作：所有指标 ≤ 阈值 × 0.5。
+// 互斥的来源是**结构性的**（方向性条件两区间不相交 + assertEffective 对退化行的
+// 闸门），下面的首行兜底只是第二道保险（防御将来有人加出退化行）。
 inline bool assertNoOp(const LeafDelta& d, const LeafCriterion& c, std::string* why) {
   if (assertEffective(d, c, nullptr)) {
     if (why) {

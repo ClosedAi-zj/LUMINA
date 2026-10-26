@@ -243,6 +243,9 @@ set_target_properties(test_leaf_effects PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLA
 add_test(NAME leaf_effects COMMAND test_leaf_effects)
 
 # M2 T2.1：20 阶段顺序表（O1）+ 顺序敏感反例（O2）
+# ⚠ M2 出口判据（架构 §3.7）：该测试 stdout 的 `[SKIP-COUNT] n` 必须为 0
+#   （当前 mask.apply 是 IdentityOp，蒙版组记 SKIP=1，T2.6 实装后必须归零）。
+#   ctest 的 PASS 不代表零 SKIP，CI 需单独解析这一行。
 add_executable(test_pipeline_order tests/test_pipeline_order.cpp)
 target_link_libraries(test_pipeline_order PRIVATE lumina_core)
 set_target_properties(test_pipeline_order PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")

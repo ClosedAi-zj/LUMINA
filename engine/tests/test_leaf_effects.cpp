@@ -273,37 +273,79 @@ static void testHueAxisDirection() {
 }
 
 // ---- 2. 互斥性：同一 LeafDelta 不可能同时满足两个断言 ----
+// 互斥必须是**结构性的**，不能靠 assertNoOp 首行兜底（那是同义反复，测试恒真，
+// QA 在 6c6224f 上实锤过）。这里做三层证据：
+//   ① 阈值点：eff=true 且 noop=false；
+//   ② 0.75t 第三态：eff=false 且 noop=false（两态都不吞，不静默）；
+//   ③ 结构性反例：纯 kAtMost 行（无方向性条件）必须被 assertEffective 结构性拒绝
+//      （拒绝理由含「无效」），互斥不依赖任何兜底。
+static void setMetric(lumina::testsupport::LeafDelta* d, lumina::testsupport::Metric m,
+                      double v) {
+  using lumina::testsupport::Metric;
+  switch (m) {
+    case Metric::kMaxCellLumDelta: d->maxCellLumDelta = v; break;
+    case Metric::kMaxCellChromaDelta: d->maxCellChromaDelta = v; break;
+    case Metric::kMaxCellChromaDeltaAbs: d->maxCellChromaDeltaAbs = v; break;
+    case Metric::kVarRelChange: d->varRelChange = v; break;
+    case Metric::kEdgeRelChange: d->edgeRelChange = v; break;
+    case Metric::kQuartileLumDelta0: d->quartileLumDelta[0] = v; break;
+    case Metric::kGlobalMeanDelta: d->globalMeanDelta = v; break;
+    case Metric::kChromaVarRelChange: d->chromaVarRelChange = v; break;
+    case Metric::kNone: break;
+  }
+}
+
 static void testMutualExclusion() {
-  std::printf("testMutualExclusion（Q5 硬要求：生效与无操作互斥）\n");
+  std::printf("testMutualExclusion（Q5：互斥必须结构性成立，含 0.75t 第三态）\n");
   for (size_t i = 0; i < lumina::testsupport::kLeafCriteriaCount; ++i) {
     const LeafCriterion& c = lumina::testsupport::kLeafCriteria[i];
-    LeafDelta d;
-    // 把第一条件推到「刚好达标」的位置
-    const double v = c.threshold1;
-    switch (c.metric1) {
-      case lumina::testsupport::Metric::kMaxCellLumDelta: d.maxCellLumDelta = v; break;
-      case lumina::testsupport::Metric::kMaxCellChromaDelta: d.maxCellChromaDelta = v; break;
-      case lumina::testsupport::Metric::kMaxCellChromaDeltaAbs: d.maxCellChromaDeltaAbs = v; break;
-      case lumina::testsupport::Metric::kVarRelChange: d.varRelChange = v; break;
-      case lumina::testsupport::Metric::kEdgeRelChange: d.edgeRelChange = v; break;
-      case lumina::testsupport::Metric::kQuartileLumDelta0: d.quartileLumDelta[0] = v; break;
-      case lumina::testsupport::Metric::kGlobalMeanDelta: d.globalMeanDelta = v; break;
-      case lumina::testsupport::Metric::kChromaVarRelChange: d.chromaVarRelChange = v; break;
-      case lumina::testsupport::Metric::kNone: break;
+    // ① 阈值点：每个条件都恰好压在阈值上 → 生效，且不可能是无操作
+    {
+      lumina::testsupport::LeafDelta d;
+      setMetric(&d, c.metric1, c.threshold1);
+      if (c.metric2 != lumina::testsupport::Metric::kNone) setMetric(&d, c.metric2, c.threshold2);
+      const bool eff = lumina::testsupport::assertEffective(d, c, nullptr);
+      const bool noop = lumina::testsupport::assertNoOp(d, c, nullptr);
+      CHECK(eff && !noop,
+            (std::string("阈值点 eff=true && noop=false: ") + c.leaf).c_str());
     }
-    if (c.metric2 != lumina::testsupport::Metric::kNone) {
-      const double v2 = c.threshold2;
-      switch (c.metric2) {
-        case lumina::testsupport::Metric::kGlobalMeanDelta: d.globalMeanDelta = v2; break;
-        case lumina::testsupport::Metric::kChromaVarRelChange: d.chromaVarRelChange = v2; break;
-        case lumina::testsupport::Metric::kVarRelChange: d.varRelChange = v2; break;
-        default: break;
-      }
+    // ② 0.75t 第三态：两个断言都必须是 false——落在两区间之间的缝隙里，
+    //    绝不允许被任何一方静默吞掉（这正是「恒真测试」照不出来的暗区）
+    {
+      lumina::testsupport::LeafDelta d;
+      setMetric(&d, c.metric1, c.threshold1 * 0.75);
+      if (c.metric2 != lumina::testsupport::Metric::kNone)
+        setMetric(&d, c.metric2, c.threshold2 * 0.75);
+      const bool eff = lumina::testsupport::assertEffective(d, c, nullptr);
+      const bool noop = lumina::testsupport::assertNoOp(d, c, nullptr);
+      CHECK(!eff && !noop,
+            (std::string("0.75t 第三态 eff=false && noop=false: ") + c.leaf).c_str());
     }
-    const bool eff = lumina::testsupport::assertEffective(d, c, nullptr);
-    const bool noop = lumina::testsupport::assertNoOp(d, c, nullptr);
-    CHECK(eff && !noop, (std::string("阈值点：assertEffective 成立且 assertNoOp 不成立: ") + c.leaf)
-                            .c_str());
+  }
+  // ③ 结构性反例：纯 kAtMost 行。QA 用 v=0.1 验证过：修复前 assertEffective 会判成
+  //    true（v ≤ t 对任何小值都成立），互斥完全靠 assertNoOp 首行兜底 = 同义反复。
+  //    修复后 assertEffective 必须在读指标值**之前**就结构性拒绝该行。
+  {
+    lumina::testsupport::LeafCriterion bad{};
+    bad.leaf = "synthetic.pureAtMost";
+    bad.op = "synthetic.op";
+    bad.step = 10.0;
+    bad.metric1 = lumina::testsupport::Metric::kGlobalMeanDelta;
+    bad.threshold1 = 1.0;
+    bad.dir1 = lumina::testsupport::Dir::kAtMost;
+    bad.metric2 = lumina::testsupport::Metric::kNone;
+    bad.threshold2 = 0.0;
+    bad.dir2 = lumina::testsupport::Dir::kNone;
+    bad.note = "测试合成的退化行（QA 反例）";
+    lumina::testsupport::LeafDelta d;
+    d.globalMeanDelta = 0.1;  // QA 的反例值：修复前会判成 eff=1 / noop=0
+    std::string why;
+    const bool eff = lumina::testsupport::assertEffective(d, bad, &why);
+    const bool noop = lumina::testsupport::assertNoOp(d, bad, nullptr);
+    CHECK(!eff, "纯 kAtMost 行：assertEffective 结构性拒绝（eff=false）");
+    CHECK(why.find("无效") != std::string::npos,
+          "拒绝理由是「判据行无效」（结构性，而非数值未达标）: " + why);
+    CHECK(noop, "纯 kAtMost 行 + 0.1：assertNoOp 成立（互斥成立且不靠兜底）");
   }
 }
 
@@ -358,6 +400,8 @@ int main() {
   testHueAxisDirection();
   testMutualExclusion();
   testLegacyMeanRegression();
+  // CI 可见性：本测试无 SKIP 路径，仍按约定输出（缺失即 CI 无法统计）
+  std::printf("[SKIP-COUNT] 0\n");
   std::printf("\n%s (%d failures)\n", g_fail == 0 ? "ALL PASS" : "FAILED", g_fail);
   return g_fail == 0 ? 0 : 1;
 }

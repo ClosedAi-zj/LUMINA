@@ -69,7 +69,10 @@ class Database {
   bool runMigrations(std::string* err);
   int schemaVersion() const;
 
-  // 预编译语句缓存（同一 SQL 复用，key 由调用方给定）
+  // 语句工厂（⚠ 名字里的 cached 已名不副实）：因线程安全修复（见 database.cpp
+  // prepareCached 的说明），每次调用都**新建**语句，key 仅用于错误定位。
+  // 行级热循环（迁移回填 / 缓存重建）不得依赖它做「缓存」——请在循环外
+  // 持有返回的 shared_ptr<Stmt>，循环内 bind/step/reset 复用。
   std::shared_ptr<Stmt> prepareCached(const std::string& key, const std::string& sql,
                                       std::string* err);
 
