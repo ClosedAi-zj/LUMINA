@@ -220,6 +220,13 @@ target_link_libraries(test_xmp_nodegraph PRIVATE lumina_core)
 set_target_properties(test_xmp_nodegraph PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
 add_test(NAME xmp_nodegraph COMMAND test_xmp_nodegraph)
 
+# M2 T2.5：蒙版协议 v3（v2→v3 幂等字节稳定 / combine 缺省 replace / crs: 字节保留 /
+# 叶 #94 键表 / 存量迁移抽样方案 ×50）
+add_executable(test_xmp_mask_v3 tests/test_xmp_mask_v3.cpp)
+target_link_libraries(test_xmp_mask_v3 PRIVATE lumina_core)
+set_target_properties(test_xmp_mask_v3 PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME xmp_mask_v3 COMMAND test_xmp_mask_v3)
+
 add_executable(test_ops93 tests/test_ops93.cpp)
 target_link_libraries(test_ops93 PRIVATE lumina_core)
 set_target_properties(test_ops93 PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")

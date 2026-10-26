@@ -85,7 +85,7 @@ static std::string makeV1Sidecar(const JsonValue& params, std::string* err) {
   return out;
 }
 
-// case1：v1→v2 迁移核心：SchemaVersion 升 2 + NodeGraph 写入 + 幂等
+// case1：v1→v3 迁移核心（T2.5 后一步到位）：SchemaVersion 升 3 + NodeGraph 写入 + 幂等
 static void testMigrateCore() {
   std::string err;
   JsonValue params = makeV1Params();
@@ -94,13 +94,13 @@ static void testMigrateCore() {
   std::unique_ptr<XmpDocument> doc = XmpDocument::parse(v1, &err);
   CHECK(doc != nullptr, "v1 parse");
   CHECK(XmpMigrator::migrateDocument(doc.get(), &err), "migrate ok");
-  const std::string v2 = doc->serialize();
-  CHECK(doc->getInt("lumina", "SchemaVersion", 0) == 2, "schema bumped to 2");
+  const std::string v3 = doc->serialize();
+  CHECK(doc->getInt("lumina", "SchemaVersion", 0) == 3, "schema bumped to 3");
   CHECK(doc->has("lumina", "NodeGraph"), "NodeGraph present");
   // 幂等：再迁移一次字节不变
-  std::unique_ptr<XmpDocument> doc2 = XmpDocument::parse(v2, &err);
+  std::unique_ptr<XmpDocument> doc2 = XmpDocument::parse(v3, &err);
   CHECK(XmpMigrator::migrateDocument(doc2.get(), &err), "migrate again ok");
-  CHECK(doc2->serialize() == v2, "migration idempotent (byte-stable)");
+  CHECK(doc2->serialize() == v3, "migration idempotent (byte-stable)");
 }
 
 // case2：crs: 字节保留（只增不改）+ 无关字段逐字节不变
@@ -218,13 +218,13 @@ static void testAdjustmentStackMapping() {
   CHECK(g2.nodes.size() == 9, "layer node persisted");
 }
 
-// case5：schemaVersion>2 跳过不猜测
+// case5：schemaVersion>3 跳过不猜测（1006 schemaTooNew 口径）
 static void testTooNewSkipped() {
   std::string err;
   JsonValue params = makeV1Params();
   const std::string v1 = makeV1Sidecar(params, &err);
   std::unique_ptr<XmpDocument> doc = XmpDocument::parse(v1, &err);
-  doc->setText("lumina", "SchemaVersion", "3");
+  doc->setText("lumina", "SchemaVersion", "4");
   const std::string before = doc->serialize();
   CHECK(XmpMigrator::migrateDocument(doc.get(), &err), "too-new skipped ok");
   CHECK(doc->serialize() == before, "too-new untouched");

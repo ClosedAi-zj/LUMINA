@@ -36,6 +36,10 @@ json::JsonValue gmaskToJson(const GraphMask& m) {
   v.setItem("type", m.type);
   v.setItem("enabled", m.enabled);
   v.setItem("opacity", static_cast<int64_t>(m.opacity));
+  // T2.5 v3：combine 恒写（迁移规则「v2→v3 只增 combine」由此满足）；
+  // amount 缺省 100 时省略（写端省缺省值 → v2 存量 JSON 往返字节稳定）
+  v.setItem("combine", maskCombineName(m.combine));
+  if (m.amount != 100) v.setItem("amount", static_cast<int64_t>(m.amount));
   v.setItem("geometry", m.geometry);
   v.setItem("range", m.range);
   v.setItem("strokes", m.strokes);
@@ -55,6 +59,18 @@ bool gmaskFromJson(const json::JsonValue& v, GraphMask* m, std::string* err) {
   }
   m->enabled = v.get("enabled").asBool(true);
   m->opacity = static_cast<int>(v.get("opacity").asInt(100));
+  // T2.5 v3：combine 缺省 replace（v2 蒙版无该字段 → 同值语义，不改观感）；
+  // 出现但非法 → 显式失败（零静默，不猜测）
+  if (v.contains("combine")) {
+    if (!maskCombineFromString(v.get("combine").asString(), &m->combine)) {
+      if (err) *err = "mask '" + m->id + "': invalid combine '" +
+                      v.get("combine").asString() + "'";
+      return false;
+    }
+  } else {
+    m->combine = MaskCombine::Replace;
+  }
+  m->amount = static_cast<int>(v.get("amount").asInt(100));
   m->geometry = v.get("geometry");
   m->range = v.get("range");
   m->strokes = v.get("strokes");
@@ -92,11 +108,12 @@ bool graphFromJson(const json::JsonValue& v, NodeGraph* out, std::string* err) {
     return false;
   }
   const int64_t ver = v.get("schemaVersion").asInt(0);
-  if (ver < 0 || ver > 2) {
+  // T2.5：接受 ver ≤ 3（v2 读端向后可读；v3 = combine + 94 叶口径）
+  if (ver < 1 || ver > 3) {
     if (err) *err = "graphFromJson: unsupported schemaVersion";
     return false;
   }
-  out->schemaVersion = 2;
+  out->schemaVersion = static_cast<int>(ver);
   out->nodes.clear();
   out->masks.clear();
   const json::JsonValue& nodes = v.get("nodes");

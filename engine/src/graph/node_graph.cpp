@@ -42,6 +42,32 @@ bool isBlendModeValid(const std::string& m) {
          m == "overlay" || m == "softLight";
 }
 
+// T2.5：MaskCombine 字符串映射（sidecar JSON 口径，缺省 replace）
+const char* maskCombineName(MaskCombine c) {
+  switch (c) {
+    case MaskCombine::Intersect: return "intersect";
+    case MaskCombine::Subtract: return "subtract";
+    case MaskCombine::Replace: return "replace";
+    default: return "replace";
+  }
+}
+
+bool maskCombineFromString(const std::string& s, MaskCombine* out) {
+  if (s == "replace") {
+    if (out) *out = MaskCombine::Replace;
+    return true;
+  }
+  if (s == "intersect") {
+    if (out) *out = MaskCombine::Intersect;
+    return true;
+  }
+  if (s == "subtract") {
+    if (out) *out = MaskCombine::Subtract;
+    return true;
+  }
+  return false;
+}
+
 json::JsonValue defaultParamsFor(NodeType t) {
   json::JsonValue p = json::JsonValue::objectValue();
   switch (t) {

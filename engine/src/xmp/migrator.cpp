@@ -35,6 +35,11 @@ bool XmpMigrator::migrateDocument(XmpDocument* doc, std::string* err) {
   // ② lumina:AdjustmentStack 层映射为节点（在 paramsToGraph 内完成），
   //    映射后写空数组 + Deprecated 标记，避免双真相源。
   // ③ 只增写：XmpDocument 字节保留，未触碰的 crs: 字段逐字节不变。
+  // T2.5 v2→v3（架构 §3.2）：同一线路顺带完成——GraphMask 读端对无 combine 的
+  // v2 蒙版缺省 replace，写端恒写 combine → 恰好「只增 masks[*].combine」；
+  // amount 缺省 100 时不写出 → 其余字段字节稳定；crs: 全量字节保留；
+  // lumina:Masks（v1 遗留）不动；不提供 v3→v2 降级（combine=replace 在 v2
+  // 读端被忽略即等价，graphFromJson 仍接受 ver≤3）。
   json::JsonValue params;
   std::vector<std::string> warnings;
   XmpMapper::readFromDoc(*doc, &params, &warnings);
@@ -50,6 +55,8 @@ bool XmpMigrator::migrateDocument(XmpDocument* doc, std::string* err) {
   } else {
     g = XmpMapper::paramsToGraph(params);
   }
+  // 图内 schemaVersion 以文件为准解析（v2 图 = 2），迁移目标恒为当前版本
+  g.schemaVersion = kXmpSchemaVersion;
   XmpMapper::writeGraph(g, doc);
   // crs:ProcessVersion 补齐（缺失时；已有则字节保留）
   if (!doc->has("crs", "ProcessVersion")) {
@@ -137,6 +144,7 @@ json::JsonValue XmpMigrator::status(rpc::RpcError* err) {
   distribution.setItem("0", 0);
   distribution.setItem("1", 0);
   distribution.setItem("2", 0);
+  distribution.setItem("3", 0);
   int64_t migrated = 0;
   std::string sqlErr;
   std::string sql = "SELECT id, sidecar_path FROM photos WHERE deleted=0 AND sidecar_path IS NOT "
@@ -164,7 +172,8 @@ json::JsonValue XmpMigrator::status(rpc::RpcError* err) {
       std::string oneErr;
       if (migrateOne(id, &oneErr)) ++migrated;
     } else {
-      distribution.setItem("2", distribution.get("2").asInt() + 1);
+      // 已达标（含 v3）与过新（>3，1006 schemaTooNew 提示）都计入当前版本桶
+      distribution.setItem("3", distribution.get("3").asInt() + 1);
     }
   }
   stmt->reset();

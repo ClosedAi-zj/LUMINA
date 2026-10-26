@@ -119,30 +119,40 @@ Bind bindFileId(int64_t fileId) {
 
 int64_t PhotoDao::ensureRoot(const std::string& path, const std::string& label,
                              std::string* err) {
+  // ⚠ 不得用 lastInsertId() 判定「本次插入」：ON CONFLICT 分支不更新
+  // last_insert_rowid，而它是连接级全局值——与 photos/files 的 INSERT 交错时
+  // 会拿到**其他表**的 rowid（T2.5 的 50 次循环夹具实测暴露）。upsert 后
+  // 一律按业务键回查，语义无条件正确。
   std::string sql = "INSERT INTO roots(path,label) VALUES(?,?) ON CONFLICT(path) DO UPDATE SET "
                     "label=excluded.label;";
   auto stmt = db_->prepareCached("ensureRoot", sql, err);
   if (!stmt || !stmt->valid()) return 0;
   std::vector<Bind> binds{Bind{Bind::kText, 0, 0, path}, Bind{Bind::kText, 0, 0, label}};
   bindAll(stmt.get(), binds, err);
-  if (!stmt->step(err)) return 0;
-  sqlite3_int64 id = db_->lastInsertId();
+  if (!stmt->step(err)) {
+    stmt->reset();
+    return 0;
+  }
   stmt->reset();
-  if (id > 0) return static_cast<int64_t>(id);
-  // 冲突时 lastInsertRowid 未必更新，回查一次
   sql = "SELECT id FROM roots WHERE path=?;";
   auto q = db_->prepareCached("ensureRootSelect", sql, err);
   if (!q || !q->valid()) return 0;
   std::vector<Bind> b2{Bind{Bind::kText, 0, 0, path}};
   bindAll(q.get(), b2, err);
-  if (!q->step(err)) return 0;
-  int64_t found = q->columnInt64(0);
+  if (!q->step(err)) {
+    q->reset();
+    return 0;
+  }
+  const int64_t found = q->columnInt64(0);
   q->reset();
   return found;
 }
 
 int64_t PhotoDao::ensureFolder(int64_t rootId, const std::string& relPath, const std::string& name,
                                std::string* err) {
+  // ⚠ 同 ensureRoot：ON CONFLICT DO NOTHING 不更新 last_insert_rowid（连接级全局值），
+  // 与 photos INSERT 交错时会拿到照片的 rowid 当 folderId（FK 约束失败/错绑）。
+  // upsert 后一律按业务键回查。
   std::string sql = "INSERT INTO folders(root_id,rel_path,name) VALUES(?,?,?) ON CONFLICT(root_id,"
                     "rel_path) DO NOTHING;";
   auto stmt = db_->prepareCached("ensureFolder", sql, err);
@@ -153,17 +163,21 @@ int64_t PhotoDao::ensureFolder(int64_t rootId, const std::string& relPath, const
   binds[0].kind = Bind::kInt64;
   binds[0].i = rootId;
   bindAll(stmt.get(), binds, err);
-  if (!stmt->step(err)) return 0;
-  sqlite3_int64 id = db_->lastInsertId();
+  if (!stmt->step(err)) {
+    stmt->reset();
+    return 0;
+  }
   stmt->reset();
-  if (id > 0) return static_cast<int64_t>(id);
   sql = "SELECT id FROM folders WHERE root_id=? AND rel_path=?;";
   auto q = db_->prepareCached("ensureFolderSelect", sql, err);
   if (!q || !q->valid()) return 0;
   std::vector<Bind> b2{Bind{Bind::kInt64, rootId, 0, std::string()}, Bind{Bind::kText, 0, 0, relPath}};
   bindAll(q.get(), b2, err);
-  if (!q->step(err)) return 0;
-  int64_t found = q->columnInt64(0);
+  if (!q->step(err)) {
+    q->reset();
+    return 0;
+  }
+  const int64_t found = q->columnInt64(0);
   q->reset();
   return found;
 }

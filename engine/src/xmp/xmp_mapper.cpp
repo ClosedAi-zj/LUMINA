@@ -123,6 +123,8 @@ const ScalarField kScalarFields[] = {
     {"luminanceSmoothing", "crs", "LuminanceSmoothing"},
     {"colorNR", "crs", "ColorNoiseReduction"},
     {"colorNRDetail", "crs", "ColorNoiseReductionDetail"},
+    // T2.5（Q3）：叶 #94 —— CA 强度叶（无参自动之外的唯一手动入口）
+    {"chromaticAberration", "crs", "ChromaticAberrationScale"},
 };
 
 // 布尔字段（写 "True"/"False"，LR 习惯）
@@ -193,6 +195,7 @@ const NestedMap kNestedFields[] = {
     // 镜头 / 效果（与扁平键同名）
     {"optics", "lensProfileEnable", "lensProfileEnable"},
     {"optics", "manualDistortion", "manualDistortion"},
+    {"optics", "chromaticAberration", "chromaticAberration"},  // 叶 #94（Q3）
     {"optics", "vignetteAmount", "vignetteAmount"},
     {"optics", "vignetteMidpoint", "vignetteMidpoint"},
     {"optics", "vignetteFeather", "vignetteFeather"},
@@ -543,7 +546,8 @@ const char* kCurveKeys[] = {"toneCurveRGB",         "toneCurveR",
                             "parametricDarks",      "parametricShadows",
                             "parametricShadowSplit", "parametricLightSplit",
                             "parametricMidSplit"};
-const char* kLensKeys[] = {"lensProfileEnable", "manualDistortion"};
+// T2.5/Q3：Lens 节点 3 叶（配置文件 + 畸变 + CA 强度叶 #94）
+const char* kLensKeys[] = {"lensProfileEnable", "manualDistortion", "chromaticAberration"};
 const char* kEffectsKeys[] = {"vignetteAmount", "vignetteMidpoint",
                               "vignetteFeather", "grainAmount",
                               "grainFrequency", "grainSize"};
@@ -565,7 +569,7 @@ void copyIfPresent(const json::JsonValue& src, const char* key,
 
 graph::NodeGraph XmpMapper::paramsToGraph(const json::JsonValue& params) {
   graph::NodeGraph g;
-  g.schemaVersion = 2;
+  g.schemaVersion = 3;  // T2.5：协议 v3
   // 8 全局节点固定顺序（与 defaultGraph 一致），id=n1..n8
   const graph::NodeType kTypes[8] = {
       graph::NodeType::Basic,     graph::NodeType::Curve,
@@ -619,6 +623,12 @@ graph::NodeGraph XmpMapper::paramsToGraph(const json::JsonValue& params) {
       if (gm.id.empty() || gm.type.empty()) continue;  // 缺身份的蒙版不进图（零静默：跳过非静默改写）
       gm.enabled = m.get("enabled").asBool(true);
       gm.opacity = static_cast<int>(m.get("opacity").asInt(100));
+      // T2.5 v3：combine 缺省 replace（v1/v2 蒙版无该字段 → 同值语义）；非法值不猜测，
+      // 走 replace 并由 graph 层校验兜底（mapper 读端宽容，写端恒写合法串）
+      if (!graph::maskCombineFromString(m.get("combine").asString("replace"), &gm.combine)) {
+        gm.combine = graph::MaskCombine::Replace;
+      }
+      gm.amount = static_cast<int>(m.get("amount").asInt(100));
       gm.geometry = m.get("geometry");
       gm.range = m.get("range");
       gm.strokes = m.get("strokes");
@@ -713,6 +723,9 @@ json::JsonValue XmpMapper::graphToParams(const graph::NodeGraph& g) {
     j.setItem("type", m.type);
     j.setItem("enabled", m.enabled);
     j.setItem("opacity", static_cast<int64_t>(m.opacity));
+    // T2.5 v3：combine 恒写；amount 缺省 100 省略（与 graph/serialize 同一写端口径）
+    j.setItem("combine", graph::maskCombineName(m.combine));
+    if (m.amount != 100) j.setItem("amount", static_cast<int64_t>(m.amount));
     j.setItem("geometry", m.geometry);
     j.setItem("range", m.range);
     j.setItem("strokes", m.strokes);

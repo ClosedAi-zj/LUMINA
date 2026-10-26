@@ -30,6 +30,21 @@ enum class NodeType {
 const char* nodeTypeName(NodeType t);
 bool nodeTypeFromString(const std::string& s, NodeType* out);
 
+// T2.5 协议 v3：蒙版布尔组合方式（架构 §3.1.3 fold 语义 + §3.5 类图）。
+// fold 只依赖「数组序 + combine」，不依赖 GPU 槽位序：
+//   Replace   : f_i = rawFactor(mask_i)          （首条固定按 replace）
+//   Intersect : f_i = f_{i-1} * rawFactor(mask_i)
+//   Subtract  : f_i = f_{i-1} * (1 - rawFactor(mask_i))，只减面积不施加 local
+enum class MaskCombine {
+  Replace = 0,
+  Intersect = 1,
+  Subtract = 2,
+};
+
+// sidecar JSON 字符串口径（"replace" | "intersect" | "subtract"，不得增减改名）
+const char* maskCombineName(MaskCombine c);
+bool maskCombineFromString(const std::string& s, MaskCombine* out);
+
 struct NodeMask {
   std::string maskId;
   bool invert = false;
@@ -52,18 +67,23 @@ struct GraphMask {
   std::string id;
   std::string type;      // radial|linear|gradient|brush|range...
   bool enabled = true;
-  int opacity = 100;
+  int opacity = 100;     // 0..100
+  int amount = 100;      // 强度 -100..100；<0 = 局部调整反向（≠反相蒙版，§3.1.3）
+  MaskCombine combine = MaskCombine::Replace;  // v3 新增；v2 读端缺省 replace（同值语义）
   json::JsonValue geometry = json::JsonValue::nullValue();
   json::JsonValue range = json::JsonValue::nullValue();
   json::JsonValue strokes = json::JsonValue::nullValue();
 };
 
 struct NodeGraph {
-  int schemaVersion = 2;
+  int schemaVersion = 3;  // T2.5：默认 3（v3 = combine + 94 叶口径）
   std::vector<GraphNode> nodes;
   std::vector<GraphMask> masks;
 
-  bool valid() const { return schemaVersion == 2 && !nodes.empty(); }
+  // v2 与 v3 都合法（v2 读端向后可读，不提供 v3→v2 降级但必须能读）
+  bool valid() const {
+    return (schemaVersion == 2 || schemaVersion == 3) && !nodes.empty();
+  }
 };
 
 // 混合模式合法集合
