@@ -1,0 +1,17 @@
+{
+  "name": "lumina-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for LUMINA photography engine — lets AI agents connect to LUMINA (import/organize/develop/export/health)",
+  "type": "module",
+  "main": "server.mjs",
+  "bin": {
+    "lumina-mcp": "./server.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "smoke": "node test/smoke.mjs"
+  },
+  "license": "MIT"
+}
