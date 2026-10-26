@@ -96,11 +96,16 @@ std::string uniqueTargetPath(const std::string& path) {
 
 }  // namespace
 
-Importer::Importer(core::Config* config, db::PhotoDao* photos, db::Database* db,
-                   db::FtsIndexer* fts, raw::RawDecoder* decoder, xmp::XmpService* xmp,
-                   NotifyFn notify)
-    : config_(config), photos_(photos), db_(db), fts_(fts), decoder_(decoder), xmp_(xmp),
-      notify_(std::move(notify)) {}
+Importer::Importer(core::Config* config, db::PhotoDao* photos, db::ImageDao* images,
+                   db::Database* db, db::FtsIndexer* fts, raw::RawDecoder* decoder,
+                   xmp::XmpService* xmp, NotifyFn notify)
+    : config_(config), photos_(photos), images_(images), db_(db), fts_(fts), decoder_(decoder),
+      xmp_(xmp), notify_(std::move(notify)) {
+  if (!images_) {
+    // 零静默：身份层缺失是装配错误，必须可见（功能退化为路径+MD5 判重）
+    logWarn("import", "ImageDao not wired; file-identity dedupe degraded to path+md5 only");
+  }
+}
 
 // 内容级去重（协议 §5.8「MD5 相同默认跳过并计数」）：库内任意照片 md5 相同即视为重复。
 // 只按目标路径判重是不够的：同一张照片改了名、或重命名模板把多张算成同名，
@@ -235,8 +240,19 @@ bool Importer::importOne(const ImportOptions& opts, const ScanItem& item, int64_
     }
   }
 
-  PhotoRecord existing;
+  // ---- 库身份准备（M36：root/folder/files 行在此落位，判重与落库共用） ----
   std::string dbErr;
+  const std::string relForDb = relativeDir.empty() ? std::string(".") : relativeDir;
+  const int64_t rootId = photos_->ensureRoot(opts.targetPath, baseName(opts.targetPath), &dbErr);
+  const int64_t folderId =
+      photos_->ensureFolder(rootId, relForDb,
+                            baseName(relForDb.empty() ? opts.targetPath : relForDb), &dbErr);
+
+  // 去重 ①：同路径已在索引且文件在位 → 按 MD5 判断是否真的是同一张。
+  // 注意必须比**源文件**的 MD5 与库内记录：原实现比的是目标文件自身的 MD5，
+  // 那个值恒等于库内记录，于是任何"重命名后同名"的不同照片都会被误判为
+  // duplicate 静默丢弃（实测：2 张不同照片 → 只入库 1 张）。
+  PhotoRecord existing;
   if (photos_->getByPath(finalPath, &existing, &dbErr) && fileExists(finalPath)) {
     bool sameContent = true;
     if (opts.verifyMd5) {
@@ -244,20 +260,47 @@ bool Importer::importOne(const ImportOptions& opts, const ScanItem& item, int64_
     }
     if (sameContent) {
       *status = "duplicate";
+      if (photoId) *photoId = existing.id;
       return true;
     }
     // 同名但内容不同 → 落到下面的改名逻辑，绝不丢照片
     logInfo("import", "same target name but different content: " + finalPath);
   }
 
-  // 内容级去重：同一张照片换个名字再导入（或模板把多张算成同名）时，
+  // 去重 ②：内容级 —— 同一张照片换个名字/换个目录再导入（或模板把多张算成同名）时，
   // 仅按目标路径判重会漏掉，导致库里出现重复条目。
+  // 附加语义（架构 T2.2b 验收①）：若原文件已经不在盘上（用户在库外移动/重命名了
+  // 文件夹），视为「同一逻辑文件被移动」——把既有照片身份 relocate 到新位置并补拷
+  // 文件（photos.id 不变、files.folder_id 跟随新位置、sidecar_path 重算），而不是
+  // 另建新行或静默跳过。
   if (opts.verifyMd5) {
     int64_t dupId = 0;
-    if (findPhotoIdByMd5(sourceMd5, &dupId)) {
-      *status = "duplicate";
+    if (findPhotoIdByMd5(sourceMd5, &dupId) && dupId > 0) {
+      PhotoRecord dupRec;
+      const bool fileStillThere =
+          photos_->getById(dupId, &dupRec, &dbErr) && fileExists(dupRec.filePath);
+      const bool nameStable =
+          dupRec.fileName == baseName(finalPath);  // 改名导入 ≠ 移动，不强行搬迁
+      if (fileStillThere || !images_ || !nameStable || dupRec.deleted) {
+        *status = "duplicate";
+        if (photoId) *photoId = dupId;
+        return true;
+      }
+      // 文件已离盘 → 搬迁身份到本次目标位置，再确保文件落位
+      if (!images_->relocate(dupId, rootId, relForDb, &dbErr)) {
+        *status = "failed";
+        *error = "relocate after move detected: " + dbErr;
+        return false;
+      }
+      std::string copyErr;
+      if (!copyFileTo(item.path, finalPath, &copyErr)) {
+        *status = "failed";
+        *error = copyErr;
+        return false;
+      }
       if (photoId) *photoId = dupId;
-      return true;
+      logInfo("import", "re-linked moved photo " + std::to_string(dupId) + " -> " + finalPath);
+      return true;  // 身份已搬迁（relocate 内含 sidecar 重算），无需再 upsert
     }
   }
 
@@ -269,6 +312,33 @@ bool Importer::importOne(const ImportOptions& opts, const ScanItem& item, int64_
     logWarn("import", "target name collision, renamed: " + desiredPath + " -> " + finalPath);
   }
 
+  // 去重 ③（I1）：文件身份判重 —— files(folder_id, name) 已绑定的照片直接复用。
+  // 覆盖 verifyMd5=false 的导入路径：同一逻辑文件（换模板/换目录）不再产生新 photos.id。
+  int64_t fileId = 0;
+  if (images_) {
+    fileId = images_->ensureFileRow(folderId, baseName(finalPath), &dbErr);
+    if (fileId <= 0) {
+      *status = "failed";
+      *error = "ensureFileRow failed: " + dbErr;
+      return false;
+    }
+    const int64_t byFile = images_->photoIdByFile(fileId, &dbErr);
+    if (byFile > 0) {
+      PhotoRecord byFileRec;
+      if (photos_->getById(byFile, &byFileRec, &dbErr) && fileExists(byFileRec.filePath)) {
+        *status = "duplicate";
+        if (photoId) *photoId = byFile;
+        return true;
+      }
+      // 该文件身份已绑定但文件不在盘上（被库外删除）→ 重新落盘 + 原位 upsert
+      // （record.fileId>0 → upsert 按 file_id 认行，photos.id 保持不变）
+      logInfo("import", "file identity " + std::to_string(fileId) +
+                            " already bound to missing photo " + std::to_string(byFile) +
+                            ", restoring in place");
+      if (photoId) *photoId = byFile;
+    }
+  }
+
   std::string copyErr;
   if (!copyFileTo(item.path, finalPath, &copyErr)) {
     *status = "failed";
@@ -276,17 +346,20 @@ bool Importer::importOne(const ImportOptions& opts, const ScanItem& item, int64_
     return false;
   }
   PhotoRecord record = buildRecord(opts, item, finalPath, meta);
-  int64_t rootId = photos_->ensureRoot(opts.targetPath, baseName(opts.targetPath), &dbErr);
-  int64_t folderId = photos_->ensureFolder(rootId, relativeDir.empty() ? std::string(".") : relativeDir,
-                                           baseName(relativeDir.empty() ? opts.targetPath : relativeDir),
-                                           &dbErr);
   record.rootId = rootId;
   record.folderId = folderId;
+  record.fileId = fileId;  // M36：落库前建档（files 行已在上面 ensure）
   record.md5 = sourceMd5;
   if (!photos_->upsert(record, photoId, &dbErr)) {
     *status = "failed";
     *error = dbErr;
     return false;
+  }
+  if (images_ && fileId > 0 && record.fileId != fileId) {
+    // upsert 走了插入路径且未带上 file_id（理论不可达）→ 立即补绑定，零静默
+    if (!images_->linkPhoto(*photoId, fileId, &dbErr)) {
+      logWarn("import", "post-link failed for photo " + std::to_string(*photoId) + ": " + dbErr);
+    }
   }
   if (opts.backupEnabled && !opts.backupTarget.empty()) {
     std::string backupDir = joinPath(opts.backupTarget, relativeDir);

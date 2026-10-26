@@ -16,6 +16,11 @@ struct PhotoRecord {
   int64_t id = 0;
   int64_t folderId = 0;
   int64_t rootId = 0;
+  // M2 T2.2b（M34）：files 表身份（files(folder_id,name) 唯一行）。
+  // 0 = 未解析（mock/HDR 等直接落库的产物）；>0 时 upsert 以 file_id 认行，
+  // 同一逻辑文件换模板/换目录不再产生新 photos.id（架构 §3.3.1 I2）。
+  // 不进 toPhotoSummary（内部键，不对 UI 暴露）。
+  int64_t fileId = 0;
   std::string fileName;
   std::string filePath;
   std::string format;

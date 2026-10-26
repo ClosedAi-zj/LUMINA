@@ -11,17 +11,23 @@
 #ifndef LUMINA_DB_IMAGE_DAO_H_
 #define LUMINA_DB_IMAGE_DAO_H_
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 
 #include "db/database.h"
 
 namespace lumina {
+namespace xmp {
+class XmpService;  // 只用 sidecarPathFor：前向声明避免 db→xmp 头依赖
+}
+
 namespace db {
 
 class ImageDao {
  public:
   explicit ImageDao(Database* db) : db_(db) {}
+  ImageDao(Database* db, xmp::XmpService* xmp) : db_(db), xmp_(xmp) {}
 
   Database* database() const { return db_; }
 
@@ -58,8 +64,22 @@ class ImageDao {
   std::string rootPath(int64_t rootId, std::string* err = nullptr);
   std::string fileNameOfPhoto(int64_t photoId, std::string* err = nullptr);
 
+  // M2 T2.2b（启动兜底）：files 表一致性重建 —— 对齐 photos 与 files 表。
+  // 对每张未删除照片：确保 (folder_id, file_name) 的 files 行存在，并把
+  // photos.file_id 修指向该行（NULL/悬空都算陈旧）。返回关联/修复行数。
+  // 幂等：第二次运行应为 0。可取消（启动后台线程调用，不阻塞握手）。
+  struct ReconcileReport {
+    int64_t photosScanned = 0;
+    int64_t filesInserted = 0;
+    int64_t photosRelinked = 0;
+    int64_t photosUnlinked = 0;  // folder_id 缺失等无法归位的行（不静默，进 detail）
+    std::string detail;
+  };
+  bool reconcile(ReconcileReport* report, std::string* err, std::atomic<bool>* cancel = nullptr);
+
  private:
   Database* db_;
+  xmp::XmpService* xmp_ = nullptr;  // N10：relocate 重算 sidecar_path 用（可为空）
 };
 
 }  // namespace db

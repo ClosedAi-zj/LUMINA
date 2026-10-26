@@ -46,6 +46,73 @@ void quoteText(const std::string& in, std::string* out) {
   *out += "'";
 }
 
+// ---- M2 T2.2b（M35）：upsert 的绑定拆成头/尾两段，file_id 由调用方按占位顺序插入 ----
+// 头：folder_id, root_id（2 个绑定）
+void bindRecordHead(const PhotoRecord& p, std::vector<Bind>* binds) {
+  binds->push_back(Bind{Bind::kInt64, p.folderId, 0, std::string()});
+  binds->push_back(Bind{Bind::kInt64, p.rootId, 0, std::string()});
+}
+
+// 尾：file_name..date（36 个绑定，顺序与 INSERT 列清单一致；不含 file_id）
+void bindRecordTail(const PhotoRecord& p, std::vector<Bind>* binds) {
+  auto b = [binds](int64_t i) { binds->push_back(Bind{Bind::kInt64, i, 0, std::string()}); };
+  auto bt = [binds](const std::string& s) { binds->push_back(Bind{Bind::kText, 0, 0, s}); };
+  bt(p.fileName);
+  bt(p.filePath);
+  bt(p.format);
+  b(p.fileSize);
+  bt(p.md5);
+  b(p.width);
+  b(p.height);
+  b(p.capturedAt);
+  b(p.importedAt);
+  bt(p.camera);
+  bt(p.lens);
+  b(p.iso);
+  bt(p.aperture);
+  bt(p.shutter);
+  bt(p.focalLength);
+  bt(p.whiteBalance);
+  if (p.hasGps) {
+    binds->push_back(Bind{Bind::kDouble, 0, p.gpsLat, std::string()});
+    binds->push_back(Bind{Bind::kDouble, 0, p.gpsLng, std::string()});
+    binds->push_back(Bind{Bind::kDouble, 0, p.gpsAlt, std::string()});
+  } else {
+    for (int i = 0; i < 3; ++i) binds->push_back(Bind{Bind::kNull, 0, 0.0, std::string()});
+  }
+  if (p.hasLocationId) {
+    b(p.locationId);
+  } else {
+    binds->push_back(Bind{Bind::kNull, 0, 0.0, std::string()});
+  }
+  b(p.rating);
+  bt(p.pick);
+  bt(p.colorLabel);
+  bt(p.keywords);
+  bt(p.description);
+  bt(p.sidecarPath);
+  b(p.sidecarMtime);
+  b(p.hasEdits ? 1 : 0);
+  b(p.isMissing ? 1 : 0);
+  b(p.isVideo ? 1 : 0);
+  bt(p.pairKind);
+  bt(p.health);
+  b(p.deleted ? 1 : 0);
+  if (p.hasSeqId) {
+    b(p.seqId);
+  } else {
+    binds->push_back(Bind{Bind::kNull, 0, 0.0, std::string()});
+  }
+  bt(p.location);  // location（FTS 列：地点名）
+  bt(p.date);      // date（FTS 列：YYYY-MM）
+}
+
+// file_id 绑定（0 → NULL：mock/HDR 等未解析身份的行不占用文件身份）
+Bind bindFileId(int64_t fileId) {
+  if (fileId > 0) return Bind{Bind::kInt64, fileId, 0, std::string()};
+  return Bind{Bind::kNull, 0, 0.0, std::string()};
+}
+
 }  // namespace
 
 // ---------------- 根节点 / 文件夹 ----------------
@@ -142,15 +209,55 @@ std::vector<FolderInfo> PhotoDao::listFolders(std::string* err) {
 // ---------------- 写入 ----------------
 
 bool PhotoDao::upsert(const PhotoRecord& p, int64_t* outId, std::string* err) {
-  std::string sql = "INSERT INTO photos(folder_id,root_id,file_name,file_path,format,file_size,md5,"
+  // M2 T2.2b（M35 / 架构 §3.3.1 I2）：file_id > 0 时按**文件身份**认行 ——
+  // 先 UPDATE WHERE file_id，未命中再走路径冲突插入。这是最后一处
+  // 「路径当身份」的残留：不接这条线，导入即使解析出同一 file_id，
+  // upsert 仍会因 file_path 不同而插入新行（photos.id 漂移，四级表收益归零）。
+  //
+  // 实现说明（对架构 M35 措辞的一处偏离）：架构写的是
+  // `ON CONFLICT(file_id)`，但该冲突目标要求 photos(file_id) 上有 UNIQUE 索引，
+  // 而版本号 004/005 已分别预留给 T2.4（history）与 T2.12（sidecar 修复），
+  // 本任务不便再占一个迁移版本。改为「UPDATE by file_id → 未命中走既有
+  // ON CONFLICT(file_path) 插入」，语义等价且不动迁移阶梯（已在交付报告注明）。
+  static const char* kUpdateByFile =
+      "UPDATE photos SET folder_id=?,root_id=?,file_name=?,file_path=?,format=?,file_size=?,"
+      "md5=?,width=?,height=?,captured_at=?,imported_at=?,camera=?,lens=?,iso=?,aperture=?,"
+      "shutter=?,focal_length=?,white_balance=?,gps_lat=?,gps_lng=?,gps_alt=?,location_id=?,"
+      "rating=?,pick=?,color_label=?,keywords=?,description=?,sidecar_path=?,sidecar_mtime=?,"
+      "has_edits=?,is_missing=?,is_video=?,pair_kind=?,health=?,deleted=?,seq_id=?,location=?,"
+      "date=? WHERE file_id=? "
+      "RETURNING id;";
+  if (p.fileId > 0) {
+    auto upd = db_->prepareCached("upsertPhotoByFile", kUpdateByFile, err);
+    if (!upd || !upd->valid()) return false;
+    std::vector<Bind> binds;
+    bindRecordHead(p, &binds);
+    bindRecordTail(p, &binds);
+    binds.push_back(bindFileId(p.fileId));
+    bindAll(upd.get(), binds, err);
+    if (upd->step(err)) {
+      const int64_t id = upd->columnInt64(0);
+      upd->reset();
+      if (outId) *outId = id;
+      return true;
+    }
+    upd->reset();
+    // file_id 无对应行（理论不可达：fileId 来自 ensureFileRow）→ 落到插入路径
+    logWarn("photo_dao", "upsert by file_id=" + std::to_string(p.fileId) +
+                             " matched no row, falling back to insert");
+  }
+
+  std::string sql = "INSERT INTO photos(folder_id,root_id,file_id,file_name,file_path,format,"
+                    "file_size,md5,"
                     "width,height,captured_at,imported_at,camera,lens,iso,aperture,shutter,"
                     "focal_length,white_balance,gps_lat,gps_lng,gps_alt,location_id,rating,pick,"
                     "color_label,keywords,description,sidecar_path,sidecar_mtime,has_edits,"
                     "is_missing,is_video,pair_kind,health,deleted,seq_id,location,date) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"
-                    "?,?) "
+                    // 39 列（含 file_id）→ 39 个占位符（绑定顺序见下方 bindRecordHead/Tail）
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(file_path) DO UPDATE SET "
                     "folder_id=excluded.folder_id, root_id=excluded.root_id, "
+                    "file_id=excluded.file_id, "
                     "file_name=excluded.file_name, format=excluded.format, "
                     "file_size=excluded.file_size, md5=excluded.md5, width=excluded.width, "
                     "height=excluded.height, captured_at=excluded.captured_at, "
@@ -172,86 +279,11 @@ bool PhotoDao::upsert(const PhotoRecord& p, int64_t* outId, std::string* err) {
                     "RETURNING id;";
   auto stmt = db_->prepareCached("upsertPhoto", sql, err);
   if (!stmt || !stmt->valid()) return false;
+  // 绑定顺序与列清单一致：folder_id, root_id, [file_id], file_name..date
   std::vector<Bind> binds;
-  auto b = [&binds](int64_t i) {
-    Bind x;
-    x.kind = Bind::kInt64;
-    x.i = i;
-    binds.push_back(x);
-  };
-  auto bt = [&binds](const std::string& s) {
-    Bind x;
-    x.kind = Bind::kText;
-    x.s = s;
-    binds.push_back(x);
-  };
-  b(p.folderId);
-  b(p.rootId);
-  bt(p.fileName);
-  bt(p.filePath);
-  bt(p.format);
-  b(p.fileSize);
-  bt(p.md5);
-  b(p.width);
-  b(p.height);
-  b(p.capturedAt);
-  b(p.importedAt);
-  bt(p.camera);
-  bt(p.lens);
-  b(p.iso);
-  bt(p.aperture);
-  bt(p.shutter);
-  bt(p.focalLength);
-  bt(p.whiteBalance);
-  if (p.hasGps) {
-    Bind la;
-    la.kind = Bind::kDouble;
-    la.d = p.gpsLat;
-    binds.push_back(la);
-    Bind ln;
-    ln.kind = Bind::kDouble;
-    ln.d = p.gpsLng;
-    binds.push_back(ln);
-    Bind al;
-    al.kind = Bind::kDouble;
-    al.d = p.gpsAlt;
-    binds.push_back(al);
-  } else {
-    for (int i = 0; i < 3; ++i) {
-      Bind x;
-      x.kind = Bind::kNull;
-      binds.push_back(x);
-    }
-  }
-  if (p.hasLocationId) {
-    b(p.locationId);
-  } else {
-    Bind x;
-    x.kind = Bind::kNull;
-    binds.push_back(x);
-  }
-  b(p.rating);
-  bt(p.pick);
-  bt(p.colorLabel);
-  bt(p.keywords);
-  bt(p.description);
-  bt(p.sidecarPath);
-  b(p.sidecarMtime);
-  b(p.hasEdits ? 1 : 0);
-  b(p.isMissing ? 1 : 0);
-  b(p.isVideo ? 1 : 0);
-  bt(p.pairKind);
-  bt(p.health);
-  b(p.deleted ? 1 : 0);
-  if (p.hasSeqId) {
-    b(p.seqId);
-  } else {
-    Bind x;
-    x.kind = Bind::kNull;
-    binds.push_back(x);
-  }
-  bt(p.location);  // location（FTS 列：地点名）
-  bt(p.date);      // date（FTS 列：YYYY-MM）
+  bindRecordHead(p, &binds);
+  binds.push_back(bindFileId(p.fileId));
+  bindRecordTail(p, &binds);
   bindAll(stmt.get(), binds, err);
   if (!stmt->step(err)) return false;
   int64_t newId = stmt->columnInt64(0);
@@ -265,7 +297,9 @@ bool PhotoDao::updateAll(const PhotoRecord& p, std::string* err) {
 }
 
 bool PhotoDao::getById(int64_t id, PhotoRecord* out, std::string* err) {
-  std::string sql = "SELECT id,folder_id,root_id,file_name,file_path,format,file_size,md5,width,"
+  // M2 T2.2b（M35）：file_id 一并回填（0/NULL → 0），upsert 才能按文件身份认行
+  std::string sql = "SELECT id,folder_id,root_id,COALESCE(file_id,0),file_name,file_path,format,"
+                    "file_size,md5,width,"
                     "height,captured_at,imported_at,camera,lens,iso,aperture,shutter,focal_length,"
                     "white_balance,gps_lat,gps_lng,gps_alt,location_id,rating,pick,color_label,"
                     "keywords,description,sidecar_path,sidecar_mtime,has_edits,is_missing,is_video,"
@@ -279,46 +313,47 @@ bool PhotoDao::getById(int64_t id, PhotoRecord* out, std::string* err) {
   out->id = stmt->columnInt64(0);
   out->folderId = stmt->columnInt64(1);
   out->rootId = stmt->columnInt64(2);
-  out->fileName = stmt->columnText(3);
-  out->filePath = stmt->columnText(4);
-  out->format = stmt->columnText(5);
-  out->fileSize = stmt->columnInt64(6);
-  out->md5 = stmt->columnText(7);
-  out->width = stmt->columnInt(8);
-  out->height = stmt->columnInt(9);
-  out->capturedAt = stmt->columnInt64(10);
-  out->importedAt = stmt->columnInt64(11);
-  out->camera = stmt->columnText(12);
-  out->lens = stmt->columnText(13);
-  out->iso = stmt->columnInt(14);
-  out->aperture = stmt->columnText(15);
-  out->shutter = stmt->columnText(16);
-  out->focalLength = stmt->columnText(17);
-  out->whiteBalance = stmt->columnText(18);
-  out->hasGps = !stmt->columnIsNull(19) && !stmt->columnIsNull(20);
-  out->gpsLat = stmt->columnDouble(19);
-  out->gpsLng = stmt->columnDouble(20);
-  out->gpsAlt = stmt->columnDouble(21);
-  out->hasLocationId = !stmt->columnIsNull(22);
-  out->locationId = stmt->columnInt64(22);
-  out->rating = stmt->columnInt(23);
-  out->pick = stmt->columnText(24);
-  out->colorLabel = stmt->columnText(25);
-  out->keywords = stmt->columnText(26);
-  out->description = stmt->columnText(27);
-  out->sidecarPath = stmt->columnText(28);
-  out->hasSidecarMtime = !stmt->columnIsNull(29);
-  out->sidecarMtime = stmt->columnInt64(29);
-  out->hasEdits = stmt->columnInt(30) != 0;
-  out->isMissing = stmt->columnInt(31) != 0;
-  out->isVideo = stmt->columnInt(32) != 0;
-  out->pairKind = stmt->columnText(33);
-  out->health = stmt->columnText(34);
-  out->deleted = stmt->columnInt(35) != 0;
-  out->hasSeqId = !stmt->columnIsNull(36);
-  out->seqId = stmt->columnInt64(36);
-  out->location = stmt->columnText(37);
-  out->date = stmt->columnText(38);
+  out->fileId = stmt->columnInt64(3);
+  out->fileName = stmt->columnText(4);
+  out->filePath = stmt->columnText(5);
+  out->format = stmt->columnText(6);
+  out->fileSize = stmt->columnInt64(7);
+  out->md5 = stmt->columnText(8);
+  out->width = stmt->columnInt(9);
+  out->height = stmt->columnInt(10);
+  out->capturedAt = stmt->columnInt64(11);
+  out->importedAt = stmt->columnInt64(12);
+  out->camera = stmt->columnText(13);
+  out->lens = stmt->columnText(14);
+  out->iso = stmt->columnInt(15);
+  out->aperture = stmt->columnText(16);
+  out->shutter = stmt->columnText(17);
+  out->focalLength = stmt->columnText(18);
+  out->whiteBalance = stmt->columnText(19);
+  out->hasGps = !stmt->columnIsNull(20) && !stmt->columnIsNull(21);
+  out->gpsLat = stmt->columnDouble(20);
+  out->gpsLng = stmt->columnDouble(21);
+  out->gpsAlt = stmt->columnDouble(22);
+  out->hasLocationId = !stmt->columnIsNull(23);
+  out->locationId = stmt->columnInt64(23);
+  out->rating = stmt->columnInt(24);
+  out->pick = stmt->columnText(25);
+  out->colorLabel = stmt->columnText(26);
+  out->keywords = stmt->columnText(27);
+  out->description = stmt->columnText(28);
+  out->sidecarPath = stmt->columnText(29);
+  out->hasSidecarMtime = !stmt->columnIsNull(30);
+  out->sidecarMtime = stmt->columnInt64(30);
+  out->hasEdits = stmt->columnInt(31) != 0;
+  out->isMissing = stmt->columnInt(32) != 0;
+  out->isVideo = stmt->columnInt(33) != 0;
+  out->pairKind = stmt->columnText(34);
+  out->health = stmt->columnText(35);
+  out->deleted = stmt->columnInt(36) != 0;
+  out->hasSeqId = !stmt->columnIsNull(37);
+  out->seqId = stmt->columnInt64(37);
+  out->location = stmt->columnText(38);
+  out->date = stmt->columnText(39);
   stmt->reset();
   return true;
 }

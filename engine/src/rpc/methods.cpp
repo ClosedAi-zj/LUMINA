@@ -24,6 +24,8 @@
 #include "timelapse/timelapse_service.h"
 #include "xmp/xmp_mapper.h"
 
+#include <tuple>
+
 namespace lumina {
 namespace rpc {
 namespace {
@@ -1188,7 +1190,7 @@ void registerMethods(Dispatcher* d, EngineServices* s) {
                           *err = RpcError(kInvalidParams, "params.newPath required for relocate/backfill");
                           return json::JsonValue::nullValue();
                         }
-                        std::string sql = "SELECT id, file_path, sidecar_path FROM photos WHERE "
+                        std::string sql = "SELECT id, file_path, root_id, file_name FROM photos WHERE "
                                           "file_path LIKE ? AND deleted=0;";
                         auto stmt = s->db->prepareCached("resolveFolder", sql, &dbErr);
                         if (!stmt || !stmt->valid()) {
@@ -1196,27 +1198,57 @@ void registerMethods(Dispatcher* d, EngineServices* s) {
                           return json::JsonValue::nullValue();
                         }
                         stmt->bindText(1, path + "/%");
-                        std::vector<std::pair<int64_t, std::string>> updates;
+                        // {id, oldPath, rootId, fileName}
+                        std::vector<std::tuple<int64_t, std::string, int64_t, std::string>> updates;
                         while (stmt->step(&dbErr)) {
-                          updates.emplace_back(stmt->columnInt64(0), stmt->columnText(1));
+                          updates.emplace_back(stmt->columnInt64(0), stmt->columnText(1),
+                                               stmt->columnInt64(2), stmt->columnText(3));
                         }
                         stmt->reset();
-                        auto upd = s->db->prepareCached(
-                            "resolveFolderUpd", "UPDATE photos SET file_path=?, is_missing=? WHERE "
-                                                "id=?;",
-                            &dbErr);
-                        if (!upd || !upd->valid()) {
-                          *err = RpcError(kDbError, dbErr);
+                        // M2 T2.2b（I3）：手写 `UPDATE photos SET file_path=?` 字符串手术
+                        // 会让 files.folder_id/photos.file_id 变陈旧、sidecar_path 不跟随
+                        // （移动后参数读不到）。改走 ImageDao::relocate：photos.id 不变、
+                        // files 行跟随新位置、sidecar_path 用 XmpService 口径重算。
+                        if (!s->images) {
+                          *err = RpcError(kInternalError, "ImageDao 未装配（engine 装配错误）");
                           return json::JsonValue::nullValue();
                         }
                         for (const auto& u : updates) {
-                          std::string replaced = newPath + u.second.substr(path.size());
-                          bool exists = fileExists(replaced);
-                          upd->bindText(1, replaced);
-                          upd->bindInt(2, exists ? 0 : 1);
-                          upd->bindInt64(3, u.first);
-                          if (upd->step(&dbErr)) ++affected;
-                          upd->reset();
+                          const int64_t photoId = std::get<0>(u);
+                          const std::string& oldPath = std::get<1>(u);
+                          const int64_t rootId = std::get<2>(u);
+                          const std::string replaced = newPath + oldPath.substr(path.size());
+                          // 目标相对库根的 rel_path：relocate 只在根内搬（与 files 身份模型一致）
+                          const std::string rootPrefix = s->images->rootPath(rootId, &dbErr);
+                          std::string relPath;
+                          if (rootPrefix.empty()) {
+                            *err = RpcError(kDbError, "root not found for photo " +
+                                                          std::to_string(photoId) + ": " + dbErr);
+                            return json::JsonValue::nullValue();
+                          }
+                          if (replaced.rfind(rootPrefix, 0) == 0) {
+                            relPath = replaced.substr(rootPrefix.size());
+                            while (!relPath.empty() && (relPath[0] == '/' || relPath[0] == '\\')) {
+                              relPath.erase(0, 1);
+                            }
+                            relPath = parentPath(relPath);
+                          } else {
+                            // 目标在库根之外：不猜、不静默（用户需要先把该根重定位）
+                            *err = RpcError(kInvalidParams,
+                                            "目标路径 " + replaced + " 不在库根 " + rootPrefix +
+                                                " 之内，请先调整库根或目标路径");
+                            return json::JsonValue::nullValue();
+                          }
+                          std::string relErr;
+                          if (!s->images->relocate(photoId, rootId, relPath, &relErr)) {
+                            *err = RpcError(kDbError, "relocate failed for photo " +
+                                                          std::to_string(photoId) + ": " + relErr);
+                            return json::JsonValue::nullValue();
+                          }
+                          // 路径在位与否照旧显式呈现，不静默
+                          std::string e;
+                          s->photos->setMissing(photoId, !fileExists(replaced), &e);
+                          ++affected;
                         }
                       } else if (action == "orphan") {
                         std::string sql = "SELECT id FROM photos WHERE file_path LIKE ? AND deleted=0;";
@@ -1355,17 +1387,34 @@ void registerMethods(Dispatcher* d, EngineServices* s) {
                         PhotoRecord p;
                         s->photos->getById(photoId, &p, &e);
                         std::string target = newPath.empty() ? p.filePath : newPath;
-                        auto upd = s->db->prepareCached(
-                            "issueRelocate",
-                            "UPDATE photos SET file_path=?, is_missing=?, health='ok' WHERE id=?;",
-                            &dbErr);
-                        if (upd && upd->valid()) {
-                          upd->bindText(1, target);
-                          upd->bindInt(2, fileExists(target) ? 0 : 1);
-                          upd->bindInt64(3, photoId);
-                          if (upd->step(&dbErr)) ++resolved;
-                          upd->reset();
+                        // M2 T2.2b（I3）：手写 UPDATE photos SET file_path=? 会留下
+                        // files.folder_id 陈旧 + sidecar_path 不跟随（参数读不到）。
+                        // 改走 ImageDao::relocate（id 不变、files 行跟随、sidecar 重算）。
+                        // 特例：newPath 为空 = 原路径已恢复（文件回到 lastKnown），
+                        // 无需搬迁身份，只补 missing/health 状态。
+                        if (!target.empty() && s->images && target != p.filePath) {
+                          const std::string rootPrefix = s->images->rootPath(p.rootId, &dbErr);
+                          if (rootPrefix.empty() || target.rfind(rootPrefix, 0) != 0) {
+                            *err = RpcError(kInvalidParams,
+                                            "目标路径 " + target + " 不在库根 " + rootPrefix +
+                                                " 之内，请先调整库根或目标路径");
+                            return json::JsonValue::nullValue();
+                          }
+                          std::string relPath = target.substr(rootPrefix.size());
+                          while (!relPath.empty() && (relPath[0] == '/' || relPath[0] == '\\')) {
+                            relPath.erase(0, 1);
+                          }
+                          relPath = parentPath(relPath);
+                          std::string relErr;
+                          if (!s->images->relocate(photoId, p.rootId, relPath, &relErr)) {
+                            *err = RpcError(kDbError, "relocate failed for photo " +
+                                                          std::to_string(photoId) + ": " + relErr);
+                            return json::JsonValue::nullValue();
+                          }
                         }
+                        s->photos->setMissing(photoId, !fileExists(target), &e);
+                        s->photos->setHealth(photoId, fileExists(target) ? "ok" : "missing", &e);
+                        ++resolved;
                       } else if (action == "restore") {
                         std::string restored;
                         std::string restoreErr;

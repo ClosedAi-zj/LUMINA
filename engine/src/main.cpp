@@ -137,11 +137,13 @@ int main(int argc, char** argv) {
   raw::RawDecoder decoder;
   xmp::XmpService xmpService(&config, &photos, &database, &pool);
   xmp::XmpMigrator migrator(&config, &photos, &database, &xmpService);
+  // M2 T2.2b：四级表身份层（relocate 走它重算 sidecar_path，见 image_dao.cpp N10）
+  db::ImageDao imageDao(&database, &xmpService);
   edit::EditSessionManager sessions(&xmpService, &photos);
   edit::VirtualCopyService vcopy(&config, &database, &photos, &xmpService);
   health::HealthScanner healthScanner(&config, &photos, &health, server.notifyFn());
   health::BackupService backup(&config, &photos, &database, server.notifyFn());
-  import::Importer importer(&config, &photos, &database, &fts, &decoder, &xmpService,
+  import::Importer importer(&config, &photos, &imageDao, &database, &fts, &decoder, &xmpService,
                             server.notifyFn());
   mock::MockGenerator mockGenerator(&config, &photos, &database, &fts, &health, &decoder,
                                     &xmpService);
@@ -158,6 +160,7 @@ int main(int argc, char** argv) {
   services.config = &config;
   services.db = &database;
   services.photos = &photos;
+  services.images = &imageDao;
   services.albums = &albums;
   services.health = &health;
   services.fts = &fts;
@@ -224,6 +227,20 @@ int main(int argc, char** argv) {
     }
   });
 
+  // ---- 7.7 后台 files 表一致性重建（M2 T2.2b） ----
+  // 迁移 002 只在版本升级时回填一次；此后 mock/HDR/异常路径都可能让 photos 与
+  // files 表漂移（file_id 为空/悬空）。每次启动后台对齐一遍（幂等，全对齐时 0 写入），
+  // 不阻塞握手；与 XMP 迁移线程共用 stop 信号。
+  std::thread reconcileThread([&imageDao, &migrationStop]() {
+    db::ImageDao::ReconcileReport rep;
+    std::string recErr;
+    if (imageDao.reconcile(&rep, &recErr, &migrationStop)) {
+      logInfo("main", "files reconcile done: " + rep.detail);
+    } else {
+      logWarn("main", "files reconcile failed: " + recErr + " (" + rep.detail + ")");
+    }
+  });
+
   // ---- 7.6 诊断看门狗：主循环状态变化/心跳落日志（挂死定位用） ----
   std::atomic<bool> watchdogStop{false};
   std::thread watchdog([&]() {
@@ -254,6 +271,7 @@ int main(int argc, char** argv) {
   // （迁移持 per-photo 写锁，须先于 sessions.shutdown 完成，避免与编辑会话写 sidecar 竞争）
   migrationStop.store(true);
   if (migrationThread.joinable()) migrationThread.join();
+  if (reconcileThread.joinable()) reconcileThread.join();
   logInfo("main", "shutting down, pool pending=" + std::to_string(pool.pendingCount()));
   sessions.shutdown();
   logInfo("main", "cleanup: sessions flushed");

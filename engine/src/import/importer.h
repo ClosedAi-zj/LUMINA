@@ -10,6 +10,7 @@
 #include "db/album_dao.h"
 #include "db/database.h"
 #include "db/fts_indexer.h"
+#include "db/image_dao.h"
 #include "db/photo_dao.h"
 #include "import/scanner.h"
 #include "json/json_value.h"
@@ -37,8 +38,11 @@ class Importer {
  public:
   using NotifyFn = std::function<void(const std::string& method, const json::JsonValue& params)>;
 
-  Importer(core::Config* config, db::PhotoDao* photos, db::Database* db, db::FtsIndexer* fts,
-           raw::RawDecoder* decoder, xmp::XmpService* xmp, NotifyFn notify);
+  // M2 T2.2b（M36）：注入 ImageDao —— 导入去重与 files 行建档走四级表身份层。
+  // images 可为空（最小装配的测试/工具）：为空时退化为仅路径+MD5 判重，行为可见地
+  // 打 warning，不静默。
+  Importer(core::Config* config, db::PhotoDao* photos, db::ImageDao* images, db::Database* db,
+           db::FtsIndexer* fts, raw::RawDecoder* decoder, xmp::XmpService* xmp, NotifyFn notify);
 
   // 在 job 线程内执行；进度与文件级结果通过 ctx / notify 上报
   void run(const ImportOptions& opts, JobContext& ctx);
@@ -54,6 +58,7 @@ class Importer {
 
   core::Config* config_;
   db::PhotoDao* photos_;
+  db::ImageDao* images_ = nullptr;  // 四级表身份层（M36）
   db::Database* db_;
   db::FtsIndexer* fts_;
   raw::RawDecoder* decoder_;

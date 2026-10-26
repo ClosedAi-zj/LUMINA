@@ -11,6 +11,7 @@
 #include "db/database.h"
 #include "db/fts_indexer.h"
 #include "db/health_dao.h"
+#include "db/image_dao.h"
 #include "db/photo_dao.h"
 #include "edit/edit_session.h"
 #include "edit/virtual_copy.h"
@@ -37,6 +38,7 @@ struct EngineServices {
   core::Config* config = nullptr;
   db::Database* db = nullptr;
   db::PhotoDao* photos = nullptr;
+  db::ImageDao* images = nullptr;  // M2 T2.2b：四级表身份层（relocate 入口 + 导入建档）
   db::AlbumDao* albums = nullptr;
   db::HealthDao* health = nullptr;
   db::FtsIndexer* fts = nullptr;

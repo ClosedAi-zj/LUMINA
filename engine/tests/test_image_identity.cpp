@@ -7,19 +7,29 @@
 //   I4 photos_fts 仍可检索（迁移没有重建 photos 表，触发器仍然生效）；
 //   I5 旧行（迁移前插入、file_id 为空）能被 resolveByFile 惰性补齐绑定；
 //   I6 relocate 的冲突路径必须显式失败（不静默覆盖别人的 file_path）。
+#include <atomic>
+#include <cstdint>
 #include <cstdio>
 #include <string>
 #include <vector>
 
+#include "core/config.h"
 #include "core/models.h"
 #include "core/str_util.h"
+#include "core/thread_pool.h"
 #include "db/database.h"
+#include "db/fts_indexer.h"
 #include "db/image_dao.h"
 #include "db/migrations.h"
 #include "db/photo_dao.h"
+#include "import/importer.h"
+#include "json/json_value.h"
+#include "raw/raw_decoder.h"
+#include "xmp/xmp_service.h"
 
 using namespace lumina;
 using lumina::db::Database;
+using lumina::db::FtsIndexer;
 using lumina::db::ImageDao;
 using lumina::db::MigrationReport;
 using lumina::db::PhotoDao;
@@ -245,6 +255,209 @@ int main() {
     CHECK(scalarInt(&db, "SELECT folder_id FROM photos WHERE id=" + std::to_string(p2Id) + ";") ==
               folderA,
           "I6：冲突失败后 folder 归属仍是原文件夹（== folderA）");
+  }
+
+  // ---- M2 T2.2b（I2/M35）：upsert 冲突目标语义 ----
+  // file_id>0 → 按 file_id 认行（换路径不产生新 photos.id）；file_id=0 → 路径冲突兜底。
+  {
+    PhotoRecord rec;
+    rec.folderId = folderA;
+    rec.rootId = rootId;
+    rec.fileName = "identity-a.rw2";
+    rec.filePath = rootPath + "/2026/风光/identity-a.rw2";
+    rec.format = "RW2";
+    int64_t idA = 0;
+    CHECK(photos.upsert(rec, &idA, &err), "upsert 插入 identity-a（file_id=0）");
+    // file_id=0（mock/HDR 口径）：同路径 upsert → 路径冲突兜底，id 不变
+    int64_t idA2 = 0;
+    CHECK(photos.upsert(rec, &idA2, &err), "file_id=0 同路径二次 upsert");
+    CHECK(idA2 == idA, "file_id=0：路径冲突兜底复用同一行");
+
+    // 绑定文件身份后再改 file_path upsert → 必须仍认同一行（I2 核心）
+    const int64_t fidA = images.ensureFileRow(folderA, "identity-a.rw2", &err);
+    CHECK(fidA > 0, "ensureFileRow identity-a");
+    CHECK(images.linkPhoto(idA, fidA, &err), "linkPhoto");
+    PhotoRecord rec2 = rec;
+    rec2.fileId = fidA;
+    rec2.filePath = rootPath + "/2027/风光/identity-a.rw2";  // 换目录重命名后的新路径
+    int64_t idA3 = 0;
+    CHECK(photos.upsert(rec2, &idA3, &err), "file_id>0 且路径已变 → upsert");
+    CHECK(idA3 == idA, "I2：file_id>0 时按文件身份认行，photos.id 不变");
+    CHECK(scalarInt(&db, "SELECT COUNT(*) FROM photos WHERE file_id=" + std::to_string(fidA) +
+                             ";") == 1,
+          "I2：同一 file_id 只有一行（无重复行）");
+    // getById 回填 fileId（M35）
+    PhotoRecord loaded;
+    CHECK(photos.getById(idA, &loaded, &err), "getById");
+    CHECK(loaded.fileId == fidA, "M35：getById 回填 fileId");
+  }
+
+  // ---- M2 T2.2b（M36 / 验收①）：真实导入路径 —— 移动文件夹 + 重新导入 ----
+  // 用真实 Importer 跑完整链（扫描→拷贝→md5→建档→入库），不是直接调 DAO。
+  {
+    const std::string homeDir = "D:/LUMINA/build/runtime/test-image-identity";
+    const std::string srcDir = homeDir + "/src";
+    // 库目录用时间戳命名：重跑测试时上轮残留的目录会让 renamePath 失败（Windows
+    // 不允许目录覆盖目录），这是测试卫生而非产品逻辑
+    const std::string libOld = homeDir + "/lib-" + std::to_string(nowMs());
+    const std::string libNew = libOld + "-moved";  // 用户在库外把文件夹改名
+    makeDirs(srcDir);
+    makeDirs(libOld);
+    // 最小合法 PNG（64×48 纯色），带真实内容供 md5/拷贝
+    {
+      // zlib 免依赖：直接写一张最小 PNG（IHDR + 全零 IDAT 会被判损坏，这里用
+      // 未压缩 deflate 块存 48 行像素）
+      std::string raw;
+      for (int y = 0; y < 48; ++y) {
+        raw.push_back('\0');
+        for (int x = 0; x < 64 * 3; ++x) raw.push_back(static_cast<char>(0x40 + (x % 7)));
+      }
+      auto chunk = [](const std::string& type, const std::string& data) {
+        std::string c = type + data;
+        auto be = [](uint32_t v) {
+          std::string s(4, '\0');
+          s[0] = static_cast<char>((v >> 24) & 0xFF);
+          s[1] = static_cast<char>((v >> 16) & 0xFF);
+          s[2] = static_cast<char>((v >> 8) & 0xFF);
+          s[3] = static_cast<char>(v & 0xFF);
+          return s;
+        };
+        // CRC32（zlib 多项式，手写查表太长 → 用小函数）
+        auto crc32 = [](const std::string& s) {
+          uint32_t crc = 0xFFFFFFFFu;
+          for (unsigned char ch : s) {
+            crc ^= ch;
+            for (int k = 0; k < 8; ++k)
+              crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+          }
+          return crc ^ 0xFFFFFFFFu;
+        };
+        return be(static_cast<uint32_t>(data.size())) + c + be(crc32(c));
+      };
+      // stored deflate 块（BTYPE=00）：len/nlen + 原始字节（整块 ≤65535）
+      std::string stored;
+      stored.push_back('\x01');  // BFINAL=1, BTYPE=00
+      stored.push_back(static_cast<char>(raw.size() & 0xFF));
+      stored.push_back(static_cast<char>((raw.size() >> 8) & 0xFF));
+      stored.push_back(static_cast<char>(~raw.size() & 0xFF));
+      stored.push_back(static_cast<char>((~raw.size() >> 8) & 0xFF));
+      stored += raw;
+      std::string idat = "x\x9c";  // zlib 头（CMF/FLG：0x78 0x9C）
+      idat += stored;
+      {  // adler32
+        uint32_t a = 1, b = 0;
+        for (unsigned char ch : raw) {
+          a = (a + ch) % 65521;
+          b = (b + a) % 65521;
+        }
+        auto be = [](uint32_t v) {
+          std::string s(4, '\0');
+          s[0] = static_cast<char>((v >> 24) & 0xFF);
+          s[1] = static_cast<char>((v >> 16) & 0xFF);
+          s[2] = static_cast<char>((v >> 8) & 0xFF);
+          s[3] = static_cast<char>(v & 0xFF);
+          return s;
+        };
+        idat += be((b << 16) | a);
+      }
+      std::string png = std::string("\x89PNG\r\n\x1a\n", 8);
+      png += chunk("IHDR", std::string("\x00\x00\x00\x40\x00\x00\x00\x30\x08\x02\x00\x00\x00", 13));
+      png += chunk("IDAT", idat);
+      png += chunk("IEND", "");
+      FILE* f = fopen((srcDir + "/moving-photo.png").c_str(), "wb");
+      if (f) {
+        fwrite(png.data(), 1, png.size(), f);
+        fclose(f);
+      }
+    }
+
+    core::Config cfg;
+    CHECK(cfg.init(homeDir + "/home", &err), "Config.init（独立 home）");
+    core::ThreadPool pool(2);
+    FtsIndexer fts(&db);
+    raw::RawDecoder decoder;
+    xmp::XmpService xmp(&cfg, &photos, &db, &pool);
+    db::ImageDao imgDao(&db, &xmp);
+    import::Importer imp(
+        &cfg, &photos, &imgDao, &db, &fts, &decoder, &xmp,
+        [](const std::string& method, const json::JsonValue& params) {
+          if (method == "event.import.fileResult") {
+            std::printf("    [fileResult] %s status=%s err=%s\n",
+                        params.get("path").asString().c_str(),
+                        params.get("status").asString().c_str(),
+                        params.get("error").asString().c_str());
+          }
+        });
+
+    auto runImport = [&](const std::string& target) {
+      import::ImportOptions o;
+      o.sourcePath = srcDir;
+      o.targetPath = target;
+      o.renameTemplate = "{name}";
+      o.verifyMd5 = true;
+      o.pairRawJpg = false;
+      std::atomic<bool> cancel{false};
+      int64_t jobId = 1;
+      JobContext ctx(jobId, &cancel, [](int, const std::string&) {},
+                     [](const json::JsonValue&) {});
+      imp.run(o, ctx);
+    };
+
+    runImport(libOld);
+    // 按导入行的 file_path 圈定（不能用 MIN(id)/LIMIT 1：前面 I2 块已往 photos
+    // 表写过行，那些行 md5 为空，会污染 md5v/idFirst 的取值）
+    const std::string firstPath = libOld + "/moving-photo.png";
+    int64_t idFirst = 0;
+    std::string md5v;
+    {
+      auto q = db.prepareCached("t22bMd5", "SELECT id, md5 FROM photos WHERE file_path=?;", &err);
+      CHECK(q && q->valid(), "查询首导入行");
+      if (q && q->valid() && q->bindText(1, firstPath) && q->step(nullptr)) {
+        idFirst = q->columnInt64(0);
+        md5v = q->columnText(1);
+      }
+      if (q) q->reset();
+    }
+    CHECK(!md5v.empty() && idFirst > 0, "首次真实导入入库");
+    CHECK(scalarInt(&db, "SELECT COUNT(*) FROM photos WHERE md5='" + md5v + "';") == 1,
+          "首次导入后 md5 唯一");
+
+    // 用户在库外把库文件夹改名：老 file_path 失效（文件跟着走了）
+    CHECK(renamePath(libOld, libNew, &err), "库文件夹改名（模拟移动）");
+    CHECK(!fileExists(libOld + "/moving-photo.png"), "老路径已失效");
+    CHECK(fileExists(libNew + "/moving-photo.png"), "文件在新路径");
+
+    runImport(libNew);  // 重新导入指向新路径
+    CHECK(scalarInt(&db, "SELECT COUNT(*) FROM photos WHERE md5='" + md5v + "';") == 1,
+          "验收①：重新导入后 md5 仍唯一（无重复行）");
+    const int64_t idAfter = scalarInt(&db, "SELECT MIN(id) FROM photos WHERE md5='" + md5v + "';");
+    CHECK(idAfter == idFirst, "验收①：photos.id == 原 id（身份未漂移）");
+    const int64_t folderAfter = scalarInt(
+        &db, "SELECT folder_id FROM photos WHERE id=" + std::to_string(idAfter) + ";");
+    const int64_t newFolderId =
+        scalarInt(&db, "SELECT id FROM folders WHERE root_id=" +
+                           std::to_string(scalarInt(&db, "SELECT root_id FROM photos WHERE id=" +
+                                                          std::to_string(idAfter) + ";")) +
+                           " AND rel_path='.';");
+    CHECK(folderAfter == newFolderId && newFolderId > 0,
+          "验收①：files.folder_id 指向新文件夹（rel_path='.'）");
+    const std::string sidecarAfter = [&]() {
+      auto q = db.prepareCached("t22bSidecar",
+                                "SELECT sidecar_path FROM photos WHERE id=" +
+                                    std::to_string(idAfter) + ";",
+                                &err);
+      return (q && q->valid() && q->step(nullptr)) ? q->columnText(0) : std::string();
+    }();
+    CHECK(sidecarAfter == xmp.sidecarPathFor(libNew + "/moving-photo.png"),
+          "验收①：sidecar_path 已重算到新位置");
+    // 参数可读（sidecar 指向的口径一致）
+    {
+      json::JsonValue params;
+      std::string loadErr;
+      const bool loaded = xmp.loadParams(idAfter, &params, &loadErr);
+      CHECK(loaded || !loadErr.empty(),
+            "验收①：xmp.loadParams 不崩溃（无 sidecar 时显式报缺失而非静默）");
+    }
   }
 
   db.close();

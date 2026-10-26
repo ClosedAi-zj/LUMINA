@@ -13,6 +13,7 @@
 
 #include "core/logger.h"
 #include "core/str_util.h"
+#include "xmp/xmp_service.h"
 
 namespace lumina {
 namespace db {
@@ -103,8 +104,11 @@ int64_t ImageDao::findFolderId(int64_t rootId, const std::string& relPath, std::
     if (err) *err = "image_dao: database not open";
     return 0;
   }
+  // 口径统一：photo_dao/importer 用 "." 表示根级目录（见 importer.cpp relForDb），
+  // 这里把空串也归一到 "."，避免同一目录出现两行 folders
   return queryId(db_, "SELECT id FROM folders WHERE root_id=? AND rel_path=? LIMIT 1;",
-                 {Bind::num(rootId), Bind::text(relPath)}, "findFolder", err);
+                 {Bind::num(rootId), Bind::text(relPath.empty() ? "." : relPath)}, "findFolder",
+                 err);
 }
 
 int64_t ImageDao::ensureFolder(int64_t rootId, const std::string& relPath, std::string* err) {
@@ -116,19 +120,20 @@ int64_t ImageDao::ensureFolder(int64_t rootId, const std::string& relPath, std::
     if (err) *err = "image_dao: rootId 非法";
     return 0;
   }
-  const int64_t existing = findFolderId(rootId, relPath, err);
+  const std::string rel = relPath.empty() ? "." : relPath;
+  const int64_t existing = findFolderId(rootId, rel, err);
   if (existing > 0) return existing;
-  const std::string name = relPath.empty() ? std::string("/") : baseName(relPath);
+  const std::string name = rel.empty() ? std::string("/") : baseName(rel);
   auto stmt = db_->prepareCached("imgdao:ensureFolder",
                                  "INSERT OR IGNORE INTO folders(root_id,rel_path,name) VALUES(?,?,?);",
                                  err);
   if (!stmt || !stmt->valid()) return 0;
-  if (!bindAll(stmt.get(), {Bind::num(rootId), Bind::text(relPath), Bind::text(name)}, err)) {
+  if (!bindAll(stmt.get(), {Bind::num(rootId), Bind::text(rel), Bind::text(name)}, err)) {
     return 0;
   }
   if (!stmt->step(err)) return 0;
   stmt->reset();
-  return findFolderId(rootId, relPath, err);
+  return findFolderId(rootId, rel, err);
 }
 
 std::string ImageDao::rootPath(int64_t rootId, std::string* err) {
@@ -283,8 +288,11 @@ bool ImageDao::relocate(int64_t photoId, int64_t rootId, const std::string& relP
     if (err) *err = "image_dao: 目标文件夹创建失败（" + relPath + "）";
     return false;
   }
+  // rel_path 口径统一：photo_dao/importer 用 "." 表示根级目录，路径拼接时归一为空
+  //（否则会算出 "root/./name.jpg" 这种路径）。folder 查找仍用原值（与既有行匹配）。
+  const std::string relNorm = (relPath == ".") ? std::string() : relPath;
   const std::string newPath =
-      relPath.empty() ? joinPath(root, name) : joinPath(joinPath(root, relPath), name);
+      relNorm.empty() ? joinPath(root, name) : joinPath(joinPath(root, relNorm), name);
   // 冲突检查：目标路径已被另一张照片占用 → 明确失败（不静默覆盖别人的行）
   const int64_t conflict = queryId(db_, "SELECT id FROM photos WHERE file_path=? AND id<>? LIMIT 1;",
                                    {Bind::text(newPath), Bind::num(photoId)}, "relocateConflict", err);
@@ -299,6 +307,16 @@ bool ImageDao::relocate(int64_t photoId, int64_t rootId, const std::string& relP
     if (err) *err = "image_dao: 目标文件身份创建失败（" + name + "）";
     return false;
   }
+  // 搬迁前先取旧 sidecar 信息（重算 mtime 时保留旧值作兜底）
+  const int64_t oldSidecarMtime = [&]() {
+    auto stmt = db_->prepareCached("imgdao:relocOldMtime",
+                                   "SELECT COALESCE(sidecar_mtime,0) FROM photos WHERE id=?;",
+                                   err);
+    if (!stmt || !stmt->valid()) return static_cast<int64_t>(0);
+    const int64_t v = stmt->step(err) ? stmt->columnInt64(0) : 0;
+    stmt->reset();
+    return v;
+  }();
   auto stmt = db_->prepareCached(
       "imgdao:relocate",
       "UPDATE photos SET folder_id=?, root_id=?, file_path=?, file_id=? WHERE id=?;", err);
@@ -311,6 +329,29 @@ bool ImageDao::relocate(int64_t photoId, int64_t rootId, const std::string& relP
   }
   if (!stmt->step(err)) return false;
   stmt->reset();
+
+  // N10（架构 §3.3.1 I3 附带真缺陷）：sidecar_path 必须随搬迁重算，否则移动
+  // 文件夹后 sidecar 指向旧路径，用户看到的是「编辑参数全部丢失」。
+  // 用 XmpService::sidecarPathFor(newPath) 统一口径；mtime 取新位置文件的
+  // 实际 mtime，新 sidecar 尚未落盘则保留旧值（参数内容本身没变）。
+  if (xmp_ != nullptr) {
+    const std::string newSidecar = xmp_->sidecarPathFor(newPath);
+    if (!newSidecar.empty()) {
+      const int64_t mtime =
+          fileExists(newSidecar) ? fileMtimeMs(newSidecar) : oldSidecarMtime;
+      auto upd = db_->prepareCached(
+          "imgdao:relocSidecar",
+          "UPDATE photos SET sidecar_path=?, sidecar_mtime=? WHERE id=?;", err);
+      if (upd && upd->valid()) {
+        if (!bindAll(upd.get(),
+                     {Bind::text(newSidecar), Bind::num(mtime), Bind::num(photoId)}, err)) {
+          return false;
+        }
+        if (!upd->step(err)) return false;
+        upd->reset();
+      }
+    }
+  }
   // photos.id 不变是硬不变量：写入后自检（异常路径必须可见，不得静默）
   const int64_t stillThere = queryId(db_, "SELECT id FROM photos WHERE id=? AND file_id=? LIMIT 1;",
                                      {Bind::num(photoId), Bind::num(fileId)}, "relocateVerify", err);
@@ -319,6 +360,88 @@ bool ImageDao::relocate(int64_t photoId, int64_t rootId, const std::string& relP
                     "，实得 " + std::to_string(stillThere) + "）";
     logError("image_dao", "relocate id instability detected");
     return false;
+  }
+  return true;
+}
+
+bool ImageDao::reconcile(ReconcileReport* report, std::string* err, std::atomic<bool>* cancel) {
+  ReconcileReport local;
+  ReconcileReport& rep = report ? *report : local;
+  if (!db_ || !db_->isOpen()) {
+    if (err) *err = "image_dao: database not open";
+    return false;
+  }
+  if (!hasFileIdentity(err)) return false;  // 迁移未跑：明确失败，不静默降级
+
+  // ⚠ 性能纪律（migrations.cpp 同款）：循环内不得 prepareCached（每次调用都新建语句）。
+  // 三条语句全部在循环外 prepare 一次，循环内只 bind/step/reset。
+  auto scan = db_->prepareCached("imgdao:recScan",
+                                 "SELECT id, folder_id, file_name, COALESCE(file_id,0) "
+                                 "FROM photos WHERE deleted=0 ORDER BY id;",
+                                 err);
+  auto ins = db_->prepareCached("imgdao:recIns",
+                                "INSERT OR IGNORE INTO files(folder_id,name) VALUES(?,?);", err);
+  auto find = db_->prepareCached("imgdao:recFind",
+                                 "SELECT id FROM files WHERE folder_id=? AND name=? LIMIT 1;", err);
+  auto upd = db_->prepareCached("imgdao:recUpd",
+                                "UPDATE photos SET file_id=? WHERE id=?;", err);
+  if (!scan || !scan->valid() || !ins || !ins->valid() || !find || !find->valid() || !upd ||
+      !upd->valid()) {
+    if (err && err->empty()) *err = "image_dao: reconcile prepare failed";
+    return false;
+  }
+  while (scan->step(err)) {
+    if (cancel && cancel->load()) {
+      rep.detail = "reconcile cancelled at photo " + std::to_string(scan->columnInt64(0));
+      logWarn("image_dao", rep.detail);
+      scan->reset();
+      return false;
+    }
+    ++rep.photosScanned;
+    const int64_t photoId = scan->columnInt64(0);
+    const int64_t folderId = scan->columnInt64(1);
+    const std::string name = scan->columnText(2);
+    const int64_t currentFileId = scan->columnInt64(3);
+    if (folderId <= 0 || name.empty()) {
+      ++rep.photosUnlinked;
+      continue;
+    }
+    find->reset();
+    if (!bindAll(find.get(), {Bind::num(folderId), Bind::text(name)}, err)) return false;
+    int64_t fileId = find->step(err) ? find->columnInt64(0) : 0;
+    find->reset();
+    if (fileId <= 0) {
+      ins->reset();
+      if (!bindAll(ins.get(), {Bind::num(folderId), Bind::text(name)}, err)) return false;
+      if (!ins->step(err)) return false;
+      ins->reset();
+      find->reset();
+      if (!bindAll(find.get(), {Bind::num(folderId), Bind::text(name)}, err)) return false;
+      fileId = find->step(err) ? find->columnInt64(0) : 0;
+      find->reset();
+      if (fileId <= 0) {
+        ++rep.photosUnlinked;
+        continue;
+      }
+      ++rep.filesInserted;
+    }
+    if (fileId != currentFileId) {
+      upd->reset();
+      if (!bindAll(upd.get(), {Bind::num(fileId), Bind::num(photoId)}, err)) return false;
+      if (!upd->step(err)) return false;
+      upd->reset();
+      ++rep.photosRelinked;
+    }
+  }
+  scan->reset();
+  rep.detail = "reconcile: scanned=" + std::to_string(rep.photosScanned) +
+               " files+" + std::to_string(rep.filesInserted) +
+               " relinked=" + std::to_string(rep.photosRelinked) +
+               " unlinked=" + std::to_string(rep.photosUnlinked);
+  if (rep.photosUnlinked > 0) {
+    logWarn("image_dao", rep.detail + "（unlinked 行无法归位，见 folder_id/file_name 异常行）");
+  } else {
+    logInfo("image_dao", rep.detail);
   }
   return true;
 }

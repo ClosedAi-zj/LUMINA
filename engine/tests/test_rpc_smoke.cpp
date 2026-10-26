@@ -130,7 +130,9 @@ int main() {
   xmp::XmpMigrator migrator(&config, &photos, &database, &xmp);
   edit::EditSessionManager sessions(&xmp, &photos);
   edit::VirtualCopyService vcopy(&config, &database, &photos, &xmp);
-  import::Importer importer(&config, &photos, &database, &fts, &decoder, &xmp,
+  // M2 T2.2b：四级表身份层（relocate RPC 入口走它）
+  db::ImageDao imageDao(&database, &xmp);
+  import::Importer importer(&config, &photos, &imageDao, &database, &fts, &decoder, &xmp,
                             [](const std::string&, const json::JsonValue&) {});
   health::HealthScanner healthScanner(&config, &photos, &health,
                                       [](const std::string&, const json::JsonValue&) {});
@@ -142,6 +144,7 @@ int main() {
   s.config = &config;
   s.db = &database;
   s.photos = &photos;
+  s.images = &imageDao;
   s.albums = &albums;
   s.health = &health;
   s.fts = &fts;
@@ -479,6 +482,133 @@ int main() {
     rpc::RpcResponse r = dispatcher.dispatch("system.setSettings", params);
     check(!r.isError && r.result.get("settings").get("theme").asString() == "dark",
           "case15: setSettings 深合并生效");
+  }
+
+  // ---------- 用例 16（M2 T2.2b / I3）：import.resolveMissingFolder{relocate} 真实路径 ----------
+  // 断言（架构 §5 T2.2b）：photos.id 不变 · file_path 已更新 · files.folder_id 指向新
+  // 文件夹 · sidecar_path 跟随（手写字符串手术在这四条上全错）。
+  {
+    // 造一个独立根 + 两个文件夹，照片与 sidecar 都用真实盘上路径
+    const std::string rootDir = std::string(kDir) + "/t22b-root";
+    const std::string oldRel = "2026/old";
+    const std::string newRel = "2026/new";
+    makeDirs(rootDir + "/" + oldRel);
+    makeDirs(rootDir + "/" + newRel);
+    const std::string fileName = "t22b-case16.png";
+    // 最小 PNG（1×1 红点）：只需要文件存在，不需要能解码。
+    // 放在**新**文件夹（模拟用户已在资源管理器把整个文件夹挪走，DB 还指着旧位置）。
+    {
+      const unsigned char png[] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00,
+                                   0x00, 0x0D, 'I',  'H',  'D',  'R',  0x00, 0x00, 0x00, 0x01,
+                                   0x00, 0x00, 0x00, 0x01, 0x08,  0x02, 0x00, 0x00, 0x00};
+      FILE* f = fopen((rootDir + "/" + newRel + "/" + fileName).c_str(), "wb");
+      if (f) {
+        fwrite(png, 1, sizeof(png), f);
+        fclose(f);
+      }
+    }
+    const int64_t rootId = photos.ensureRoot(rootDir, "t22b-root", &err);
+    const int64_t folderOld = photos.ensureFolder(rootId, oldRel, "old", &err);
+    const int64_t folderNew = photos.ensureFolder(rootId, newRel, "new", &err);
+    check(rootId > 0 && folderOld > 0 && folderNew > 0, "case16: root/folder 准备");
+    PhotoRecord p16;
+    p16.rootId = rootId;
+    p16.folderId = folderOld;
+    p16.fileName = fileName;
+    p16.filePath = rootDir + "/" + oldRel + "/" + fileName;
+    p16.format = "PNG";
+    p16.importedAt = nowMs();
+    p16.sidecarPath = xmp.sidecarPathFor(p16.filePath);
+    p16.health = "missing";  // 模拟「整夹不可读」后的照片
+    int64_t idOut = 0;
+    check(photos.upsert(p16, &idOut, &err), "case16: 插入照片");
+    const int64_t photoId16 = idOut;
+
+    json::JsonValue rp = json::JsonValue::objectValue();
+    rp.setItem("path", rootDir + "/" + oldRel);
+    rp.setItem("action", "relocate");
+    rp.setItem("newPath", rootDir + "/" + newRel);
+    rpc::RpcResponse r16 = dispatcher.dispatch("import.resolveMissingFolder", rp);
+    check(!r16.isError, "case16: resolveMissingFolder 无错误");
+    check(r16.result.get("affected").asInt(0) == 1, "case16: affected == 1");
+
+    PhotoRecord after;
+    check(photos.getById(photoId16, &after, &err), "case16: 照片仍在（id 未漂移）");
+    check(after.filePath == rootDir + "/" + newRel + "/" + fileName,
+          "case16: file_path 已更新到新文件夹");
+    const int64_t fidNew = imageDao.ensureFileRow(folderNew, fileName, &err);
+    check(fidNew > 0 && after.fileId == fidNew,
+          "case16: photos.file_id 指向新文件夹的 files 行");
+    check(xmp.sidecarPathFor(after.filePath) == after.sidecarPath,
+          "case16: sidecar_path 已按新路径重算（不再指向旧文件夹）");
+    check(after.fileId != 0, "case16: file_id 非空（身份闭环）");
+  }
+
+  // ---------- 用例 17（M2 T2.2b / I3）：health.resolveIssue{relocate} 同四条断言 ----------
+  {
+    const std::string rootDir = std::string(kDir) + "/t22b-root";
+    const std::string fileName = "t22b-case17.png";
+    // 第二张照片放在另一个子目录，然后「搬回来」语义：newPath 给到文件级新路径
+    const std::string fromRel = "2026/vanish";
+    const std::string toRel = "2026/restored";
+    makeDirs(rootDir + "/" + toRel);
+    {
+      const unsigned char png[] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00,
+                                   0x00, 0x0D, 'I',  'H',  'D',  'R',  0x00, 0x00, 0x00, 0x01,
+                                   0x00, 0x00, 0x00, 0x01, 0x08,  0x02, 0x00, 0x00, 0x00};
+      FILE* f = fopen((rootDir + "/" + toRel + "/" + fileName).c_str(), "wb");
+      if (f) {
+        fwrite(png, 1, sizeof(png), f);
+        fclose(f);
+      }
+    }
+    const int64_t rootId = photos.ensureRoot(rootDir, "t22b-root", &err);
+    const int64_t folderFrom = photos.ensureFolder(rootId, fromRel, "vanish", &err);
+    const int64_t folderTo = photos.ensureFolder(rootId, toRel, "restored", &err);
+    PhotoRecord p17;
+    p17.rootId = rootId;
+    p17.folderId = folderFrom;
+    p17.fileName = fileName;
+    p17.filePath = rootDir + "/" + fromRel + "/" + fileName;  // 原路径（已不存在）
+    p17.format = "PNG";
+    p17.importedAt = nowMs();
+    p17.isMissing = true;
+    p17.health = "missing";
+    int64_t photoId17 = 0;
+    check(photos.upsert(p17, &photoId17, &err), "case17: 插入丢失照片");
+    check(photos.setMissing(photoId17, true, &err), "case17: 标记 missing");
+    // health_issues 行（issueGet 读 photo_id/path/kind）—— 走 DAO，与线上同口径
+    const int64_t issueId =
+        health.recordIssue(photoId17, "missing", p17.filePath, p17.filePath, &err);
+    check(issueId > 0, "case17: 造 health_issue 行");
+
+    json::JsonValue rp = json::JsonValue::objectValue();
+    rp.setItem("issueId", json::JsonValue::integer(issueId));
+    rp.setItem("action", "relocate");
+    rp.setItem("newPath", rootDir + "/" + toRel + "/" + fileName);
+    rpc::RpcResponse r17 = dispatcher.dispatch("health.resolveIssue", rp);
+    check(!r17.isError, "case17: health.resolveIssue 无错误");
+    check(r17.result.get("resolved").asInt(0) == 1, "case17: resolved == 1");
+
+    PhotoRecord after;
+    check(photos.getById(photoId17, &after, &err), "case17: 照片仍在（id 未漂移）");
+    check(after.filePath == rootDir + "/" + toRel + "/" + fileName,
+          "case17: file_path 已更新");
+    const int64_t fidTo = imageDao.ensureFileRow(folderTo, fileName, &err);
+    check(fidTo > 0 && after.fileId == fidTo, "case17: file_id 指向新文件夹行");
+    check(!after.isMissing && after.health == "ok", "case17: missing/health 状态已复位");
+    check(xmp.sidecarPathFor(after.filePath) == after.sidecarPath, "case17: sidecar_path 已重算");
+  }
+
+  // ---------- 用例 18（M2 T2.2b）：files 表一致性重建幂等 ----------
+  {
+    db::ImageDao::ReconcileReport rep;
+    check(imageDao.reconcile(&rep, &err), "case18: reconcile 成功");
+    check(rep.photosUnlinked == 0, "case18: 无无法归位行");
+    db::ImageDao::ReconcileReport rep2;
+    check(imageDao.reconcile(&rep2, &err), "case18: 二次 reconcile 成功");
+    check(rep2.filesInserted == 0 && rep2.photosRelinked == 0,
+          "case18: 幂等（二次运行 0 变更）");
   }
 
   // ---------- 收尾 ----------
