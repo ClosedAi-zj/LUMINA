@@ -4,6 +4,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "core/str_util.h"
+
 namespace lumina {
 namespace {
 
@@ -131,7 +133,15 @@ std::string md5OfBuffer(const void* data, size_t size) {
 }
 
 std::string md5OfFile(const std::string& path, std::string* err) {
+  // 路径必须走宽字符打开：Windows 下窄字符 fopen 按 ANSI 代码页解释路径，
+  // 任何含中文/日文/emoji 的文件名都会直接失败（实测：导入中文名照片 →
+  // "md5 failed: open failed: …" → 整批照片被标为 failed，用户看到的是
+  // "无法导入自己的文件"）。此处与 str_util 其余文件 IO 统一用宽字符路径。
+#ifdef _WIN32
+  FILE* f = _wfopen(utf8ToUtf16(path).c_str(), L"rb");
+#else
   FILE* f = fopen(path.c_str(), "rb");
+#endif
   if (!f) {
     if (err) *err = "open failed: " + path;
     return std::string();

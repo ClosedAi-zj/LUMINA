@@ -47,6 +47,8 @@ class Importer {
   bool importOne(const ImportOptions& opts, const ScanItem& item, int64_t* photoId,
                  std::string* status, std::string* error);
   void probeMeta(const ScanItem& item, raw::RawMeta* meta);
+  // 内容级去重：库内任意未删除照片 md5 相同即视为重复（协议 §5.8）
+  bool findPhotoIdByMd5(const std::string& md5, int64_t* photoId);
   PhotoRecord buildRecord(const ImportOptions& opts, const ScanItem& item,
                           const std::string& finalPath, const raw::RawMeta& meta);
 

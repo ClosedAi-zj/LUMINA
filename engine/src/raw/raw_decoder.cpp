@@ -30,6 +30,16 @@ bool isSupportedExtension(const std::string& ext) {
   return false;
 }
 
+bool isRawExtension(const std::string& ext) {
+  static const char* kRaw[] = {"rw2", "dng", "arw", "cr2", "cr3", "nef", "nrw", "orf", "raf",
+                               "pef", "ptx", "r3d", "srw", "x3f", "erf", "kdc", "dcr", "iiq",
+                               "3fr", "fff", "mef", "mos", "raw", "rwz", "srf"};
+  for (const char* e : kRaw) {
+    if (extensionOf(std::string("x.") + ext) == e) return true;
+  }
+  return false;
+}
+
 std::string formatOfExtension(const std::string& ext) {
   std::string e = extensionOf(std::string("x.") + ext);
   std::string upper;

@@ -420,8 +420,43 @@ export function resolveEnginePath(appRoot: string): string {
   return candidate;
 }
 
-export function resolveHomeDir(): string {
+/**
+ * 运行时主目录（`--home`）解析。
+ *
+ * 三条互斥来源，优先级从高到低：
+ * 1. `LUMINA_HOME` 环境变量 —— 排障与冒烟脚本（scripts/dev.ps1、多个 gate 脚本）
+ *    依赖它，必须保留且优先级最高；
+ * 2. 打包版（`app.isPackaged` 且非开发/冒烟/基线）—— 落 `{userData}/library`
+ *    （Windows 即 `%APPDATA%/LUMINA/library`），与开发档案物理隔离；
+ * 3. 其余（开发 / 冒烟 / 基线）—— 继续用 `~/.lumina`。
+ *
+ * 为什么必须隔离：开发机 `~/.lumina` 里有冒烟生成的 mocklib（上万张程序化测试图）
+ * 和 5 个 mock 根目录。打包版若共用同一 home，用户一启动就看到满屏测试图
+ * （用户实测反馈"发布的 exe 存在测试用的图片"）。冒烟链路大量硬编码
+ * `~/.lumina/mocklib`，所以开发侧路径不能改，只能让打包版换目录。
+ */
+export interface HomeDirOptions {
+  /** 是否打包版（主进程传 app.isPackaged） */
+  isPackaged?: boolean;
+  /** Electron userData 目录（主进程传 app.getPath('userData')） */
+  userDataDir?: string;
+  /** 开发 / 冒烟 / 基线：强制走 `~/.lumina` */
+  useDevHome?: boolean;
+}
+
+export function resolveHomeDir(opts: HomeDirOptions = {}): string {
+  const fromEnv = process.env.LUMINA_HOME;
+  if (fromEnv && fromEnv.trim() !== '') return path.resolve(fromEnv.trim());
+  if (opts.isPackaged && !opts.useDevHome && opts.userDataDir) {
+    // 独立档案：引擎首次启动会在此目录自建 db/cache/logs，库为 0 张照片
+    return path.join(opts.userDataDir, 'library');
+  }
   // 回退必须是可移植的默认主目录（与引擎 --home 缺省一致）；
   // 硬编码开发机路径会让最终用户的数据落在不存在的盘符路径上。
-  return process.env.LUMINA_HOME ?? path.join(os.homedir(), '.lumina');
+  return path.join(os.homedir(), '.lumina');
+}
+
+/** 旧版（开发期）档案目录：仅用于"检测到但不迁移"的日志提示 */
+export function legacyHomeDir(): string {
+  return path.join(os.homedir(), '.lumina');
 }

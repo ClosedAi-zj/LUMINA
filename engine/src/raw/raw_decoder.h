@@ -33,6 +33,11 @@ struct RawMeta {
 
 // 引擎支持的输入格式（白名单，协议 2002 的依据）
 bool isSupportedExtension(const std::string& ext);
+// 是否真正需要 LibRaw 解码的 RAW 扩展名。
+// 注意：isSupportedExtension 同时包含 JPG/PNG/TIFF 等标准格式，把它当"是 RAW"用
+// 会让标准格式走 LibRaw 而必然失败（实测：PNG/JPG 缩略图全部报
+// "libraw open failed (-2)"，图库永远没有缩略图）。判定 RAW 必须用本函数。
+bool isRawExtension(const std::string& ext);
 std::string formatOfExtension(const std::string& ext);
 
 // L1 自检：单张抽样失败详情（ipc-protocol v1.0.1 §5.7 raw.selfTest）

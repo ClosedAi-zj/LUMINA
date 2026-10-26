@@ -26,7 +26,28 @@ interface SourcePick {
   label: string;
 }
 
-const TEMPLATES = ['YYYY-MM-DD_地点_序号', 'YYYYMMDD_原文件名', '地点_序号'];
+/**
+ * 重命名模板：`label` 给用户看，`template` 才是发给引擎的 token 串（协议 §5.8）。
+ *
+ * 曾经这里只有中文标签，并且被**原样**当作 renameTemplate 传给引擎：
+ * `RenameEngine::validate` 对不含 `{}` 的串直接放行，`apply` 于是把每一张照片都
+ * 命名成同一个基名（"YYYY-MM-DD_地点_序号"），同目录内互相覆盖 ——
+ * 用户看到的是"导入了 N 张，库里只有 1 张 / 根本导不进去"。
+ */
+const TEMPLATES: { label: string; template: string }[] = [
+  { label: '日期_机型_原文件名', template: '{YYYY}-{MM}-{DD}_{camera}_{name}' },
+  { label: '日期时间_原文件名', template: '{YYYY}{MM}{DD}_{HH}{mm}{ss}_{name}' },
+  { label: '原文件名（不改名）', template: '{name}' },
+];
+
+/** 导入完成事件 result（引擎 importer.cpp 实际字段：imported / duplicated / failed） */
+interface ImportResultPayload {
+  imported?: number;
+  duplicated?: number;
+  failed?: number;
+  totalFiles?: number;
+  error?: string;
+}
 
 export default function IngestWizard() {
   const [step, setStep] = useState<Step>(1);
@@ -43,13 +64,13 @@ export default function IngestWizard() {
   const [targetCheck, setTargetCheck] = useState<{ freeBytes: number; warning: boolean } | null>(null);
 
   // 选项
-  const [template, setTemplate] = useState(TEMPLATES[0]);
+  const [template, setTemplate] = useState(TEMPLATES[0].template);
   const [enterCulling, setEnterCulling] = useState(true);
   const [applyPreset, setApplyPreset] = useState<string | null>('风光 · 基础');
 
   // 执行
   const [importJobId, setImportJobId] = useState<number | null>(null);
-  const [summary, setSummary] = useState<{ added: number; skipped: number; failed: number } | null>(null);
+  const [summary, setSummary] = useState<{ added: number; skipped: number; failed: number; error?: string } | null>(null);
 
   const volumes = useRpcQuery(() => api.system.listVolumes(), []);
   const recent = useRpcQuery(() => api.importApi.listRecentSources(), []);
@@ -69,11 +90,17 @@ export default function IngestWizard() {
     }
   }, [scanJob, scanResult]);
 
-  // 导入完成 → 汇总
+  // 导入完成 → 汇总（字段名必须与引擎 result 对齐：imported / duplicated / failed；
+  // 之前按 added/skipped 读，弹窗永远显示"成功 undefined 张"）
   useEffect(() => {
     if (importJob?.state === 'done' && importJob.result) {
-      const r = importJob.result as unknown as { added: number; skipped: number; failed: number };
-      setSummary(r);
+      const r = importJob.result as unknown as ImportResultPayload;
+      setSummary({
+        added: r.imported ?? 0,
+        skipped: r.duplicated ?? 0,
+        failed: r.failed ?? 0,
+        error: r.error,
+      });
     }
   }, [importJob]);
 
@@ -127,7 +154,8 @@ export default function IngestWizard() {
   };
 
   const jobEvents = useMemo(() => (importJobId === null ? [] : importEvents.filter((e) => e.jobId === importJobId)), [importEvents, importJobId]);
-  const failedCount = jobEvents.filter((e) => e.status === 'failed').length;
+  // 失败明细（最多 5 条）：汇总弹窗里必须能看到"为什么失败"，不能只给一个数字
+  const failedReasons = useMemo(() => jobEvents.filter((e) => e.status === 'failed').slice(-5), [jobEvents]);
 
   return (
     <div className="h-full flex" style={{ background: 'var(--Lumina-Tokens-panel)' }}>
@@ -166,9 +194,12 @@ export default function IngestWizard() {
           <div className="mt-auto rounded-md border border-line p-2.5 text-2xs">
             <div className="num text-txt">{formatCount(scanResult.totalFiles)} 个文件 · {formatBytes(scanResult.totalBytes)}</div>
             <div className="text-txt3 mt-1">
-              RW2 {scanResult.byFormat.RW2 ?? 0} · JPG {scanResult.byFormat.JPG ?? 0}
+              {Object.entries(scanResult.byFormat).map(([fmt, n]) => `${fmt} ${n}`).join(' · ') || '无支持格式'}
             </div>
-            <div className="text-accent mt-1">3 个与库中重复 · 将跳过</div>
+            {/* 重复数只能来自引擎扫描结果；扫描阶段不统计时显示"—"，绝不写死数字（R3） */}
+            <div className="text-accent mt-1">
+              {scanResult.duplicates > 0 ? `${scanResult.duplicates} 个与库中重复 · 将跳过` : '重复在导入时按 MD5 判定'}
+            </div>
           </div>
         )}
       </aside>
@@ -245,13 +276,28 @@ export default function IngestWizard() {
         )}
       </footer>
 
-      {/* 完成弹窗（成功 N · 跳过重复 N · 失败 N） */}
-      <Dialog open={summary !== null} title="导入完成" onClose={() => setSummary(null)}>
+      {/* 完成弹窗（成功 N · 跳过重复 N · 失败 N）；失败必须给出可读原因（R3） */}
+      <Dialog open={summary !== null} title={summary && summary.added === 0 && summary.failed > 0 ? '导入失败' : '导入完成'} onClose={() => setSummary(null)}>
         {summary && (
           <div className="text-xs leading-6">
-            <div className="text-success">成功 {summary.added} 张</div>
+            <div className={summary.added > 0 ? 'text-success' : 'text-txt3'}>成功 {summary.added} 张</div>
             <div className="text-txt2">跳过重复 {summary.skipped} 张</div>
             <div className={summary.failed > 0 ? 'text-danger' : 'text-txt3'}>失败 {summary.failed} 张{summary.failed > 0 ? '（已进入失败清单与存储健康队列）' : ''}</div>
+            {summary.error && (
+              <div className="mt-2 rounded-md p-2 text-2xs text-danger" style={{ background: 'rgba(217,96,79,0.12)' }}>
+                {summary.error}
+              </div>
+            )}
+            {failedReasons.length > 0 && (
+              <div className="mt-2 rounded-md border border-line p-2 text-2xs">
+                <div className="text-danger mb-1">失败原因（最近 {failedReasons.length} 条）</div>
+                {failedReasons.map((f, i) => (
+                  <div key={i} className="num text-txt3 truncate" title={f.path}>
+                    ✕ {f.path}{f.error ? ` · ${f.error}` : ''}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
         <div className="flex justify-end gap-2 mt-4">
@@ -323,7 +369,7 @@ function SummaryStep({ scanResult }: { scanResult: ScanSourceResult | null }) {
         <Stat label="文件总数" value={formatCount(scanResult.totalFiles)} />
         <Stat label="总大小" value={formatBytes(scanResult.totalBytes)} />
         <Stat label="RAW+JPG 配对" value={String(scanResult.rawWithJpg)} />
-        <Stat label="与库内重复" value={String(scanResult.duplicates)} accent />
+        <Stat label="与库内重复" value={scanResult.duplicates > 0 ? String(scanResult.duplicates) : '—'} accent />
         <Stat label="伴随 JPG" value={String(scanResult.rawWithJpg)} />
         <Stat label="读失败" value={String(scanResult.unreadable.length)} danger={scanResult.unreadable.length > 0} />
       </div>
@@ -333,7 +379,8 @@ function SummaryStep({ scanResult }: { scanResult: ScanSourceResult | null }) {
         ))}
       </div>
       <div className="mt-3 text-2xs text-txt3">
-        去重策略：MD5 相同默认跳过并计数（右栏常驻面板可核对）；读失败文件夹将在下一步前弹出三选项处理，不静默跳过。
+        去重策略：MD5 相同默认跳过并计数（右栏常驻面板可核对）；重复数在导入阶段按 MD5 判定，
+        扫描阶段只统计文件与配对。读失败文件夹将在下一步前弹出三选项处理，不静默跳过。
       </div>
     </div>
   );
@@ -553,10 +600,11 @@ function OptionsStep(props: {
         <div className="text-xs text-txt mb-2">重命名模板</div>
         <div className="flex flex-wrap gap-1.5 mb-2">
           {TEMPLATES.map((t) => (
-            <Chip key={t} label={t} active={props.template === t} onClick={() => props.setTemplate(t)} />
+            <Chip key={t.template} label={t.label} active={props.template === t.template} onClick={() => props.setTemplate(t.template)} />
           ))}
         </div>
-        <div className="text-2xs text-txt3 num">预览：2026-04-25_松赞林寺_0081.RW2（序号按拍摄时间排序）</div>
+        <div className="text-2xs text-txt3 num">引擎模板：{props.template}</div>
+        <div className="text-2xs text-txt3 num mt-1">预览：2026-04-25_ILCE-7RM5_DSC00812.RW2（无 EXIF 机型时该段留空）</div>
       </div>
       <div className="rounded-lg border border-line bg-card p-4 flex items-center justify-between">
         <div>

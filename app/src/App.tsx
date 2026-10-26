@@ -321,9 +321,12 @@ function Shell() {
         }
         if (cancelled) return;
 
-        // 空库：引导生成模拟图库（引擎/mock 均支持 mock.generate）
+        // 空库演示图库：**仅开发/冒烟环境**自动生成。
+        // 打包版绝不允许自动灌测试图 —— 用户实测反馈"发布的 exe 存在测试用的图片"
+        // 正是这条自动生成 + 开发档案共用导致的。打包版空库应停在空状态等用户导入。
         const stats = useLibrary.getState().stats;
-        if (stats && stats.totalPhotos === 0 && init.capabilities?.mock) {
+        const allowDemoLibrary = info.isSmoke || !info.isPackaged;
+        if (stats && stats.totalPhotos === 0 && init.capabilities?.mock && allowDemoLibrary) {
           const { jobId } = await api.mock.generate();
           useJobStore.getState().toast(`正在生成模拟图库（任务 ${jobId}）…`, 'info', 3000);
         }

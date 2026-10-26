@@ -22,8 +22,26 @@ bool decodeImageFile(const std::string& path, Image* out, std::string* err) {
     if (err) *err = "file not found: " + path;
     return false;
   }
+  // 不能用 stbi_load(path)：它内部是窄字符 fopen，Windows 下 UTF-8 中文路径必然
+  // 打不开（实测：导入中文名照片后缩略图全部 "decode failed: can't fopen"，
+  // 用户看到的是"导进去了但全是灰块"）。改为宽字符 API 读入内存再解码。
+  std::string bytes;
+  std::string readErr;
+  if (!readFile(path, &bytes, &readErr)) {
+    if (err) *err = "read failed: " + readErr;
+    return false;
+  }
+  if (bytes.empty()) {
+    if (err) *err = "empty file: " + path;
+    return false;
+  }
+  if (bytes.size() > static_cast<size_t>(0x7FFFFFFF)) {
+    if (err) *err = "file too large to decode: " + path;
+    return false;
+  }
   int w = 0, h = 0, n = 0;
-  unsigned char* data = stbi_load(path.c_str(), &w, &h, &n, 3);
+  unsigned char* data = stbi_load_from_memory(reinterpret_cast<const stbi_uc*>(bytes.data()),
+                                              static_cast<int>(bytes.size()), &w, &h, &n, 3);
   if (!data) {
     if (err) *err = std::string("decode failed: ") + stbi_failure_reason();
     return false;

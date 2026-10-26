@@ -6,7 +6,7 @@
 import { app, BrowserWindow, ipcMain, Menu, shell, dialog } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
-import { EngineBridge, RpcCallError, resolveEnginePath, resolveHomeDir, type BridgeLifecycle, type EngineNotification } from './engine-bridge';
+import { EngineBridge, RpcCallError, resolveEnginePath, resolveHomeDir, legacyHomeDir, type BridgeLifecycle, type EngineNotification } from './engine-bridge';
 import { registerFileProtocol, registerFileScheme } from './file-protocol';
 
 const isDev = process.env.LUMINA_DEV === '1';
@@ -15,6 +15,11 @@ const isSmoke = process.env.LUMINA_SMOKE === '1';
 const isBaseline = process.env.LUMINA_BASELINE === '1';
 /** v1.2.0 外壳自检：四工作区切换 / 二级导航 / 精修占位 / 主题切换（?shellcheck=1） */
 const isShellCheck = process.env.LUMINA_SHELLCHECK === '1';
+/** 打包版标识：决定档案目录与菜单形态 */
+const isPackaged = app.isPackaged;
+/** 开发/冒烟/基线/自检一律沿用 `~/.lumina`（脚本硬编码），只有纯打包运行才换独立档案 */
+const useDevHome = isDev || isSmoke || isBaseline || isShellCheck;
+const isMac = process.platform === 'darwin';
 // 软件渲染兜底：远程桌面、虚拟机、部分显卡驱动下 GPU 进程会反复崩溃
 // （exit_code=-1073741819），表现为窗口白屏或起不来。置为 1 强制软件渲染。
 // 覆盖场景：冒烟测试、无 GPU 服务器、用户手动排障。
@@ -25,7 +30,8 @@ const safeGL = process.env.LUMINA_SAFE_GL === '1';
 // 恰好上溯三级，但打包布局（resources/app/electron）会多跳一层到安装根，导致找不到
 // build/engine 与 build/app/index.html —— 表现为窗口不出现、引擎不拉起、stdout 无任何输出。
 const appRoot = path.resolve(app.getAppPath(), '..');
-const homeDir = resolveHomeDir();
+const userDataDir = app.getPath('userData');
+const homeDir = resolveHomeDir({ isPackaged, userDataDir, useDevHome });
 const enginePath = resolveEnginePath(appRoot);
 
 // 启动日志：Windows 下 Electron GUI 进程的 stdout 不会写入重定向文件，
@@ -42,7 +48,16 @@ function boot(msg: string): void {
     /* 日志写失败不能影响启动 */
   }
 }
-boot(`boot: appPath=${app.getAppPath()} appRoot=${appRoot} engine=${enginePath} home=${homeDir} dev=${isDev} smoke=${isSmoke}`);
+boot(`boot: appPath=${app.getAppPath()} appRoot=${appRoot} engine=${enginePath} home=${homeDir} dev=${isDev} smoke=${isSmoke} packaged=${isPackaged} userData=${userDataDir}`);
+// 旧档案目录（开发期 `~/.lumina`，含冒烟生成的 mocklib）：只记一行日志，**不做迁移**。
+// 那是开发数据（上万张程序化测试图 + mock 根目录），静默搬进用户档案正是
+// "发布的 exe 里有测试图片" 的成因。用户若要复用旧数据，自行用 LUMINA_HOME 指向。
+if (isPackaged && !useDevHome && !process.env.LUMINA_HOME) {
+  const legacy = legacyHomeDir();
+  if (fs.existsSync(path.join(legacy, 'lumina.db'))) {
+    boot(`note: legacy dev profile detected at ${legacy} (NOT migrated; profile=${homeDir})`);
+  }
+}
 
 // 冒烟 / 无 GPU 环境：关闭硬件加速，WebGL 走 SwiftShader 软件渲染
 // 打包版默认安全 GL：用户机器 GPU 驱动不可控，GPU 进程崩溃是 FATAL（实测 0xC0000005
@@ -120,6 +135,9 @@ function createWindow(): void {
     minHeight: 800,
     backgroundColor: '#0C0D10',
     title: 'LUMINA · 摄影工作台',
+    // 原生菜单栏在 Windows/Linux 上不注册（见 buildMenu）；autoHideMenuBar 兜底，
+    // 防止任何残留菜单在按 Alt 时冒出第二层菜单。
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -131,6 +149,12 @@ function createWindow(): void {
     },
     show: true,
   });
+
+  // 无原生菜单栏（Windows/Linux）时把窗口级快捷键补回渲染层输入链路
+  if (!isMac) {
+    mainWindow.setMenuBarVisibility(false);
+    registerWindowAccelerators(mainWindow);
+  }
 
   // 渲染进程 console 转发到主进程 stdout（smoke 验证用）
   mainWindow.webContents.on('console-message', (_e, level, message, line, sourceId) => {
@@ -327,7 +351,22 @@ function createWindow(): void {
   });
 }
 
+/**
+ * 应用菜单。
+ *
+ * Windows/Linux：**不注册原生菜单栏**。渲染层已经画了唯一一条头部菜单
+ * （Lumina 文件 编辑 图像 图层 选择 滤镜），再叠一层原生菜单栏（LUMINA 编辑 视图 窗口）
+ * 就是用户反馈的"窗口上部有问题"——原生标题栏 + 原生菜单 + 应用内头部三层并排。
+ * macOS：保留系统菜单（Cmd+Q / Cmd+, / 服务 / 窗口管理等系统惯例必须有）。
+ *
+ * 原先由菜单 role 提供的窗口级快捷键改由 `registerWindowAccelerators` 用
+ * `before-input-event` 承接，功能一个都不能丢（见该函数注释）。
+ */
 function buildMenu(): void {
+  if (!isMac) {
+    Menu.setApplicationMenu(null);
+    return;
+  }
   const template: Electron.MenuItemConstructorOptions[] = [
     {
       label: 'LUMINA',
@@ -369,6 +408,51 @@ function buildMenu(): void {
     },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+/**
+ * 无原生菜单栏时的窗口级快捷键（Windows/Linux）。
+ *
+ * 去掉菜单后，`role: reload / forceReload / toggleDevTools / zoomIn / zoomOut /
+ * resetZoom / togglefullscreen` 提供的加速键会一起消失，排障与日常操作都会缺功能。
+ * 这里用 `before-input-event` 在窗口内重新绑定（不用 globalShortcut：那是全局抢占，
+ * 会把快捷键从其他应用手里抢走）。编辑类 role（撤销/复制/粘贴/全选）不需要补：
+ * 渲染层是标准 Chromium 文档，输入框内由浏览器原生处理。
+ */
+function registerWindowAccelerators(win: BrowserWindow): void {
+  win.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return;
+    const key = input.key.toLowerCase();
+    const mod = input.control || input.meta;
+    const wc = win.webContents;
+    // F12 / Ctrl+Shift+I：开发者工具（用户排障入口，必须保留）
+    if (key === 'f12' || (mod && input.shift && key === 'i')) {
+      wc.toggleDevTools();
+      event.preventDefault();
+      return;
+    }
+    // Ctrl+R：重新加载；Ctrl+Shift+R：强制重新加载（忽略缓存）
+    if (mod && key === 'r') {
+      if (input.shift) wc.reloadIgnoringCache();
+      else wc.reload();
+      event.preventDefault();
+      return;
+    }
+    // F11：全屏切换
+    if (key === 'f11') {
+      win.setFullScreen(!win.isFullScreen());
+      event.preventDefault();
+      return;
+    }
+    // Ctrl+0 / Ctrl+= / Ctrl+-：缩放（与菜单 role 语义一致）
+    if (mod && (key === '0' || key === '=' || key === '+' || key === '-')) {
+      const current = wc.getZoomLevel();
+      if (key === '0') wc.setZoomLevel(0);
+      else if (key === '-') wc.setZoomLevel(Math.max(current - 0.5, -5));
+      else wc.setZoomLevel(Math.min(current + 0.5, 5));
+      event.preventDefault();
+    }
+  });
 }
 
 /** 画廊本地预览端口（引擎不感知该端口，URL 由主进程重写） */
@@ -453,6 +537,8 @@ async function bootstrap(): Promise<void> {
     homeDir,
     engineInfo: bridge?.engineInfo ?? {},
     isSmoke,
+    // 渲染层据此决定"空库是否自动生成演示图库"：打包版绝不允许自动灌测试图
+    isPackaged,
   }));
   // WP-B3：Mock 兜底后的"重试连接引擎"。start() 可重入：真引擎就位则替换 Mock 传输层。
   ipcMain.handle('lumina:engineRetry', async () => {

@@ -44,7 +44,10 @@ bool ThumbnailService::ensureThumb(int64_t photoId, int size, std::string* outPa
   }
   std::string ext = extensionOf(p.filePath);
   bool ok = false;
-  if (raw::isSupportedExtension(ext)) {
+  // 必须用 isRawExtension 判定：isSupportedExtension 含 JPG/PNG/TIFF 等标准格式，
+  // 拿它当"是 RAW"会让标准格式进 LibRaw 分支并必然失败
+  // （实测 PNG/JPG 缩略图全报 "libraw open failed (-2)"，图库永远无缩略图）。
+  if (raw::isRawExtension(ext)) {
     // 1) 内嵌 JPEG 代理（RW2/DNG 都有）——最快
     raw::EmbeddedProxy proxy;
     std::string tmp = joinPath(config_->thumbsDir(),

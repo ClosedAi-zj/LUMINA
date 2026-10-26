@@ -14,7 +14,7 @@ export interface LuminaPreload {
   onEvent(cb: (notification: { method: string; params: unknown }) => void): () => void;
   onLifecycle(cb: (state: string) => void): () => void;
   /** 引擎连接信息（mock/real、引擎版本） */
-  getInfo(): Promise<{ isMock: boolean; enginePath: string; homeDir: string; engineInfo: Record<string, unknown>; isSmoke: boolean }>;
+  getInfo(): Promise<{ isMock: boolean; enginePath: string; homeDir: string; engineInfo: Record<string, unknown>; isSmoke: boolean; isPackaged: boolean }>;
   /** WP-B3：Mock 兜底后重试连接真引擎（成功后需重载窗口重建会话） */
   engineRetry(): Promise<{ mode: 'engine' | 'mock'; error?: string }>;
   /** 在系统资源管理器中打开/定位 */
