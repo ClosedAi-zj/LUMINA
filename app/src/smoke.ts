@@ -469,7 +469,7 @@ export async function runSmokeScenario(): Promise<void> {
             colorGrade: { shadowHue: 0, shadowSat: 0, midtoneHue: 0, midtoneSat: 0, highlightHue: 0, highlightSat: 0, blend: 50, balance: 0 },
             calibration: { shadowTint: 0, redHue: 0, redSat: 0, greenHue: 0, greenSat: 0, blueHue: 0, blueSat: 0 },
             detail: { sharpness: 0, sharpenRadius: 1, sharpenDetail: 25, sharpenMasking: 0, luminanceSmoothing: 0, colorNR: 0, colorNRDetail: 25 },
-            optics: { lensProfileEnable: false, manualDistortion: 0, vignetteAmount: 0, vignetteMidpoint: 50, vignetteFeather: 50, grainAmount: 0, grainFrequency: 1, grainSize: 1 },
+            optics: { lensProfileEnable: false, manualDistortion: 0, chromaticAberration: 0, vignetteAmount: 0, vignetteMidpoint: 50, vignetteFeather: 50, grainAmount: 0, grainFrequency: 1, grainSize: 1 },
           },
           true,
           'T1.7 逐控件基线',
@@ -820,7 +820,7 @@ export async function runSmokeScenario(): Promise<void> {
           colorGrade: { shadowHue: 210, shadowSat: 18, midtoneHue: 40, midtoneSat: 10, highlightHue: 55, highlightSat: 14, blend: 50, balance: 0 },
           calibration: { shadowTint: 8, redHue: -6, redSat: 10, greenHue: 4, greenSat: -8, blueHue: -4, blueSat: 12 },
           detail: { sharpness: 45, sharpenRadius: 1.2, sharpenDetail: 30, sharpenMasking: 10, luminanceSmoothing: 0, colorNR: 0, colorNRDetail: 25 },
-          optics: { lensProfileEnable: false, manualDistortion: 0, vignetteAmount: -35, vignetteMidpoint: 50, vignetteFeather: 50, grainAmount: 28, grainFrequency: 50, grainSize: 1.2 },
+          optics: { lensProfileEnable: false, manualDistortion: 0, chromaticAberration: 0, vignetteAmount: -35, vignetteMidpoint: 50, vignetteFeather: 50, grainAmount: 28, grainFrequency: 50, grainSize: 1.2 },
           geometry: { hasCrop: false, perspective: { vertical: 0, horizontal: 0, rotate: 0, scale: 1, aspect: 0, x: 0, y: 0 } },
           masks: [],
         };
@@ -888,7 +888,7 @@ export async function runSmokeScenario(): Promise<void> {
             colorGrade: { shadowHue: 0, shadowSat: 0, midtoneHue: 0, midtoneSat: 0, highlightHue: 0, highlightSat: 0, blend: 50, balance: 0 },
             calibration: { shadowTint: 0, redHue: 0, redSat: 0, greenHue: 0, greenSat: 0, blueHue: 0, blueSat: 0 },
             detail: { sharpness: 0, sharpenRadius: 1, sharpenDetail: 25, sharpenMasking: 0, luminanceSmoothing: 0, colorNR: 0, colorNRDetail: 25 },
-            optics: { lensProfileEnable: false, manualDistortion: 0, vignetteAmount: 0, vignetteMidpoint: 50, vignetteFeather: 50, grainAmount: 0, grainFrequency: 50, grainSize: 1 },
+            optics: { lensProfileEnable: false, manualDistortion: 0, chromaticAberration: 0, vignetteAmount: 0, vignetteMidpoint: 50, vignetteFeather: 50, grainAmount: 0, grainFrequency: 50, grainSize: 1 },
           };
           const comparePair = async (tag: string, params: EditParams): Promise<void> => {
             if (!dr.render(glCanvas, { params })) throw new Error('gpu render failed');

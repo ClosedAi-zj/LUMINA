@@ -82,6 +82,7 @@ function defaultParams(): EditParams {
     detail: { sharpness: 25, sharpenRadius: 1, sharpenDetail: 25, sharpenMasking: 0, luminanceSmoothing: 0, colorNR: 0, colorNRDetail: 50 },
     optics: {
       lensProfileEnable: false,
+      chromaticAberration: 0,
       manualDistortion: 0,
       vignetteAmount: 0,
       vignetteMidpoint: 50,

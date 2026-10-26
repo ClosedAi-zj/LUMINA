@@ -169,7 +169,7 @@ export class DevelopRenderer {
       geoB.set(g.b, i * 4);
       local0.set([m.local.exposure, m.local.contrast, m.local.highlights, m.local.shadows], i * 4);
       local1.set([m.local.temperature, m.local.tint, m.local.saturation, m.local.clarity], i * 4);
-      amount[i] = m.amount;
+      amount[i] = m.amount ?? 100;
       type[i] = m.type === 'linear' ? 0 : m.type === 'radial' ? 1 : 2;
       opacity[i] = m.opacity;
     });

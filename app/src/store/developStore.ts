@@ -574,7 +574,7 @@ const DEFAULT_PARAMS_SHAPE: EditParams = {
   colorGrade: { shadowHue: 0, shadowSat: 0, midtoneHue: 0, midtoneSat: 0, highlightHue: 0, highlightSat: 0, blend: 50, balance: 0 },
   calibration: { shadowTint: 0, redHue: 0, redSat: 0, greenHue: 0, greenSat: 0, blueHue: 0, blueSat: 0 },
   detail: { sharpness: 25, sharpenRadius: 1, sharpenDetail: 25, sharpenMasking: 0, luminanceSmoothing: 0, colorNR: 25, colorNRDetail: 50 },
-  optics: { lensProfileEnable: true, manualDistortion: 0, vignetteAmount: 0, vignetteMidpoint: 50, vignetteFeather: 50, grainAmount: 0, grainFrequency: 50, grainSize: 25 },
+  optics: { lensProfileEnable: true, manualDistortion: 0, chromaticAberration: 0, vignetteAmount: 0, vignetteMidpoint: 50, vignetteFeather: 50, grainAmount: 0, grainFrequency: 50, grainSize: 25 },
   geometry: { hasCrop: false, perspective: { vertical: 0, horizontal: 0, rotate: 0, scale: 1, aspect: 0, x: 0, y: 0 } },
   masks: [],
 };
@@ -588,6 +588,15 @@ export function normalizeParams(p: EditParams): EditParams {
   // temperature 单位契约：引擎/侧车回传为 Kelvin 口径（mock 5200–6400K / LR 2000–12000K）→
   // 归一化后进 store；undo/redo 回传的已是归一化值（|t|≤100），原样通过。
   if (typeof merged.temperature === 'number') merged.temperature = normalizeTemperature(merged.temperature);
+  // T2.5 v3 读入兜底：v2 存量 sidecar / 引擎回传的 masks 可能缺 combine（→replace）与
+  // amount（→100，引擎写端 ==100 省键）；逐项补齐后再进 store，消费端拿到的 MaskLayer 恒完整。
+  if (Array.isArray(merged.masks)) {
+    merged.masks = merged.masks.map((m) => ({
+      ...m,
+      combine: m.combine ?? 'replace',
+      amount: m.amount ?? 100,
+    }));
+  }
   return merged;
 }
 
@@ -646,6 +655,8 @@ export function buildMask(type: MaskLayer['type'], _index: number): MaskLayer {
     enabled: true,
     opacity: 100,
     amount: 0,
+    // v3：新蒙版显式声明组合方式（首条/单条 = replace 语义）；布尔组合 UI 在 T2.8
+    combine: 'replace',
     local: { exposure: 0, contrast: 0, highlights: 0, shadows: 0, temperature: 0, tint: 0, saturation: 0, clarity: 0, dehaze: 0 },
   };
   if (type === 'linear') {

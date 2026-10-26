@@ -416,6 +416,7 @@ function buildEditedParams(rng: () => number, noMask = false): EditParams {
     },
     optics: {
       lensProfileEnable: true,
+      chromaticAberration: 0,
       manualDistortion: 0,
       vignetteAmount: -Math.floor(rng() * 15),
       vignetteMidpoint: 50,
@@ -439,6 +440,7 @@ function buildEditedParams(rng: () => number, noMask = false): EditParams {
         type,
         enabled: true,
         opacity: 100,
+        combine: 'replace',
         amount: type === 'radial' ? -Math.floor(rng() * 60) : Math.floor(rng() * 80) - 40,
         geometry:
           type === 'linear'

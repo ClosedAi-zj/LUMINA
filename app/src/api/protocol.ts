@@ -1,6 +1,11 @@
 /**
  * LUMINA IPC 协议 TS 镜像（docs/ipc-protocol.md §2–§6 的唯一 TS 契约）。
  * 字段名与协议文档逐字一致；与 engine/src/rpc/version.h 由 CI 对齐 PROTOCOL_VERSION。
+ *
+ * 版本口径（M20/T2.5）：PROTOCOL_VERSION 维持 '1.0'（主版本不变）——T2.5 蒙版协议 v3
+ * 是**纯增量字段**（masks[*].combine 新增 / optics.chromaticAberration 叶 #94 新增 /
+ * kXmpSchemaVersion 2→3），不破坏既有消费方，故不升协议主版本；只有破坏性变更
+ * （字段改名/删除/语义翻转）才需要升位并同步 engine/src/rpc/version.h。
  */
 
 export const PROTOCOL_VERSION = '1.0';
@@ -118,12 +123,31 @@ export interface Hsl {
 /** 混色器 8 色带（1.1.0 新增 orange；顺序 = 色相环 0/30/60/120/180/240/280/320°） */
 export type HslBand = 'red' | 'orange' | 'yellow' | 'green' | 'aqua' | 'blue' | 'purple' | 'magenta';
 
+/**
+ * 蒙版布尔组合方式（T2.5 协议 v3，架构 §3.1.3 fold）。
+ * fold 只依赖「数组序 + combine」：首条固定按 replace；
+ *   replace   = 直接采用本蒙版系数
+ *   intersect = 与前序结果相乘（交集）
+ *   subtract  = 前序结果 × (1 - 本蒙版系数)（只减面积，不施加本蒙版 local）
+ * 必填：UI 构造端契约——新蒙版必须显式声明组合方式（buildMask 工厂统一写 'replace'）。
+ * 引擎读端对缺失该字段的蒙版（v1/v2 存量 sidecar）一律按 "replace" 处理；
+ * 渲染层读入侧兜底见 developStore.normalizeParams（masks 逐项补 replace）。
+ * 非法串引擎按 replace + graph 层校验兜底。
+ */
+export type MaskCombine = 'replace' | 'intersect' | 'subtract';
+
 export interface MaskLayer {
   id: string;
   type: 'linear' | 'radial' | 'brush' | 'aiSky' | 'aiSubject' | 'aiBackground' | 'luminanceRange' | 'colorRange' | 'depth';
   enabled: boolean;
   opacity: number; // 0..100
-  amount: number; // 主强度（渐变/径向 -100..100）
+  /**
+   * 强度 -100..100（v3 口径：缺省 100，引擎写端 ==100 时省略该键）。
+   * <0 = 局部调整反向（≠反相蒙版，架构 §3.1.3）。可选：UI 读引擎回传时用 ?? 100 兜底。
+   */
+  amount?: number;
+  /** v3 新增（必填，见 MaskCombine 注释）；v2 存量读入侧按 replace 兜底 */
+  combine: MaskCombine;
   geometry?: { x1: number; y1: number; x2: number; y2: number } | { cx: number; cy: number; radius: number; ratio: number };
   strokes?: { x: number; y: number; radius: number; flow: number; density: number; erase: boolean }[];
   range?: { low: number; high: number; samples: number[] };
@@ -209,6 +233,7 @@ export interface EditParams {
   optics: {
     lensProfileEnable: boolean;
     manualDistortion: number;
+    chromaticAberration: number; // 叶 #94（T2.5/Q3）：CA 强度 -100..100，↔ crs:ChromaticAberrationScale
     vignetteAmount: number;
     vignetteMidpoint: number;
     vignetteFeather: number;
@@ -316,8 +341,10 @@ export interface PreviewBase {
 
 export interface XmpReadResult {
   params: EditParams;
+  /** sidecar schema 版本（T2.5 起引擎新写全为 3；>3 时引擎发 1006 schemaTooNew，走 warnings 展示，UI 不得猜测降级读取） */
   schemaVersion: number;
   processVersion: string;
+  /** 引擎逐条告警（含 1006 schemaTooNew、1007 外来命名空间等）；UI 有告警必须展示，不许静默吞掉 */
   warnings: string[];
   sidecarPath: string;
   sidecarMtime: number;

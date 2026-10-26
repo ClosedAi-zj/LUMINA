@@ -51,7 +51,7 @@ export default function MaskPanel() {
       <div className="flex flex-col gap-px mb-2 max-h-36 overflow-y-auto">
         {params.masks.length === 0 && <div className="text-2xs text-txt3 py-1">无蒙版 · 点击上方工具新建</div>}
         {params.masks.map((m, i) => {
-          const desc = m.type === 'linear' ? `渐变 ${m.amount > 0 ? '+' : ''}${m.amount}` : m.type === 'radial' ? `径向 ${m.amount > 0 ? '+' : ''}${m.amount}` : `画笔 ${m.strokes?.length ?? 0} 笔画`;
+          const desc = m.type === 'linear' ? `渐变 ${(m.amount ?? 100) > 0 ? '+' : ''}${m.amount ?? 100}` : m.type === 'radial' ? `径向 ${(m.amount ?? 100) > 0 ? '+' : ''}${m.amount ?? 100}` : `画笔 ${m.strokes?.length ?? 0} 笔画`;
           return (
             <div
               key={m.id}
@@ -92,7 +92,7 @@ export default function MaskPanel() {
             <span className="num text-txt3">{selected.type}</span>
           </div>
           {(selected.type === 'linear' || selected.type === 'radial') && (
-            <Slider label="主强度" value={selected.amount} min={-100} max={100} defaultValue={0} onChange={(v) => void updateMask(selected.id, { amount: v })} />
+            <Slider label="主强度" value={selected.amount ?? 100} min={-100} max={100} defaultValue={0} onChange={(v) => void updateMask(selected.id, { amount: v })} />
           )}
           {selected.type === 'brush' && (
             <div className="text-2xs text-txt3 mb-2">笔画数：{selected.strokes?.length ?? 0}（WP-B5 起逐笔距离场渲染；选中蒙版后红色浮层即实际作用范围，按住 Alt 拖动为擦除）</div>

@@ -252,17 +252,20 @@ function DetailGroup({ params }: { params: EditParams }) {
   );
 }
 
-// ---------- 镜头（2 叶） ----------
+// ---------- 镜头（3 叶：配置文件 + 畸变 + CA 强度叶 #94，T2.5/Q3） ----------
 
 function LensGroup({ params }: { params: EditParams }) {
   return (
-    <PanelCard title="镜头" defaultOpen={false} hint="2 项">
+    <PanelCard title="镜头" defaultOpen={false} hint="3 项">
       <ParamToggle
         label="启用镜头配置文件"
         checked={params.optics.lensProfileEnable}
-        onChange={(v) => void useDevelop.getState().setPath('optics.lensProfileEnable', v, true, v ? '启用镜头配置文件' : '停用镜头配置文件')} />
+        onChange={(v) => void useDevelop.getState().setPath('optics.lensProfileEnable', v, true, v ? '启用镜头配置文件' : '停用镜头配置文件')}
+ />
       <Row params={params} path="optics.manualDistortion" label="扭曲校正" min={-100} max={100} />
-      <div className="text-2xs text-txt3 px-3 pt-1 leading-4">配置文件按 EXIF 镜头型号匹配；扭曲校正在配置文件基础上叠加。</div>
+      {/* 叶 #94（T2.5/Q3）：色差强度 ↔ crs:ChromaticAberrationScale；渲染实装在引擎 lens 算子侧 */}
+      <Row params={params} path="optics.chromaticAberration" label="去色差" min={-100} max={100} />
+      <div className="text-2xs text-txt3 px-3 pt-1 leading-4">配置文件按 EXIF 镜头型号匹配；扭曲校正在配置文件基础上叠加；去色差为手动强度入口。</div>
     </PanelCard>
   );
 }
