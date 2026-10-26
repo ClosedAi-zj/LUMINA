@@ -5,8 +5,8 @@ namespace lumina {
 
 bool Filter::empty() const {
   return !folderIds && !rootIds && !formats && !cameras && !lenses && !minRating && !pick &&
-         !located && !edited && !missing && !isVideo && !dateFrom && !dateTo && !locationIds &&
-         !seqId && !colorLabel && !maxRating;
+         !located && !edited && !hasMasks && !missing && !isVideo && !dateFrom && !dateTo &&
+         !locationIds && !seqId && !colorLabel && !maxRating;
 }
 
 namespace {
@@ -140,6 +140,7 @@ bool filterFromJson(const json::JsonValue& v, Filter* out, std::string* err) {
   if (v.contains("pick")) f.pick = v.get("pick").asString();
   if (v.contains("located")) f.located = v.get("located").asBool();
   if (v.contains("edited")) f.edited = v.get("edited").asBool();
+  if (v.contains("hasMasks")) f.hasMasks = v.get("hasMasks").asBool();
   if (v.contains("missing")) f.missing = v.get("missing").asBool();
   if (v.contains("isVideo")) f.isVideo = v.get("isVideo").asBool();
   if (v.contains("dateFrom")) f.dateFrom = v.get("dateFrom").asInt();
@@ -187,6 +188,7 @@ json::JsonValue filterToJson(const Filter& f) {
   if (f.pick) j.setItem("pick", *f.pick);
   if (f.located) j.setItem("located", *f.located);
   if (f.edited) j.setItem("edited", *f.edited);
+  if (f.hasMasks) j.setItem("hasMasks", *f.hasMasks);
   if (f.missing) j.setItem("missing", *f.missing);
   if (f.isVideo) j.setItem("isVideo", *f.isVideo);
   if (f.dateFrom) j.setItem("dateFrom", *f.dateFrom);

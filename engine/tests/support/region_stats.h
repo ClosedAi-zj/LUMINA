@@ -17,6 +17,13 @@
 // 桶划分：亮度四分位桶按**基线图**的亮度排序切成 4 等份，cur 复用基线的桶归属
 //         （保证比较的是同一批像素——这是 dehaze/highlights 类判据成立的前提）。
 //
+// 两个入口的分工（**不要混用**）：
+//   computeRegionStats(const imaging::Image&, ...)   —— 8bit 入口，**只用于 ⑦c 口径回归**
+//        （证明「旧整幅均值判不出来」这件事），任何判据表比对都不得用它：8bit 量化会
+//        把 clarity 的 3% 方差变化压到 1 LSB 以下，跑判据表必然 flaky。
+//   computeRegionStatsBuf(const ImageBuf&, ...)      —— 16bit 入口，**判据表一律用它**
+//        （log16 解码后的工作缓冲，量化噪声远小于阈值）。
+//
 // 归属：engine/tests/support/**（仅测试工装；不得被 src/ 引用）。
 #ifndef LUMINA_TESTS_SUPPORT_REGION_STATS_H_
 #define LUMINA_TESTS_SUPPORT_REGION_STATS_H_

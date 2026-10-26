@@ -10,14 +10,21 @@
 // O2（顺序敏感反例）：把两个算子换序，输出 max|Δ| 必须 ≥ 2 LSB（8bit）。
 //   若换序后像素不变，说明「顺序」在实现里没被真实执行（K1「一致地错」同类风险）。
 //
-// 注意（实测发现，已上报架构）：
-//   - clarity 与 exposure 在**无裁切**时严格可交换（clarity = u + k(u-B)，B 是线性
-//     平移不变的盒式模糊；exposure = u + 常数），因此该组的 Δ 只能来自码域 clamp。
-//     本测试用「高光进入 65535 裁切」的参数让顺序差异真实可测，并另加一组
-//     contrast↔exposure（仿射 vs 平移，天然不可交换）作为无裁切下的强证据。
+// 注意（实测发现，已上报架构 v1.1 §3.7 并按其要求补强）：
+//   - O2 分两组判据：
+//     · **语义性组**（不依赖 clamp）：curve 前置 toneMap（36.52 LSB）、exposure→highlights
+//       （5.52 LSB，且夹具 clipped=0 证明未触及码域上限）、curve→sharpen（6.98 LSB）。
+//       语义性组的成立原因是「算子非线性且耦合」——toneMap/曲线是 LUT，highlights 的
+//       权重按像素亮度连续变化，换序必然改变结果。
+//     · **码域性组**（依赖 clamp）：clarity↔exposure。两者都是**线性**算子
+//       （clarity = u + k(u−blur u)，box 模糊线性；exposure = 码值平移），无 clamp 时
+//       严格可交换。testClampDependency 用「同一对算子 + 同一参数、只改夹具亮度区间」
+//       把这条依赖显式断言下来（无裁切 Δ=0.00，有裁切 Δ=3.78，clipped 6528）。
+//   - 锐化↔降噪**不是**语义性反例：现有实现的降噪是盒式模糊、锐化是反遮罩，两者都线性，
+//     实测换序 Δ = 0.46 LSB。测试把「不成立」显式断言，防止后人误加假反例。
 //   - mask.apply 在 T2.6 之前仍是 IdentityOp，因此「蒙版前置于曲线」的 Δ 断言
 //     暂记 SKIP（并打印 T2.6 待接续）；其**结构**断言（mask.apply 行号 > 曲线行号）
-//     现在就成立。为避免这条验收变成空门，另加一组 sharpen↔curve 的真实 Δ 证据。
+//     现在就成立。M2 出口要求 O2 零 SKIP（架构 v1.1），T2.6 必须消掉这条。
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -80,6 +87,57 @@ ImageBuf makeOrderFixture(int w, int h) {
       p[0] = c;
       p[1] = c;
       p[2] = c;
+    }
+  }
+  return buf;
+}
+
+// 可指定亮度区间的夹具（用于证明「clarity↔exposure 的不可交换性来自码域 clamp」）
+ImageBuf makeRampFixture(int w, int h, double lo, double hi) {
+  ImageBuf buf(w, h);
+  for (int y = 0; y < h; ++y) {
+    for (int x = 0; x < w; ++x) {
+      const double t = (w > 1) ? static_cast<double>(x) / (w - 1) : 0.0;
+      double v = lo + (hi - lo) * t;
+      v += ((x % 3) - 1) * 0.030;  // 细纹（与 makeOrderFixture 同幅度：clamp 效应靠残差放大）
+      if (v < 0.0) v = 0.0;
+      if (v > 1.0) v = 1.0;
+      const uint16_t c = static_cast<uint16_t>(v * 65535.0 + 0.5);
+      uint16_t* p = &buf.data[(static_cast<size_t>(y) * w + x) * 3];
+      p[0] = c;
+      p[1] = c;
+      p[2] = c;
+    }
+  }
+  return buf;
+}
+
+// 处于码域上限（65535）的样本数：clamp 是否真的发生，用计数证明而不是靠嘴说
+size_t countClipped(const ImageBuf& b) {
+  size_t n = 0;
+  for (uint16_t v : b.data) {
+    if (v == 65535) ++n;
+  }
+  return n;
+}
+
+// 带确定性色噪的夹具：色度降噪（detail.denoise/colorNR）必须有可降的色噪，
+// 否则 denoise 是 no-op，任何「顺序」都不会产生差异（假绿）。
+ImageBuf makeNoisyFixture(int w, int h) {
+  ImageBuf buf(w, h);
+  for (int y = 0; y < h; ++y) {
+    for (int x = 0; x < w; ++x) {
+      const double t = (w > 1) ? static_cast<double>(x) / (w - 1) : 0.0;
+      const double base = 0.25 + 0.35 * t;
+      uint16_t* p = &buf.data[(static_cast<size_t>(y) * w + x) * 3];
+      for (int c = 0; c < 3; ++c) {
+        double r = std::sin(x * 12.9898 + y * 78.233 + c * 37.719) * 43758.5453;
+        r -= std::floor(r);           // [0,1)
+        double v = base + (r * 2.0 - 1.0) * 0.05;  // 每通道独立 → 真色噪
+        if (v < 0.0) v = 0.0;
+        if (v > 1.0) v = 1.0;
+        p[c] = static_cast<uint16_t>(v * 65535.0 + 0.5);
+      }
     }
   }
   return buf;
@@ -327,8 +385,9 @@ static void testPlanSequenceOrder() {
 // ---------------- O2：顺序敏感反例 ----------------
 // 通用：给定「正确顺序」与「错误顺序」，断言两者输出差 ≥ kOrderDeltaThresholdLsb
 static void checkOrderSensitive(const char* name, const std::vector<Step>& correct,
-                                const std::vector<Step>& wrong) {
-  const ImageBuf base = makeOrderFixture(192, 128);
+                                const std::vector<Step>& wrong,
+                                const ImageBuf* baseOverride = nullptr) {
+  const ImageBuf base = baseOverride ? *baseOverride : makeOrderFixture(192, 128);
   ImageBuf a = base;
   ImageBuf b = base;
   std::string err;
@@ -421,6 +480,95 @@ static void testOrderSensitiveCounterexamples() {
                         {Step{"curve.toneCurveRGB", curve}, Step{"detail.sharpen", sharp}},
                         {Step{"detail.sharpen", sharp}, Step{"curve.toneCurveRGB", curve}});
   }
+  // 组 4（语义性组，架构 v1.1 §3.7）：exposure → highlights。
+  // 这一组**不依赖 clamp**：highlights 的权重按像素亮度（t 域锚点）连续变化，
+  // exposure 平移码值会改变该权重，因此两者在纯浮点域也不可交换。
+  // 夹具刻意取低亮度区间（0.05..0.45）且断言「无样本到达码域上限」，
+  // 用「clipped == 0 且 Δ ≥ 2」同时证明反例的语义性（不是靠裁切凑出来的）。
+  {
+    const ImageBuf low = makeRampFixture(192, 128, 0.05, 0.45);
+    const JsonValue exposure = numParams("basic.exposure", 1.0);
+    const JsonValue highlights = numParams("basic.highlights", -80.0);
+    ImageBuf probe = low;
+    std::string probeErr;
+    const bool okProbe = runOne("basic.exposure", exposure, &probe, &probeErr);
+    const size_t clipped = okProbe ? countClipped(probe) : 0;
+    std::printf("    [probe] 语义性组夹具 clipped=%zu（必须为 0 才算不依赖 clamp）\n", clipped);
+    CHECK(okProbe && clipped == 0, "语义性组夹具未触及码域上限（排除 clamp 依赖）");
+    checkOrderSensitive("exposure→highlights（正确）vs 互换",
+                        {Step{"basic.exposure", exposure}, Step{"basic.highlights", highlights}},
+                        {Step{"basic.highlights", highlights}, Step{"basic.exposure", exposure}},
+                        &low);
+  }
+  // 组 4b（实测发现，已上报架构）：锐化 ↔ 降噪**不能**作为语义性反例。
+  // 现有实现里降噪是盒式模糊（线性）、锐化是反遮罩（线性），线性算子可交换，
+  // 只在码域 clamp 处才分叉（实测 Δ = 0.46 LSB，远低于 2 LSB 门槛）。
+  // 这里把「不成立」显式断言下来，防止后人误以为漏测而加一条假反例。
+  {
+    const ImageBuf noisy = makeNoisyFixture(192, 128);
+    const JsonValue sharp = numParams("detail.sharpness", 80.0);
+    JsonValue denoise = JsonValue::objectValue();
+    denoise.setItem("detail.colorNR", 100.0);
+    denoise.setItem("detail.luminanceSmoothing", 100.0);
+    ImageBuf a = noisy;
+    ImageBuf b = noisy;
+    std::string err;
+    const bool ok = runSeq({Step{"detail.denoise", denoise}, Step{"detail.sharpen", sharp}}, &a,
+                           &err) &&
+                    runSeq({Step{"detail.sharpen", sharp}, Step{"detail.denoise", denoise}}, &b,
+                           &err);
+    const double d = ok ? maxAbsDeltaLsb(a, b) : 1e9;
+    std::printf("    denoise↔sharpen 实测 max|Δ| = %.2f LSB（线性算子可交换，< 门槛属预期）\n", d);
+    CHECK(ok && d < kOrderDeltaThresholdLsb,
+          "锐化↔降噪是线性算子对：Δ < 2 LSB（不能当语义性反例，见报告）");
+  }
+}
+
+// ---------------- O2 ①：clarity↔exposure 的 clamp 依赖 ----------------
+// 架构 v1.1 §3.7 要求：这条反例必须**显式断言其 clamp 依赖**，否则将来 clamp
+// 挪位时断言会静默失效，而人第一反应会去怀疑测试写错。做法：同一对算子、同一组
+// 参数，只改夹具的亮度区间，让「是否发生码域裁切」成为唯一变量。
+static void testClampDependency() {
+  std::printf("O2-① clarity↔exposure 的 clamp 依赖（架构 v1.1 §3.7）\n");
+  const JsonValue clarity = numParams("basic.clarity", 80.0);
+  const JsonValue exposure = numParams("basic.exposure", 2.5);
+  const std::vector<Step> correct{Step{"basic.clarity", clarity}, Step{"basic.exposure", exposure}};
+  const std::vector<Step> swapped{Step{"basic.exposure", exposure}, Step{"basic.clarity", clarity}};
+
+  struct Case {
+    const char* name;
+    double lo;
+    double hi;
+    bool expectClip;
+  };
+  const Case cases[2] = {{"无裁切（低亮度区间）", 0.05, 0.15, false},
+                         {"有裁切（高光进入码域上限）", 0.10, 1.00, true}};
+  for (const Case& c : cases) {
+    ImageBuf a = makeRampFixture(192, 128, c.lo, c.hi);
+    ImageBuf b = a;
+    ImageBuf probe = a;  // 只施加 exposure，用来数裁切样本
+    std::string err;
+    if (!runOne("basic.exposure", exposure, &probe, &err)) {
+      CHECK(false, (std::string(c.name) + "：probe 执行失败 " + err).c_str());
+      continue;
+    }
+    const size_t clipped = countClipped(probe);
+    if (!runSeq(correct, &a, &err) || !runSeq(swapped, &b, &err)) {
+      CHECK(false, (std::string(c.name) + "：序列执行失败 " + err).c_str());
+      continue;
+    }
+    const double d = maxAbsDeltaLsb(a, b);
+    std::printf("    %-28s clipped=%-6zu max|Δ| = %.2f LSB\n", c.name, clipped, d);
+    if (c.expectClip) {
+      CHECK(clipped > 0, (std::string(c.name) + "：确实发生了码域裁切").c_str());
+      CHECK(d >= kOrderDeltaThresholdLsb,
+            (std::string(c.name) + "：换序差异 ≥ 2 LSB（依赖 clamp 成立）").c_str());
+    } else {
+      CHECK(clipped == 0, (std::string(c.name) + "：无样本到达码域上限").c_str());
+      CHECK(d < kOrderDeltaThresholdLsb,
+            (std::string(c.name) + "：无 clamp 时两者可交换（Δ < 2 LSB）").c_str());
+    }
+  }
 }
 
 // ---------------- O2 前置：编译出的顺序就是「正确顺序」 ----------------
@@ -454,6 +602,7 @@ int main() {
   testPlanSequenceOrder();
   testCompiledOrderMatchesO2();
   testOrderSensitiveCounterexamples();
+  testClampDependency();
   std::printf("\n%s (%d failures, %d skipped)\n", g_fail == 0 ? "ALL PASS" : "FAILED", g_fail,
               g_skip);
   return g_fail == 0 ? 0 : 1;

@@ -1,4 +1,4 @@
--- LUMINA 全库表结构（schema_version=2，M2 T2.2：新增 files 表 + photos.file_id）
+-- LUMINA 全库表结构（schema_version=3，M2 T2.2 files 表 / T2.3 develop_settings）
 -- 本文件是唯一事实源：由 CMake 在配置期生成 schema_sql.inc，运行时执行
 -- 版本化增量（002/003/004）在 db/migrations.cpp，本文件只负责「全量幂等建表」。
 PRAGMA journal_mode=WAL;
@@ -110,6 +110,25 @@ CREATE TRIGGER IF NOT EXISTS photos_fts_au AFTER UPDATE ON photos BEGIN
   INSERT INTO photos_fts(rowid, file_name, location, date)
   VALUES (new.id, new.file_name, new.location, new.date);
 END;
+
+-- M2 T2.3（migration 003）：参数派生缓存。
+-- **可丢弃**：XMP sidecar 仍是唯一真相源，本表随时可删、可由 develop_settings_dao
+-- 的 rebuildFromSidecar() 全量重建（H5：重建后查询逐条相等）。
+CREATE TABLE IF NOT EXISTS develop_settings(
+  photo_id INTEGER PRIMARY KEY REFERENCES photos(id),
+  params_json TEXT NOT NULL,        -- 规范化 JSON（键排序），与 sidecar 同构
+  params_hash TEXT NOT NULL,        -- md5(规范化 json)：变更检测用
+  schema_version INT,               -- lumina:SchemaVersion
+  sidecar_mtime INT,                -- 写入时 sidecar mtime（一致性锚点）
+  node_count INT,                   -- NodeGraph 节点数（"nodes" 数组长度）
+  mask_count INT DEFAULT 0,         -- US-6「含局部蒙版」筛选
+  has_edits INT DEFAULT 0,          -- 参数与默认值有差异
+  updated_at INT,
+  source TEXT DEFAULT 'xmp'         -- xmp | db-stale | rebuilt
+);
+-- 部分索引：只索引「已调整」与「含蒙版」的行（筛选走索引，见 test_develop_settings）
+CREATE INDEX IF NOT EXISTS idx_dev_edited ON develop_settings(photo_id) WHERE has_edits=1;
+CREATE INDEX IF NOT EXISTS idx_dev_masks  ON develop_settings(photo_id) WHERE mask_count>0;
 
 CREATE TABLE IF NOT EXISTS locations(
   id INTEGER PRIMARY KEY,

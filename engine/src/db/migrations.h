@@ -31,12 +31,12 @@ enum MigrationErrorCode {
   kMigrationCancelled = 5,
 };
 
-// 版本号常量。kTargetDbVersion 是本批实现到的最高版本（003/004 属 T2.3/T2.4）。
+// 版本号常量。kTargetDbVersion 是本批实现到的最高版本（004 属 T2.4）。
 constexpr int kDbVersionBaseline = 1;        // M1 关账（schema.sql 全量建表）
-constexpr int kDbVersionFilesTable = 2;      // 002：四级表 files + photos.file_id（本批）
-constexpr int kDbVersionDevelopSettings = 3;  // 003：develop_settings（T2.3 扩展点）
+constexpr int kDbVersionFilesTable = 2;      // 002：四级表 files + photos.file_id（T2.2）
+constexpr int kDbVersionDevelopSettings = 3;  // 003：develop_settings 派生缓存（T2.3）
 constexpr int kDbVersionHistory = 4;          // 004：history_entries/state（T2.4 扩展点）
-constexpr int kTargetDbVersion = kDbVersionFilesTable;
+constexpr int kTargetDbVersion = kDbVersionDevelopSettings;
 
 // 迁移报告（供日志、job 进度文案与测试断言使用）
 struct MigrationReport {
@@ -45,6 +45,7 @@ struct MigrationReport {
   int filesInserted = 0;   // 002 新增的 files 行数（二次运行必须为 0）
   int photosLinked = 0;    // 002 回填后 photos.file_id 从空/旧值变为新值的行数
   int photosUnlinked = 0;  // folder_id 缺失等无法归位的行数（不静默：写 detail）
+  int devTableCreated = 0;  // 003：本次是否新建了 develop_settings 表（0/1）
   int statementsRun = 0;   // 实际执行的 DDL/DML 语句数
   bool cancelled = false;
   bool upToDate = false;   // true = 版本已达标，本次 0 变更
@@ -64,6 +65,11 @@ bool runVersionedMigrations(Database* db, int* err, MigrationReport* report,
 bool applyMigration002FilesTable(Database* db, MigrationReport* report, std::atomic<bool>* cancel,
                                  const std::function<void(int, const std::string&)>& progress,
                                  int* err);
+
+// 003：develop_settings 派生缓存（只建表 + 部分索引，**不扫盘**）。
+// 回填由 develop_settings_dao::rebuildFromSidecar 显式执行（可取消、有进度、可放 job），
+// 因为读 sidecar 属于 xmp 层职责，db 层不碰文件系统。
+bool applyMigration003DevelopSettings(Database* db, MigrationReport* report, int* err);
 
 // PRAGMA table_info 守卫：table 是否已有 column（ALTER 不幂等，必须先问）
 bool tableHasColumn(Database* db, const std::string& table, const std::string& column);

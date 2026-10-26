@@ -8,7 +8,10 @@ namespace lumina {
 namespace edit {
 
 EditSessionManager::EditSessionManager(xmp::XmpService* xmp, db::PhotoDao* photos)
-    : xmp_(xmp), photos_(photos), running_(true) {}
+    : xmp_(xmp),
+      photos_(photos),
+      developSettings_(photos ? photos->database() : nullptr),
+      running_(true) {}
 
 EditSessionManager::~EditSessionManager() { shutdown(); }
 
@@ -41,11 +44,38 @@ json::JsonValue EditSessionManager::begin(int64_t photoId, rpc::RpcError* err) {
     session->sessionId = nextSessionId_++;
     sessions_[session->sessionId] = session;
   }
+  // M2 T2.3：打开照片时做一次缓存一致性巡检（§3.3.2 的四行场景表）。
+  // 参数本身永远来自 sidecar；缓存坏了/旧了就地自愈，sidecar 缺失则显式提示。
+  std::string cacheState = "unavailable";
+  json::JsonValue cacheWarnings = json::JsonValue::arrayValue();
+  {
+    PhotoRecord rec;
+    std::string recErr;
+    if (photos_->getById(photoId, &rec, &recErr)) {
+      const std::string sidecar =
+          rec.sidecarPath.empty() ? xmp_->sidecarPathFor(rec.filePath) : rec.sidecarPath;
+      const bool exists = fileExists(sidecar);
+      db::ReconcileResult rr;
+      std::string reErr;
+      if (developSettings_.reconcile(photoId, params, fileMtimeMs(sidecar), exists, &rr, &reErr)) {
+        cacheState = rr.state;
+        if (!rr.warning.empty()) cacheWarnings.addItem(rr.warning);
+      } else {
+        // 缓存层失败绝不影响编辑（参数来自 sidecar），但必须留痕，不得静默
+        cacheState = "error";
+        cacheWarnings.addItem("参数缓存巡检失败：" + reErr);
+        logWarn("edit", "develop_settings reconcile failed for photo " + std::to_string(photoId) +
+                            ": " + reErr);
+      }
+    }
+  }
   json::JsonValue out = json::JsonValue::objectValue();
   out.setItem("sessionId", session->sessionId);
   out.setItem("params", session->params);
   out.setItem("revision", session->history.index());
   out.setItem("historyLength", session->history.length());
+  out.setItem("cacheState", cacheState);
+  out.setItem("warnings", cacheWarnings);
   logInfo("edit", "session " + std::to_string(session->sessionId) + " begin for photo " +
                       std::to_string(photoId));
   return out;
@@ -131,7 +161,19 @@ json::JsonValue EditSessionManager::redo(int64_t sessionId, rpc::RpcError* err) 
 
 bool EditSessionManager::flushSession(const std::shared_ptr<SessionState>& session,
                                       std::string* err) {
-  return xmp_->saveParams(session->photoId, session->params, err);
+  // 写序铁律（架构 §3.3.2）：先原子写 sidecar，成功后才更新派生缓存。
+  if (!xmp_->saveParams(session->photoId, session->params, err)) return false;
+  // 缓存是可丢弃派生：写失败只 warning + UI 状态点，**绝不回滚 sidecar**。
+  PhotoRecord rec;
+  std::string dbErr;
+  int64_t mtime = 0;
+  if (photos_->getById(session->photoId, &rec, &dbErr)) mtime = rec.sidecarMtime;
+  std::string cacheErr;
+  if (!developSettings_.upsert(session->photoId, session->params, mtime, "xmp", &cacheErr)) {
+    logWarn("edit", "develop_settings 缓存写入失败（sidecar 已成功落盘，不回滚）: photo " +
+                        std::to_string(session->photoId) + " " + cacheErr);
+  }
+  return true;
 }
 
 // 结束会话（ipc-protocol v1.0.1 §5.5 唯一定义）：

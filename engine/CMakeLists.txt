@@ -57,6 +57,7 @@ set(LUMINA_SOURCES
   src/db/database.cpp
   src/db/migrations.cpp
   src/db/image_dao.cpp
+  src/db/develop_settings_dao.cpp
   src/db/photo_dao.cpp
   src/db/fts_indexer.cpp
   src/db/album_dao.cpp
@@ -252,6 +253,12 @@ add_executable(test_image_identity tests/test_image_identity.cpp)
 target_link_libraries(test_image_identity PRIVATE lumina_core)
 set_target_properties(test_image_identity PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
 add_test(NAME image_identity COMMAND test_image_identity)
+
+# M2 T2.3：develop_settings 派生缓存（H5 可重建 0 差异 / H6 损坏自愈 / 筛选走索引）
+add_executable(test_develop_settings tests/test_develop_settings.cpp)
+target_link_libraries(test_develop_settings PRIVATE lumina_core)
+set_target_properties(test_develop_settings PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME develop_settings COMMAND test_develop_settings)
 
 # M0 ΔE 基线工具（不入 ctest：依赖本机 RW2 样本；由 scripts/ci/deltae.py 编排）
 add_executable(deltae_baseline tests/color/delta_e_baseline.cpp)

@@ -340,8 +340,23 @@ bool PhotoDao::getByPath(const std::string& path, PhotoRecord* out, std::string*
 
 namespace {
 
+// 表是否存在（M2 T2.3：develop_settings 由迁移 003 建，未跑时筛选必须降级而非静默出错）
+bool tableExistsIn(Database* db, const std::string& table) {
+  if (!db || !db->isOpen()) return false;
+  auto stmt = db->prepareCached(
+      "tableExists:" + table,
+      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='" + table + "' LIMIT 1;", nullptr);
+  if (!stmt || !stmt->valid()) return false;
+  const bool found = stmt->step(nullptr);
+  stmt->reset();
+  return found;
+}
+
 // 依据 Filter 生成 WHERE 片段（返回带占位符的 SQL 片段 + 绑定列表）
-void buildWhere(const Filter& f, bool* hasCond, std::string* where, std::vector<Bind>* binds) {
+// 返回 false 表示筛选无法安全表达（如 hasMasks 但 develop_settings 表缺失）——
+// 必须显式报错，**不得**静默返回空集或全量（零静默）。
+bool buildWhere(Database* db, const Filter& f, bool* hasCond, std::string* where,
+                std::vector<Bind>* binds, std::string* err) {
   auto add = [&](const std::string& cond) {
     *where += (*hasCond ? " AND " : " WHERE ");
     *where += cond;
@@ -410,7 +425,33 @@ void buildWhere(const Filter& f, bool* hasCond, std::string* where, std::vector<
     add(*f.located ? "(p.gps_lat IS NOT NULL AND p.gps_lng IS NOT NULL)"
                    : "(p.gps_lat IS NULL OR p.gps_lng IS NULL)");
   }
-  if (f.edited) add(*f.edited ? "p.has_edits = 1" : "p.has_edits = 0");
+  // M2 T2.3：edited 走 develop_settings（派生缓存），无缓存行时回退 photos.has_edits。
+  // 两者构成严格划分：有缓存行的以缓存为准，无缓存行的以 photos.has_edits 为准，
+  // 保证 edited=1 与 edited=0 的并集恒等于全集（不会两边都漏）。
+  const bool hasDevCache = tableExistsIn(db, "develop_settings");
+  if (f.edited) {
+    if (hasDevCache) {
+      add(*f.edited
+              ? "(EXISTS(SELECT 1 FROM develop_settings d WHERE d.photo_id=p.id AND d.has_edits=1) "
+                "OR (p.has_edits=1 AND NOT EXISTS(SELECT 1 FROM develop_settings d2 "
+                "WHERE d2.photo_id=p.id)))"
+              : "(p.has_edits=0 AND NOT EXISTS(SELECT 1 FROM develop_settings d "
+                "WHERE d.photo_id=p.id AND d.has_edits=1))");
+    } else {
+      add(*f.edited ? "p.has_edits = 1" : "p.has_edits = 0");
+    }
+  }
+  if (f.hasMasks) {
+    if (!hasDevCache) {
+      if (err) *err = "filter.hasMasks 需要 develop_settings 表（迁移 003 未执行）";
+      return false;
+    }
+    // 条件与部分索引 idx_dev_masks 的 WHERE 子句一致
+    add(*f.hasMasks ? "EXISTS(SELECT 1 FROM develop_settings dm WHERE dm.photo_id=p.id "
+                      "AND dm.mask_count>0)"
+                    : "NOT EXISTS(SELECT 1 FROM develop_settings dm WHERE dm.photo_id=p.id "
+                      "AND dm.mask_count>0)");
+  }
   if (f.missing) add(*f.missing ? "p.is_missing = 1" : "p.is_missing = 0");
   if (f.isVideo) add(*f.isVideo ? "p.is_video = 1" : "p.is_video = 0");
   if (f.dateFrom) {
@@ -435,6 +476,7 @@ void buildWhere(const Filter& f, bool* hasCond, std::string* where, std::vector<
     b.i = *f.seqId;
     binds->push_back(b);
   }
+  return true;
 }
 
 const char* kPhotoColumns =
@@ -452,7 +494,7 @@ bool PhotoDao::query(const Filter& f, const Sort& s, const Page& pg, QueryResult
   std::string where;
   std::vector<Bind> binds;
   if (!f.includeDeleted) where = " WHERE p.deleted=0";
-  buildWhere(f, &hasCond, &where, &binds);
+  if (!buildWhere(db_, f, &hasCond, &where, &binds, err)) return false;
 
   // 总数
   std::string countSql = "SELECT COUNT(*) FROM photos p" + where + ";";
@@ -579,7 +621,7 @@ bool PhotoDao::search(const std::string& text, const Filter& f, const Page& pg, 
   bool hasCond = false;
   std::string where;
   std::vector<Bind> binds;
-  buildWhere(f, &hasCond, &where, &binds);
+  if (!buildWhere(db_, f, &hasCond, &where, &binds, err)) return false;
 
   std::string countSql = "SELECT COUNT(*) FROM photos_fts f JOIN photos p ON p.id=f.rowid" + where +
                          " AND photos_fts MATCH ?;";
@@ -666,7 +708,7 @@ int64_t PhotoDao::count(const Filter& f, std::string* err) {
   bool hasCond = false;
   std::string where;
   std::vector<Bind> binds;
-  buildWhere(f, &hasCond, &where, &binds);
+  if (!buildWhere(db_, f, &hasCond, &where, &binds, err)) return -1;
   std::string sql = "SELECT COUNT(*) FROM photos p" + where + ";";
   auto stmt = db_->prepareCached("countPhotos", sql, err);
   if (!stmt || !stmt->valid()) return -1;
@@ -681,7 +723,7 @@ bool PhotoDao::listIds(const Filter& f, std::vector<int64_t>* out, std::string* 
   bool hasCond = false;
   std::string where;
   std::vector<Bind> binds;
-  buildWhere(f, &hasCond, &where, &binds);
+  if (!buildWhere(db_, f, &hasCond, &where, &binds, err)) return false;
   std::string sql = "SELECT p.id FROM photos p" + where + " ORDER BY p.id;";
   auto stmt = db_->prepareCached("listIds", sql, err);
   if (!stmt || !stmt->valid()) return false;
@@ -919,7 +961,7 @@ bool PhotoDao::facets(const Filter& f, json::JsonValue* out, std::string* err) {
   bool hasCond = false;
   std::string where;
   std::vector<Bind> binds;
-  buildWhere(f, &hasCond, &where, &binds);
+  if (!buildWhere(db_, f, &hasCond, &where, &binds, err)) return false;
   auto group = [&](const char* col, json::JsonValue* target) -> bool {
     std::string sql = "SELECT " + std::string(col) +
                       ", COUNT(*) c FROM photos p" + where +
@@ -959,7 +1001,7 @@ bool PhotoDao::timeline(const Filter& f, std::vector<MonthBucket>* out, std::str
   bool hasCond = false;
   std::string where;
   std::vector<Bind> binds;
-  buildWhere(f, &hasCond, &where, &binds);
+  if (!buildWhere(db_, f, &hasCond, &where, &binds, err)) return false;
   std::string sql = "SELECT date, COUNT(*) c, MIN(p.id) firstId FROM photos p" + where +
                     " GROUP BY date ORDER BY date;";
   auto stmt = db_->prepareCached("timeline", sql, err);

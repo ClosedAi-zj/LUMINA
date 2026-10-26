@@ -77,6 +77,8 @@ struct Filter {
   std::optional<std::string> pick;
   std::optional<bool> located;
   std::optional<bool> edited;
+  // M2 T2.3：是否含局部蒙版（走 develop_settings 的部分索引 idx_dev_masks）
+  std::optional<bool> hasMasks;
   std::optional<bool> missing;
   std::optional<bool> isVideo;
   std::optional<int64_t> dateFrom;

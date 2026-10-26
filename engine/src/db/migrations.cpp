@@ -285,6 +285,71 @@ bool applyMigration002FilesTable(Database* db, MigrationReport* report, std::ato
   return true;
 }
 
+// ---------------- 003：develop_settings 派生缓存 ----------------
+// 只做 DDL（表 + 两个部分索引），**不扫盘、不读 sidecar**：
+//   * db 层不碰文件系统（分层），回填由 develop_settings_dao::rebuildFromSidecar 执行；
+//   * 表本身是可丢弃派生，先建空表不影响任何读路径的正确性（参数仍从 sidecar 读）；
+//   * 全部 IF NOT EXISTS → 二次运行 0 变更（幂等）。
+bool applyMigration003DevelopSettings(Database* db, MigrationReport* report, int* err) {
+  if (!db || !db->isOpen()) {
+    if (err) *err = kMigrationNotOpen;
+    return false;
+  }
+  MigrationReport local;
+  MigrationReport& rep = report ? *report : local;
+  std::string e;
+
+  const bool existed = tableHasColumn(db, "develop_settings", "photo_id");
+
+  const char* kCreateDevSettings =
+      "CREATE TABLE IF NOT EXISTS develop_settings("
+      "  photo_id INTEGER PRIMARY KEY REFERENCES photos(id),"
+      "  params_json TEXT NOT NULL,"
+      "  params_hash TEXT NOT NULL,"
+      "  schema_version INT,"
+      "  sidecar_mtime INT,"
+      "  node_count INT,"
+      "  mask_count INT DEFAULT 0,"
+      "  has_edits INT DEFAULT 0,"
+      "  updated_at INT,"
+      "  source TEXT DEFAULT 'xmp'"
+      ");";
+  if (!db->exec(kCreateDevSettings, &e)) {
+    if (err) *err = kMigrationDdlFailed;
+    rep.detail = "create develop_settings failed: " + e;
+    logError("migrate", rep.detail);
+    return false;
+  }
+  ++rep.statementsRun;
+  if (!existed) rep.devTableCreated = 1;
+
+  // 部分索引：只索引「已调整」/「含蒙版」的行，筛选才可能走索引（H5 附带要求）
+  if (!db->exec(
+          "CREATE INDEX IF NOT EXISTS idx_dev_edited ON develop_settings(photo_id) "
+          "WHERE has_edits=1;",
+          &e)) {
+    if (err) *err = kMigrationDdlFailed;
+    rep.detail = "create idx_dev_edited failed: " + e;
+    logError("migrate", rep.detail);
+    return false;
+  }
+  ++rep.statementsRun;
+  if (!db->exec(
+          "CREATE INDEX IF NOT EXISTS idx_dev_masks ON develop_settings(photo_id) "
+          "WHERE mask_count>0;",
+          &e)) {
+    if (err) *err = kMigrationDdlFailed;
+    rep.detail = "create idx_dev_masks failed: " + e;
+    logError("migrate", rep.detail);
+    return false;
+  }
+  ++rep.statementsRun;
+
+  logInfo("migrate", "003: develop_settings ready" +
+                         std::string(rep.devTableCreated ? " (created)" : " (already present)"));
+  return true;
+}
+
 // ---------------- 版本化调度 ----------------
 bool runVersionedMigrations(Database* db, int* err) {
   return runVersionedMigrations(db, err, nullptr, nullptr, nullptr);
@@ -332,9 +397,17 @@ bool runVersionedMigrations(Database* db, int* err, MigrationReport* report,
                            " (files +" + std::to_string(rep.filesInserted) + ", linked " +
                            std::to_string(rep.photosLinked) + ")");
   }
-  // 003 / 004 扩展点：T2.3（develop_settings）/ T2.4（history）在此按同一模式续写，
-  // 版本号取 kDbVersionDevelopSettings / kDbVersionHistory，写完后同步上调
-  // kTargetDbVersion。本批不建表（避免半成品表影响 T2.3 的迁移设计）。
+  // 003：develop_settings 派生缓存（只建表；回填由 DAO 的 rebuildFromSidecar 执行）
+  if (rep.fromVersion < kDbVersionDevelopSettings) {
+    if (!applyMigration003DevelopSettings(db, &rep, err)) return false;
+    rep.toVersion = kDbVersionDevelopSettings;
+    if (!writeDbVersion(db, rep.toVersion, err)) return false;
+    logInfo("migrate", "migrated to db_version=" + std::to_string(rep.toVersion) +
+                           " (develop_settings " +
+                           std::string(rep.devTableCreated ? "created" : "present") + ")");
+  }
+  // 004 扩展点：T2.4（history）在此按同一模式续写，版本号取 kDbVersionHistory，
+  // 写完后同步上调 kTargetDbVersion。
   return true;
 }
 
