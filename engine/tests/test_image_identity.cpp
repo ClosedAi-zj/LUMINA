@@ -56,6 +56,15 @@ int64_t scalarInt(Database* db, const std::string& sql) {
   return v;
 }
 
+std::string scalarText(Database* db, const std::string& sql) {
+  auto stmt = db->prepareCached("ts:" + sql, sql, nullptr);
+  if (!stmt || !stmt->valid()) return "";
+  std::string v;
+  if (stmt->step(nullptr)) v = stmt->columnText(0);
+  stmt->reset();
+  return v;
+}
+
 // 插入一条照片（file_id 由迁移回填，这里不写）
 int64_t insertPhoto(PhotoDao* dao, int64_t rootId, int64_t folderId, const std::string& rootPath,
                     const std::string& relPath, const std::string& name, const std::string& loc,
@@ -125,6 +134,24 @@ int main() {
   CHECK(p1 > 0 && p2 > 0 && p3 > 0, "插入 3 张照片（file_id 为空）");
   CHECK(scalarInt(&db, "SELECT COUNT(*) FROM photos WHERE file_id IS NULL;") == 3,
         "迁移前 file_id 全为空");
+
+  // ---- BUG-1 回归（QA 第 2 轮，P0）：同一连接重复 ensure* 必须回查业务键 ----
+  // ON CONFLICT 分支不更新 last_insert_rowid（连接级全局值），旧实现拿它当
+  // 结果 → 第二次 ensureRoot 返回 photos 的 rowid（几乎恒 >0）→ relocate
+  // 报「根不存在」。此用例在旧实现下必红（root2 == p3 的 rowid）。
+  {
+    const int64_t staleRowid = p3;  // 连接上最近一次 INSERT 是 photos 第 3 行
+    const int64_t root2 = photos.ensureRoot(rootPath, "library", &err);  // 冲突路径
+    CHECK(root2 == rootId, "BUG-1：二次 ensureRoot（冲突路径）回查既有 id");
+    CHECK(root2 != staleRowid, "BUG-1：冲突路径不得返回 photos 的陈旧 rowid");
+    const int64_t fA2 = photos.ensureFolder(rootId, "2026/风光", "风光", &err);
+    CHECK(fA2 == folderA, "BUG-1：二次 ensureFolder（冲突路径）回查既有 id");
+    CHECK(fA2 != staleRowid, "BUG-1：ensureFolder 冲突路径不得返回陈旧 rowid");
+    CHECK(scalarInt(&db, "SELECT COUNT(*) FROM roots;") == 1, "BUG-1：roots 仍 1 行");
+    CHECK(scalarInt(&db, "SELECT COUNT(*) FROM folders WHERE root_id=" +
+                               std::to_string(rootId) + ";") == 2,
+          "BUG-1：folders 仍 2 行（无重复行）");
+  }
 
   // ---- 重放 002（模拟 M1 存量库升级） ----
   resetVersionTo1(&db);
@@ -290,6 +317,60 @@ int main() {
     PhotoRecord loaded;
     CHECK(photos.getById(idA, &loaded, &err), "getById");
     CHECK(loaded.fileId == fidA, "M35：getById 回填 fileId");
+
+    // ---- BUG-2 回归（QA 第 2 轮，P1）：空 md5 的原位 upsert 不得清掉库内 md5 ----
+    // verifyMd5=false 的导入 sourceMd5=""，旧实现 `md5=?` 全列覆盖 → md5 清空 →
+    // 内容级去重永久失效。此用例在旧实现下必红。
+    {
+      CHECK(db.exec("UPDATE photos SET md5='deadbeef01' WHERE id=" + std::to_string(idA) + ";",
+                    &err),
+            "BUG-2 前置：库内 md5 注入既有值");
+      PhotoRecord recNoMd5 = rec2;  // file_id=fidA、路径已换；sourceMd5 为空
+      recNoMd5.md5 = "";
+      int64_t idA4 = 0;
+      CHECK(photos.upsert(recNoMd5, &idA4, &err), "BUG-2：空 md5 原位 upsert");
+      CHECK(idA4 == idA, "BUG-2：仍按 file_id 认同一行");
+      CHECK(scalarText(&db, "SELECT md5 FROM photos WHERE id=" + std::to_string(idA) + ";") ==
+                "deadbeef01",
+            "BUG-2：库内 md5 未被空串覆盖");
+    }
+
+    // ---- BUG-3 回归（QA 第 2 轮，P2）：同 file_id 多行脏数据 upsert 不造第三行 ----
+    // 005 唯一索引落地前的存量脏形态：同一 file_id 挂两行（file_path 不同）。
+    // 旧实现 UPDATE ... WHERE file_id=? 命中两行 → UNIQUE(file_path) 冲突整句
+    // 失败 → 被误判未命中回落 INSERT 再造第三行。此用例在旧实现下必红。
+    {
+      const int64_t fidDirty = images.ensureFileRow(folderA, "dirty-dup.rw2", &err);
+      CHECK(fidDirty > 0, "BUG-3 前置：ensureFileRow dirty-dup");
+      PhotoRecord d1;
+      d1.folderId = folderA;
+      d1.rootId = rootId;
+      d1.fileId = fidDirty;
+      d1.fileName = "dirty-dup.rw2";
+      d1.filePath = rootPath + "/2026/风光/dirty-dup.rw2";
+      d1.format = "RW2";
+      int64_t idX = 0;
+      CHECK(photos.upsert(d1, &idX, &err), "BUG-3 前置：第一行插入（file_id 绑定）");
+      // 手工造第二行同 file_id（绕过 upsert 的防重，模拟 005 之前的存量脏数据）
+      CHECK(db.exec("INSERT INTO photos(folder_id,root_id,file_id,file_name,file_path,format) "
+                    "SELECT folder_id,root_id,file_id,'dirty-dup2.rw2','" +
+                        rootPath + "/2026/风光/dirty-dup2.rw2','RW2' FROM photos WHERE id=" +
+                        std::to_string(idX) + ";",
+                    &err),
+            "BUG-3 前置：同 file_id 手工造第二行");
+      CHECK(scalarInt(&db, "SELECT COUNT(*) FROM photos WHERE file_id=" +
+                               std::to_string(fidDirty) + ";") == 2,
+            "BUG-3 前置：脏状态就位（2 行同 file_id）");
+      // 本次导入：同 file_id、第三个路径 → 旧行为造第三行；新行为按 id 认最早行
+      PhotoRecord d2 = d1;
+      d2.filePath = rootPath + "/2027/风光/dirty-dup.rw2";
+      int64_t idY = 0;
+      CHECK(photos.upsert(d2, &idY, &err), "BUG-3：脏数据下 upsert 成功（不回落 INSERT）");
+      CHECK(idY == idX, "BUG-3：认最早一行（ORDER BY id LIMIT 1）");
+      CHECK(scalarInt(&db, "SELECT COUNT(*) FROM photos WHERE file_id=" +
+                               std::to_string(fidDirty) + ";") == 2,
+            "BUG-3：仍是 2 行（未造第三行）");
+    }
   }
 
   // ---- M2 T2.2b（M36 / 验收①）：真实导入路径 —— 移动文件夹 + 重新导入 ----

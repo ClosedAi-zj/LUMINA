@@ -224,8 +224,8 @@ std::vector<FolderInfo> PhotoDao::listFolders(std::string* err) {
 
 bool PhotoDao::upsert(const PhotoRecord& p, int64_t* outId, std::string* err) {
   // M2 T2.2b（M35 / 架构 §3.3.1 I2）：file_id > 0 时按**文件身份**认行 ——
-  // 先 UPDATE WHERE file_id，未命中再走路径冲突插入。这是最后一处
-  // 「路径当身份」的残留：不接这条线，导入即使解析出同一 file_id，
+  // 按 file_id 找到目标行后按 id 单行 UPDATE，未命中再走路径冲突插入。这是
+  // 最后一处「路径当身份」的残留：不接这条线，导入即使解析出同一 file_id，
   // upsert 仍会因 file_path 不同而插入新行（photos.id 漂移，四级表收益归零）。
   //
   // 实现说明（对架构 M35 措辞的一处偏离）：架构写的是
@@ -233,29 +233,63 @@ bool PhotoDao::upsert(const PhotoRecord& p, int64_t* outId, std::string* err) {
   // 而版本号 004/005 已分别预留给 T2.4（history）与 T2.12（sidecar 修复），
   // 本任务不便再占一个迁移版本。改为「UPDATE by file_id → 未命中走既有
   // ON CONFLICT(file_path) 插入」，语义等价且不动迁移阶梯（已在交付报告注明）。
-  static const char* kUpdateByFile =
+  //
+  // BUG-2（QA 第 2 轮）：verifyMd5=false 的导入 sourceMd5 为空串，原实现
+  // `md5=?` / `md5=excluded.md5` 全列覆盖会把库内 md5 清空 → 内容级去重永久
+  // 失效。两条 UPDATE 语句统一 `md5=COALESCE(NULLIF(?,''),md5)`：空串不覆盖。
+  //
+  // BUG-3（QA 第 2 轮）：历史脏数据（同一 file_id 挂多行 photos，唯一索引
+  // 待 005 落地根治）下，`UPDATE ... WHERE file_id=?` 会把多行 file_path 改成
+  // 同值 → UNIQUE(file_path) 冲突使整句失败，被误判「未命中」回落 INSERT 再
+  // 造第三行（QA 实测同一 files 身份挂 3 行 photos）。改为：先按 file_id 认
+  // 最早一行（ORDER BY id LIMIT 1）→ 按 id 单行 UPDATE（语句级保证只动一行）。
+  static const char* kUpdateById =
       "UPDATE photos SET folder_id=?,root_id=?,file_name=?,file_path=?,format=?,file_size=?,"
-      "md5=?,width=?,height=?,captured_at=?,imported_at=?,camera=?,lens=?,iso=?,aperture=?,"
+      "md5=COALESCE(NULLIF(?,''),md5),"
+      "width=?,height=?,captured_at=?,imported_at=?,camera=?,lens=?,iso=?,aperture=?,"
       "shutter=?,focal_length=?,white_balance=?,gps_lat=?,gps_lng=?,gps_alt=?,location_id=?,"
       "rating=?,pick=?,color_label=?,keywords=?,description=?,sidecar_path=?,sidecar_mtime=?,"
       "has_edits=?,is_missing=?,is_video=?,pair_kind=?,health=?,deleted=?,seq_id=?,location=?,"
-      "date=? WHERE file_id=? "
+      "date=? WHERE id=? "
       "RETURNING id;";
   if (p.fileId > 0) {
-    auto upd = db_->prepareCached("upsertPhotoByFile", kUpdateByFile, err);
-    if (!upd || !upd->valid()) return false;
-    std::vector<Bind> binds;
-    bindRecordHead(p, &binds);
-    bindRecordTail(p, &binds);
-    binds.push_back(bindFileId(p.fileId));
-    bindAll(upd.get(), binds, err);
-    if (upd->step(err)) {
-      const int64_t id = upd->columnInt64(0);
+    // ① 按 file_id 认行（最早一行）：多行脏数据时认 id 最小的，不再造新行
+    auto find = db_->prepareCached("upsertPhotoByFileFind",
+                                   "SELECT id FROM photos WHERE file_id=? ORDER BY id LIMIT 1;",
+                                   err);
+    if (!find || !find->valid()) return false;
+    std::vector<Bind> fbinds{bindFileId(p.fileId)};
+    bindAll(find.get(), fbinds, err);
+    int64_t targetId = 0;
+    if (find->step(err)) targetId = find->columnInt64(0);
+    find->reset();
+
+    if (targetId > 0) {
+      // ② 按 id 单行 UPDATE：不会因多行 file_path 同值触发 UNIQUE 冲突
+      auto upd = db_->prepareCached("upsertPhotoById", kUpdateById, err);
+      if (!upd || !upd->valid()) return false;
+      std::vector<Bind> binds;
+      bindRecordHead(p, &binds);
+      bindRecordTail(p, &binds);
+      binds.push_back(Bind{Bind::kInt64, targetId, 0, std::string()});
+      bindAll(upd.get(), binds, err);
+      if (upd->step(err)) {
+        const int64_t id = upd->columnInt64(0);
+        upd->reset();
+        if (outId) *outId = id;
+        return true;
+      }
       upd->reset();
-      if (outId) *outId = id;
-      return true;
+      // 按 id 单行 UPDATE 仍失败：真冲突（另一行占着目标 file_path 等）→
+      // 显式失败。不得回落 INSERT：那会把 file_path 冲突 upsert 到别人行上
+      // （改写别人的 file_id，重新制造重复身份）。
+      if (err && err->empty()) {
+        *err = "upsert by id=" + std::to_string(targetId) +
+               " failed (target file_path conflict?)";
+      }
+      logError("photo_dao", *err);
+      return false;
     }
-    upd->reset();
     // file_id 无对应行（理论不可达：fileId 来自 ensureFileRow）→ 落到插入路径
     logWarn("photo_dao", "upsert by file_id=" + std::to_string(p.fileId) +
                              " matched no row, falling back to insert");
@@ -273,7 +307,9 @@ bool PhotoDao::upsert(const PhotoRecord& p, int64_t* outId, std::string* err) {
                     "folder_id=excluded.folder_id, root_id=excluded.root_id, "
                     "file_id=excluded.file_id, "
                     "file_name=excluded.file_name, format=excluded.format, "
-                    "file_size=excluded.file_size, md5=excluded.md5, width=excluded.width, "
+                    "file_size=excluded.file_size, "
+                    // BUG-2：空 md5（verifyMd5=false 导入路径）不覆盖库内已有值
+                    "md5=COALESCE(NULLIF(excluded.md5,''),md5), width=excluded.width, "
                     "height=excluded.height, captured_at=excluded.captured_at, "
                     "camera=excluded.camera, lens=excluded.lens, iso=excluded.iso, "
                     "aperture=excluded.aperture, shutter=excluded.shutter, "
