@@ -142,6 +142,8 @@ export default function ViewerCanvas({ onHistogram }: { onHistogram?: (h: { r: n
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
       if (e.key === '\\') setCompare((c) => !c);
+      // batch 1 快捷键对齐：V = 前后对比（LR Y/Y 语境；与 \ 同效，写进速查表）
+      if (e.key.toLowerCase() === 'v' && !e.ctrlKey && !e.metaKey && !e.altKey) setCompare((c) => !c);
       if (e.code === 'Space' && !e.repeat) {
         e.preventDefault();
         setSpaceHeld(true);

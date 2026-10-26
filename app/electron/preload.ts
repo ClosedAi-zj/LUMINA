@@ -22,6 +22,16 @@ export interface LuminaPreload {
   showInFolder(path: string): Promise<boolean>;
   /** 破坏性操作二次确认（原生对话框） */
   confirm(opts: { title: string; message: string; confirmLabel?: string }): Promise<boolean>;
+  /** 自定义标题栏窗口控制（frame:false 无边框窗口） */
+  win: {
+    minimize(): Promise<boolean>;
+    /** 切换最大化/还原，返回切换后的 isMaximized */
+    toggleMaximize(): Promise<boolean>;
+    close(): Promise<boolean>;
+    isMaximized(): Promise<boolean>;
+    /** 订阅最大化状态推送（主进程 maximize/unmaximize 时触发） */
+    onMaximizeChange(cb: (maximized: boolean) => void): () => void;
+  };
 }
 
 contextBridge.exposeInMainWorld('lumina', {
@@ -45,4 +55,15 @@ contextBridge.exposeInMainWorld('lumina', {
   openPath: (p: string) => ipcRenderer.invoke('lumina:openPath', p),
   showInFolder: (p: string) => ipcRenderer.invoke('lumina:showInFolder', p),
   confirm: (opts: { title: string; message: string; confirmLabel?: string }) => ipcRenderer.invoke('lumina:confirm', opts),
+  win: {
+    minimize: () => ipcRenderer.invoke('lumina:win:minimize'),
+    toggleMaximize: () => ipcRenderer.invoke('lumina:win:toggleMaximize'),
+    close: () => ipcRenderer.invoke('lumina:win:close'),
+    isMaximized: () => ipcRenderer.invoke('lumina:win:isMaximized'),
+    onMaximizeChange: (cb: (maximized: boolean) => void) => {
+      const listener = (_e: unknown, v: boolean) => cb(v);
+      ipcRenderer.on('lumina:win:maximized', listener);
+      return () => ipcRenderer.removeListener('lumina:win:maximized', listener);
+    },
+  },
 } satisfies LuminaPreload);

@@ -303,6 +303,7 @@ function DevelopLoaded({
       <KeycapBar
         items={[
           { keys: ['\\'], label: '前后对比' },
+          { keys: ['V'], label: '前后对比' },
           ...(mode === 'pro' ? [{ keys: ['Space'], label: '长按看原图' }] : []),
           { keys: ['Ctrl', 'Z'], label: '撤销' },
           { keys: ['Ctrl', '⇧', 'Z'], label: '重做' },
@@ -429,7 +430,7 @@ const SHORTCUT_TABLE: { keys: string[]; label: string }[] = [
   { keys: ['Ctrl', '⇧', "'"], label: '上一张（循环）' },
   { keys: ['Ctrl', 'C'], label: '复制当前设置' },
   { keys: ['Ctrl', 'V'], label: '粘贴设置' },
-  { keys: ['\\'], label: '前后对比开/关' },
+  { keys: ['\\'], label: '前后对比开/关（V 同效）' },
   { keys: ['Space'], label: '长按临时看原图（专业模式）' },
   { keys: ['1-5'], label: '评星' },
   { keys: ['?'], label: '本速查浮层' },

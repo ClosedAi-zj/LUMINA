@@ -3,8 +3,8 @@
  *
  * 视觉规格（team-lead 指定，严格照做）：
  *  - 面板 = 卡片：rounded-lgC(12px) + shadow1 + 卡片间 6px
- *  - 面板标题 12px 半粗、不转大写、右侧 16px 折叠箭头
- *  - 参数行高 24px、rounded-mdC(8px)、hover bg-hover，左标签 text-txt2、右数值 num 右对齐
+ *  - 面板标题小型大写（.panel-section-title 10px/加字距，UI 改版 batch 1 对齐 LR）、右侧 16px 折叠箭头（1.5px 线性）
+ *  - 分组标题行高 28px、rounded-mdC(8px)、hover bg-hover，左标签 text-txt2、右数值 num 右对齐
  *  - 滑块：轨道 4px 圆头；球 12px（2px 面板色描边 + shadow1），hover 球 14px；激活段 accent
  *  - 过渡 120ms cubic-bezier(.2,.8,.2,1)
  * 颜色一律走令牌（除 #08090B 观察区外无硬编码色值）。
@@ -39,11 +39,12 @@ export function PanelCard({
     >
       <button
         onClick={() => setOpen((v) => !v)}
-        className="w-full h-8 px-3 flex items-center gap-2 text-left hover:bg-hover transition-colors"
+        className="w-full h-7 px-3 flex items-center gap-2 text-left hover:bg-hover transition-colors"
         style={{ transitionTimingFunction: EASE }}
         aria-expanded={open}
       >
-        <span className="text-xs font-semibold text-txt">{title}</span>
+        {/* batch 1 规范：分组标题小型大写（.panel-section-title，10px/加字距）+ 28px 紧凑行高 */}
+        <span className="panel-section-title">{title}</span>
         {hint && <span className="text-2xs text-txt3 font-normal truncate">{hint}</span>}
         <span className="flex-1" />
         {right}
@@ -55,7 +56,7 @@ export function PanelCard({
           style={{ transform: open ? 'rotate(0deg)' : 'rotate(-90deg)', transition: `transform 120ms ${EASE}` }}
           aria-hidden
         >
-          <path d="M7 10l5 5 5-5" fill="none" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M7 10l5 5 5-5" fill="none" stroke="currentColor" strokeWidth="1.5" />
         </svg>
       </button>
       {open && (

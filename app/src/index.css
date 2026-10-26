@@ -71,3 +71,23 @@ body {
   background: var(--Lumina-Tokens-rejectOverlay);
   pointer-events: none;
 }
+
+/* ---- 无边框窗口：自定义标题栏拖拽区（UI 改版 batch 1） ----
+   顶栏整体可拖拽；交互子元素（按钮/输入框/标签页）必须显式 no-drag，
+   否则点击会被拖拽手势吞掉。 */
+.app-drag {
+  -webkit-app-region: drag;
+}
+.app-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* ---- LR 式面板分组骨架（batch 1 全局规范） ----
+   分组标题小型大写 + 细分隔线；行高紧凑（24-28px）。 */
+.panel-section-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--Lumina-Tokens-textSecondary);
+}

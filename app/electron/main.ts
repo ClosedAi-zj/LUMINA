@@ -135,9 +135,12 @@ function createWindow(): void {
     minHeight: 800,
     backgroundColor: '#0C0D10',
     title: 'LUMINA · 摄影工作台',
-    // 原生菜单栏在 Windows/Linux 上不注册（见 buildMenu）；autoHideMenuBar 兜底，
-    // 防止任何残留菜单在按 Alt 时冒出第二层菜单。
-    autoHideMenuBar: true,
+    // 无边框现代化窗口（用户要求：去掉 Win 原生窗口，与 PS/LR 看齐）。
+    // Windows/Linux 交给渲染层自定义标题栏（src/components/WindowControls.tsx），
+    // macOS 保留原生红绿灯（系统惯例，不动）。Win11 的 DWM 对 frame:false 窗口
+    // 自动施加圆角、最大化时自动取消 —— 与"还原有圆角、最大化无圆角"的需求一致。
+    frame: isMac,
+    roundedCorners: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -155,6 +158,13 @@ function createWindow(): void {
     mainWindow.setMenuBarVisibility(false);
     registerWindowAccelerators(mainWindow);
   }
+
+  // 自定义标题栏：最大化状态变化实时推给渲染层（min/max 图标切换用）
+  const sendMaximized = (): void => {
+    mainWindow?.webContents.send('lumina:win:maximized', mainWindow.isMaximized());
+  };
+  mainWindow.on('maximize', sendMaximized);
+  mainWindow.on('unmaximize', sendMaximized);
 
   // 渲染进程 console 转发到主进程 stdout（smoke 验证用）
   mainWindow.webContents.on('console-message', (_e, level, message, line, sourceId) => {
@@ -571,6 +581,24 @@ async function bootstrap(): Promise<void> {
     });
     return r.response === 0;
   });
+  // 自定义标题栏窗口控制（frame:false 后原生三键消失，渲染层经 IPC 调用）。
+  // toggleMaximize 返回切换后的状态；状态变化另有 'lumina:win:maximized' 推送兜底。
+  ipcMain.handle('lumina:win:minimize', () => {
+    mainWindow?.minimize();
+    return true;
+  });
+  ipcMain.handle('lumina:win:toggleMaximize', () => {
+    const w = mainWindow;
+    if (!w) return false;
+    if (w.isMaximized()) w.unmaximize();
+    else w.maximize();
+    return w.isMaximized();
+  });
+  ipcMain.handle('lumina:win:close', () => {
+    mainWindow?.close();
+    return true;
+  });
+  ipcMain.handle('lumina:win:isMaximized', () => mainWindow?.isMaximized() ?? false);
 
   createWindow();
 

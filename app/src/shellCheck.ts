@@ -74,6 +74,46 @@ export async function runShellCheck(): Promise<void> {
     await sleep(500);
     log(`menu 文件: clicked=${menuClicked} view ${viewBefore}→${useUi.getState().view} → ${menuClicked && viewBefore === useUi.getState().view ? 'OK' : 'FAIL'}`);
 
+    // 自定义标题栏窗口三键（frame:false）：真实 DOM 点击 → IPC → 主进程 BrowserWindow。
+    // 最小化后渲染层仍在运行，用 toggleMaximize 从最小化恢复并同时验证 maximize 链路。
+    const winBtn = (label: string): HTMLButtonElement | null =>
+      document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+    const max0 = await window.lumina.win.isMaximized();
+    winBtn('最小化')?.click();
+    await sleep(800);
+    const restored = await window.lumina.win.toggleMaximize(); // minimize → maximize
+    await sleep(700);
+    winBtn('向下还原')?.click();
+    await sleep(700);
+    const maxAfterRestore = await window.lumina.win.isMaximized();
+    winBtn('最大化')?.click();
+    await sleep(700);
+    const maxAfterMax = await window.lumina.win.isMaximized();
+    winBtn('向下还原')?.click();
+    await sleep(700);
+    const maxFinal = await window.lumina.win.isMaximized();
+    const closePresent = !!winBtn('关闭');
+    log(
+      `win-controls: max0=${max0} minimize→maximize=${restored} restore→${maxAfterRestore} maximize→${maxAfterMax} restore→${maxFinal} closeBtn=${closePresent} → ${
+        !max0 && restored && !maxAfterRestore && maxAfterMax && !maxFinal && closePresent ? 'OK' : 'FAIL'
+      }`,
+    );
+
+    // PS/LR 惯例单键（batch 1）：D 显影 / G 网格 / E 放大视图（→精选）。合成 keydown 走同一 window keydown 链路。
+    const pressKey = (key: string): void => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+    };
+    pressKey('g');
+    await sleep(400);
+    const gView = useUi.getState().view;
+    pressKey('d');
+    await sleep(400);
+    const dView = useUi.getState().view;
+    pressKey('e');
+    await sleep(400);
+    const eView = useUi.getState().view;
+    log(`hotkeys: G→${gView} D→${dView} E→${eView} → ${gView === 'library' && dView === 'develop' && eView === 'culling' ? 'OK' : 'FAIL'}`);
+
     log('DONE');
   } catch (err) {
     log(`FAILED ${(err as Error).message}`);

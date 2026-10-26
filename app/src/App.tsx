@@ -12,6 +12,7 @@ import { useLibrary } from './store/libraryStore';
 import { useUi, type AppView, type BootStage } from './store/uiStore';
 import { ToastHost, Icon, ThemeToggle } from './components/shell';
 import { Button } from './components/primitives';
+import { WindowControls } from './components/WindowControls';
 import ErrorBoundary from './components/ErrorBoundary';
 import BootProgress from './components/BootProgress';
 import { formatCount } from './utils/format';
@@ -103,6 +104,15 @@ function MockBanner() {
   );
 }
 
+/**
+ * 顶栏 = 自定义标题栏 + 工具栏一体化（UI 改版 batch 1，LR 式身份牌 chrome）。
+ *
+ * 替代原先「原生标题栏 + TopBar + SubNav」三层结构，合并为一条 40px 深色 chrome：
+ *   左：产品标识 + PS 式全局菜单占位 + 模块切换器（LR 模块拾取器式四工作区）
+ *   中：当前模块上下文（工作区内视图胶囊）+ 引擎状态
+ *   右：搜索 / 导出 / 主题 / 窗口三键（min·max·close）
+ * 空白区域 `-webkit-app-region: drag` 可拖拽窗口，双击最大化/还原；交互子元素 app-no-drag。
+ */
 function TopBar({
   workspace,
   onPickWorkspace,
@@ -112,38 +122,96 @@ function TopBar({
   onPickWorkspace: (k: WorkspaceKey) => void;
   searchRef: { current: HTMLInputElement | null };
 }) {
+  const view = useUi((s) => s.view);
   const navigate = useUi((s) => s.navigate);
   const engineStatus = useJobStore((s) => s.engineStatus);
   const engineVersion = useJobStore((s) => s.engineVersion);
+  const healthIssueCount = useJobStore((s) => s.healthIssueCount);
   const stats = useLibrary((s) => s.stats);
   const { theme } = useTheme();
   const toast = useJobStore((s) => s.toast);
 
   return (
     <header
-      className="glass-m2 flex items-center h-11 px-2 gap-3 border-b border-line shrink-0"
+      className="app-drag flex items-center h-10 gap-2 border-b border-line shrink-0 select-none"
+      style={{ background: 'var(--Lumina-Tokens-browserBar)' }}
       data-theme-surface={theme}
+      onDoubleClick={(e) => {
+        // 拖拽区双击 = 最大化/还原（LR/Windows 惯例）；点在交互元素上不触发
+        if ((e.target as HTMLElement).closest('.app-no-drag, button, input')) return;
+        void window.lumina.win.toggleMaximize();
+      }}
     >
-      {/* 左：标识 + 菜单栏 */}
-      <div className="flex items-center gap-2 shrink-0">
+      {/* 左：产品标识（LR 身份牌） */}
+      <div className="app-no-drag flex items-center gap-2 pl-3 shrink-0">
         <span className="w-5 h-5 rounded-smC bg-accent flex items-center justify-center text-onaccent text-xs font-bold">L</span>
         <span className="text-sm font-semibold tracking-wide">Lumina</span>
       </div>
-      <nav className="flex items-center gap-0.5 shrink-0">
+
+      {/* 左：PS 式全局菜单（视觉与 hover，点击给"即将开放"提示，与 1.1 行为一致） */}
+      <nav className="app-no-drag flex items-center gap-0.5 shrink-0">
         {MENUS.map((m) => (
           <button
             key={m}
             onClick={() => toast(`${m}菜单即将开放（v1.2.0 后续里程碑）`, 'info', 2000)}
-            className="hover-accent8 h-7 px-2 rounded-mdC text-xs text-txt2 hover:text-txt transition-colors"
+            className="hover-accent8 h-7 px-1.5 rounded-mdC text-2xs text-txt2 hover:text-txt transition-colors"
           >
             {m}
           </button>
         ))}
       </nav>
 
-      {/* 中：当前文档名占位 + 引擎状态（沿用 1.1 的状态提示，不回退） */}
-      <div className="flex-1 min-w-0 flex items-center justify-center gap-3">
-        <span className="text-xs text-txt2 truncate">未打开照片</span>
+      {/* 左：模块切换器（四工作区，LR 模块拾取器式：文字 + 亮底选中态） */}
+      <nav className="app-no-drag flex items-center gap-0.5 shrink-0 pl-1">
+        {WORKSPACES.map((w) => {
+          const active = workspace === w.key;
+          return (
+            <button
+              key={w.key}
+              onClick={() => onPickWorkspace(w.key)}
+              className={`h-7 px-2.5 rounded-mdC text-xs transition-colors ${
+                active
+                  ? 'bg-hover text-txt font-medium'
+                  : 'text-txt2 hover:text-txt hover:bg-hover'
+              }`}
+            >
+              {w.label}
+            </button>
+          );
+        })}
+      </nav>
+
+      {/* 中：当前模块上下文 = 工作区内视图胶囊（原 SubNav 并入）+ 引擎状态 */}
+      <div className="flex-1 min-w-0 flex items-center justify-center gap-3 px-2">
+        <nav className="app-no-drag flex items-center gap-1 min-w-0 overflow-hidden">
+          {(() => {
+            const spec = WORKSPACES.find((w) => w.key === workspace);
+            if (!spec || spec.views.length === 0) {
+              return (
+                <span className="text-2xs text-txt3 truncate">
+                  精修工作区：v1.2.0 M1（NodeGraph）交付，当前版本此工作区为空
+                </span>
+              );
+            }
+            return spec.views.map((v) => {
+              const active = view === v;
+              return (
+                <button
+                  key={v}
+                  onClick={() => navigate(v)}
+                  className={`relative h-6 px-2.5 rounded-pill text-2xs transition-colors shrink-0 ${
+                    active ? 'bg-accent text-onaccent font-medium' : 'text-txt2 hover:text-txt hover:bg-hover'
+                  }`}
+                >
+                  {VIEW_LABEL[v]}
+                  {v === 'health' && healthIssueCount > 0 && (
+                    <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full" style={{ background: 'var(--Lumina-Tokens-danger)' }} />
+                  )}
+                </button>
+              );
+            });
+          })()}
+        </nav>
         <span className="flex items-center gap-1.5 text-2xs text-txt3 shrink-0">
           <span
             className="w-1.5 h-1.5 rounded-full"
@@ -156,84 +224,36 @@ function TopBar({
                     : 'var(--Lumina-Tokens-success)',
             }}
           />
-          {engineStatus === 'starting' ? '引擎连接中…' : engineStatus === 'mock' ? `Mock 引擎 · ${engineVersion || '1.1.1'}` : `引擎 · ${engineVersion || '1.1.1'}`}
-          {stats && <span className="num">· {formatCount(stats.totalPhotos)} 张</span>}
+          <span className="hidden xl:inline">
+            {engineStatus === 'starting' ? '引擎连接中…' : engineStatus === 'mock' ? `Mock · ${engineVersion || '1.1.1'}` : `引擎 · ${engineVersion || '1.1.1'}`}
+            {stats && <span className="num"> · {formatCount(stats.totalPhotos)} 张</span>}
+          </span>
         </span>
       </div>
 
-      {/* 右：工作区四按钮 + 搜索 + 导出 + 主题 */}
-      <nav className="flex items-center gap-1 shrink-0">
-        {WORKSPACES.map((w) => {
-          const active = workspace === w.key;
-          return (
-            <button
-              key={w.key}
-              onClick={() => onPickWorkspace(w.key)}
-              className={`relative h-7 px-2.5 rounded-xs text-xs transition-colors ${
-                active ? 'text-accent font-medium' : 'text-txt2 hover:text-txt hover:bg-hover'
-              }`}
-            >
-              {w.label}
-              {active && <span className="absolute left-1.5 right-1.5 bottom-0.5 h-0.5 rounded-pill bg-accent" />}
-            </button>
-          );
-        })}
-      </nav>
+      {/* 右：搜索 / 导出 / 主题（交互元素一律 no-drag） */}
+      <div className="app-no-drag flex items-center gap-1.5 shrink-0">
+        <div className="flex items-center h-7 gap-1.5 px-2.5 rounded-pill border border-line bg-card" style={{ width: 180 }}>
+          <Icon name="search" size={12} className="text-txt3 shrink-0" />
+          <input
+            ref={(el) => {
+              searchRef.current = el;
+            }}
+            placeholder="搜索照片、文件夹、关键词"
+            className="flex-1 min-w-0 bg-transparent text-2xs text-txt placeholder:text-txt3 focus:outline-none"
+          />
+          <span className="text-[10px] text-txt3 shrink-0">⌘K</span>
+        </div>
 
-      <div className="flex items-center h-7 gap-1.5 px-2.5 rounded-pill border border-line bg-card shrink-0" style={{ width: 220 }}>
-        <Icon name="search" size={12} className="text-txt3 shrink-0" />
-        <input
-          ref={(el) => {
-            searchRef.current = el;
-          }}
-          placeholder="搜索照片、文件夹、关键词"
-          className="flex-1 min-w-0 bg-transparent text-2xs text-txt placeholder:text-txt3 focus:outline-none"
-        />
-        <span className="text-[10px] text-txt3 shrink-0">⌘K</span>
+        <Button variant="primary" size="sm" onClick={() => navigate('export')}>
+          导出
+        </Button>
+        <ThemeToggle />
       </div>
 
-      <Button variant="primary" size="sm" onClick={() => navigate('export')} className="shrink-0">
-        导出
-      </Button>
-      <ThemeToggle />
+      {/* 右缘：窗口三键（满高热区，不参与拖拽） */}
+      <WindowControls />
     </header>
-  );
-}
-
-/** 二级导航：当前工作区下的视图（胶囊 tab，走 v1.2.0 圆角令牌） */
-function SubNav({ workspace }: { workspace: WorkspaceKey }) {
-  const view = useUi((s) => s.view);
-  const navigate = useUi((s) => s.navigate);
-  const healthIssueCount = useJobStore((s) => s.healthIssueCount);
-  const spec = WORKSPACES.find((w) => w.key === workspace);
-  if (!spec) return null;
-  if (spec.views.length === 0) {
-    return (
-      <div className="glass-m1 flex items-center h-9 px-4 border-b border-line shrink-0 text-2xs text-txt3">
-        精修工作区：v1.2.0 M1（NodeGraph）交付，当前版本此工作区为空
-      </div>
-    );
-  }
-  return (
-    <nav className="glass-m1 flex items-center gap-1.5 h-9 px-3 border-b border-line shrink-0">
-      {spec.views.map((v) => {
-        const active = view === v;
-        return (
-          <button
-            key={v}
-            onClick={() => navigate(v)}
-            className={`relative h-6 px-2.5 rounded-pill text-2xs transition-colors ${
-              active ? 'bg-accent text-onaccent font-medium' : 'text-txt2 hover:text-txt hover:bg-hover'
-            }`}
-          >
-            {VIEW_LABEL[v]}
-            {v === 'health' && healthIssueCount > 0 && (
-              <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full" style={{ background: 'var(--Lumina-Tokens-danger)' }} />
-            )}
-          </button>
-        );
-      })}
-    </nav>
   );
 }
 
@@ -347,10 +367,16 @@ function Shell() {
     };
   }, [bootAttempt]);
 
-  // 全局快捷键：Ctrl/Cmd+K 聚焦顶栏搜索；Ctrl+F 聚焦图库搜索（1.1 既有行为保留）
+  // 全局快捷键：
+  //  - Ctrl/Cmd+K 聚焦顶栏搜索；Ctrl+F 聚焦图库搜索（1.1 既有行为保留）
+  //  - PS/LR 惯例单键（batch 1）：D 显影模块 / G 网格视图 / E 放大视图（→精选 review）。
+  //    输入框聚焦时不抢键；带 Ctrl/Cmd 的组合键不动（编辑类快捷键归各模块）。
+  //    \（前后对比）、1-5/0/P/X（评分/旗标）已由修图台/精选模块内 handler 承接，不重复绑定。
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
+      const target = e.target as HTMLElement | null;
+      const typing = target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.isContentEditable;
       if (mod && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         searchRef.current?.focus();
@@ -360,6 +386,20 @@ function Shell() {
         e.preventDefault();
         useUi.getState().requestSearchFocus();
         if (useUi.getState().view !== 'library') navigate('library');
+        return;
+      }
+      if (mod || typing || e.altKey) return;
+      const key = e.key.toLowerCase();
+      if (key === 'd') {
+        e.preventDefault();
+        navigate('develop');
+      } else if (key === 'g') {
+        e.preventDefault();
+        navigate('library');
+      } else if (key === 'e') {
+        // LR 的 E = 放大视图；LUMINA 最接近的单张放大语境是精选工作区（review 模式）
+        e.preventDefault();
+        navigate('culling');
       }
     };
     window.addEventListener('keydown', onKey);
@@ -432,7 +472,6 @@ function Shell() {
         }}
         searchRef={searchRef}
       />
-      <SubNav workspace={workspace} />
       <MockBanner />
       {/* 工作区内容按"面板卡片"承载：外层 8px 间距 + 新圆角 + 面层阴影；
           面板内部圆角/间距属于各模块，按派工约束留到下一阶段再改 */}

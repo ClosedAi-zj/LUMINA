@@ -100,51 +100,52 @@ export function KeycapBar({ items }: { items: { keys: string[]; label: string }[
 }
 
 // ---------- 图标集（内联 SVG，currentColor） ----------
+// batch 1 全局规范：1.5px 线性、单色 currentColor，16/20px 双档由调用方 size 决定。
 
 export function Icon({ name, size = 16, className = '' }: { name: string; size?: number; className?: string }) {
   const paths: Record<string, ReactNode> = {
-    search: <circle cx="10" cy="10" r="6" fill="none" stroke="currentColor" strokeWidth="1.6" />,
+    search: <circle cx="10" cy="10" r="6" fill="none" stroke="currentColor" strokeWidth="1.5" />,
     sun: (
       <>
-        <circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" strokeWidth="1.6" />
-        <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1" stroke="currentColor" strokeWidth="1.6" />
+        <circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" strokeWidth="1.5" />
+        <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1" stroke="currentColor" strokeWidth="1.5" />
       </>
     ),
-    moon: <path d="M20 13A8 8 0 1 1 11 4a6.5 6.5 0 0 0 9 9z" fill="none" stroke="currentColor" strokeWidth="1.6" />,
-    folder: <path d="M3 5h6l2 2h10v11H3z" fill="none" stroke="currentColor" strokeWidth="1.6" />,
+    moon: <path d="M20 13A8 8 0 1 1 11 4a6.5 6.5 0 0 0 9 9z" fill="none" stroke="currentColor" strokeWidth="1.5" />,
+    folder: <path d="M3 5h6l2 2h10v11H3z" fill="none" stroke="currentColor" strokeWidth="1.5" />,
     star: <path d="M12 3l2.7 5.6 6.1.8-4.5 4.3 1.1 6-5.4-2.9-5.4 2.9 1.1-6L3.2 9.4l6.1-.8z" fill="currentColor" opacity="0.9" />,
     pin: (
       <>
-        <path d="M12 21s-6-5.7-6-10a6 6 0 1 1 12 0c0 4.3-6 10-6 10z" fill="none" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M12 21s-6-5.7-6-10a6 6 0 1 1 12 0c0 4.3-6 10-6 10z" fill="none" stroke="currentColor" strokeWidth="1.5" />
         <circle cx="12" cy="11" r="2" fill="currentColor" />
       </>
     ),
     edit: <circle cx="12" cy="12" r="3" fill="currentColor" />,
     clock: (
       <>
-        <circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" strokeWidth="1.6" />
-        <path d="M12 7v5l3 2" fill="none" stroke="currentColor" strokeWidth="1.6" />
+        <circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" strokeWidth="1.5" />
+        <path d="M12 7v5l3 2" fill="none" stroke="currentColor" strokeWidth="1.5" />
       </>
     ),
     heart: <path d="M12 20s-7-4.6-7-9.5A4 4 0 0 1 12 7a4 4 0 0 1 7 3.5C19 15.4 12 20 12 20z" fill="currentColor" opacity="0.9" />,
-    warning: <path d="M12 4l9 15H3zM12 10v4M12 16.5v.5" fill="none" stroke="currentColor" strokeWidth="1.7" />,
+    warning: <path d="M12 4l9 15H3zM12 10v4M12 16.5v.5" fill="none" stroke="currentColor" strokeWidth="1.5" />,
     empty: (
       <>
-        <rect x="4" y="4" width="16" height="16" rx="2" fill="none" stroke="currentColor" strokeWidth="1.6" strokeDasharray="3 2.4" />
-        <path d="M9 12h6" stroke="currentColor" strokeWidth="1.6" />
+        <rect x="4" y="4" width="16" height="16" rx="2" fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="3 2.4" />
+        <path d="M9 12h6" stroke="currentColor" strokeWidth="1.5" />
       </>
     ),
     play: <path d="M8 5l11 7-11 7z" fill="currentColor" />,
     pause: <path d="M7 5h4v14H7zM13 5h4v14h-4z" fill="currentColor" />,
-    back: <path d="M14 6l-6 6 6 6" fill="none" stroke="currentColor" strokeWidth="1.8" />,
-    forward: <path d="M10 6l6 6-6 6" fill="none" stroke="currentColor" strokeWidth="1.8" />,
-    plus: <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" strokeWidth="1.8" />,
-    download: <path d="M12 4v10M7 10l5 5 5-5M5 19h14" fill="none" stroke="currentColor" strokeWidth="1.7" />,
-    x: <path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" strokeWidth="1.8" />,
+    back: <path d="M14 6l-6 6 6 6" fill="none" stroke="currentColor" strokeWidth="1.5" />,
+    forward: <path d="M10 6l6 6-6 6" fill="none" stroke="currentColor" strokeWidth="1.5" />,
+    plus: <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" strokeWidth="1.5" />,
+    download: <path d="M12 4v10M7 10l5 5 5-5M5 19h14" fill="none" stroke="currentColor" strokeWidth="1.5" />,
+    x: <path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" strokeWidth="1.5" />,
     settings: (
       <>
-        <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="1.6" />
-        <path d="M12 2v3M12 19v3M2 12h3M19 12h3" stroke="currentColor" strokeWidth="1.6" />
+        <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="1.5" />
+        <path d="M12 2v3M12 19v3M2 12h3M19 12h3" stroke="currentColor" strokeWidth="1.5" />
       </>
     ),
   };
