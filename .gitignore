@@ -3,6 +3,7 @@ build/
 
 # ---- 依赖 ----
 app/node_modules/
+mcp/node_modules/
 
 # ---- 测试样张：20 张真实 RW2（561MB，属用户私人照片，不入库）----
 samples/

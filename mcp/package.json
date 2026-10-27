@@ -1,7 +1,7 @@
 {
   "name": "lumina-mcp",
-  "version": "1.0.0",
-  "description": "MCP server for LUMINA photography engine — lets AI agents connect to LUMINA (import/organize/develop/export/health)",
+  "version": "2.0.0",
+  "description": "MCP server bridging AI agents into the running LUMINA GUI app (control-port bridge, v1.3.0-m3)",
   "type": "module",
   "main": "server.mjs",
   "bin": {
@@ -11,7 +11,10 @@
     "node": ">=18"
   },
   "scripts": {
-    "smoke": "node test/smoke.mjs"
+    "e2e": "node test/e2e-bridge.mjs"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2"
+  }
 }

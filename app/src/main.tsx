@@ -3,6 +3,9 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import './theme/tokens.css';
 import './index.css';
+import { initMcpExecutor } from './mcp/executor';
+
+initMcpExecutor(); // v1.3.0-m3：MCP 渲染层执行器（控制端口 → store 真实动作）
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
