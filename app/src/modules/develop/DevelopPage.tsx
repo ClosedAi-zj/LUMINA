@@ -22,6 +22,7 @@ import RangeMaskBar from './panels/RangeMaskBar';
 import TransformBar from './panels/TransformBar';
 import ToolRail from './panels/ToolRail';
 import OptionBar from './panels/OptionBar';
+import DocTabs from './panels/DocTabs';
 import Filmstrip from '../library/Filmstrip';
 import { PanelCard } from './panels/panelKit';
 import { NavigatorCard, PresetCard, SnapshotCard, LayersCard } from './panels/LeftRail';
@@ -226,6 +227,9 @@ function DevelopLoaded({
     };
   }, [photoId]);
 
+  // G9 文档 Tab：状态栏给出「第几个文档 / 共几个」（多开时）
+  const tabs = useDevelop((s) => s.tabs);
+  const tabIndex = tabs.indexOf(photoId);
   // G2 状态栏：节点数 = 蒙版 + 调整图层（参数模型里真实存在的编辑节点）
   const editParams = useDevelop((s) => s.params);
   const nodeCount = (editParams?.masks.length ?? 0) + (editParams?.adjustmentStack?.length ?? 0);
@@ -240,6 +244,25 @@ function DevelopLoaded({
       if (e.key === 'Tab') {
         e.preventDefault();
         setPanelsHidden((h) => !h);
+        return;
+      }
+      // G9 文档 Tab：Ctrl+Tab / Ctrl+⇧Tab 在已开文档间循环（LR/PS 习惯）
+      if (ctrl && e.key === 'Tab') {
+        e.preventDefault();
+        const st = useDevelop.getState();
+        if (st.tabs.length < 2) return;
+        const idx = st.tabs.indexOf(st.photoId ?? -1);
+        const next = e.shiftKey
+          ? st.tabs[(idx - 1 + st.tabs.length) % st.tabs.length]
+          : st.tabs[(idx + 1) % st.tabs.length];
+        await st.openPhoto(next);
+        return;
+      }
+      // G9：Ctrl+W 关闭当前文档（关掉最后一个则结束会话）
+      if (ctrl && e.key.toLowerCase() === 'w') {
+        e.preventDefault();
+        const st = useDevelop.getState();
+        if (st.photoId !== null) await st.closeTab(st.photoId);
         return;
       }
       if (e.key.toLowerCase() === 'f' && !ctrl && !e.altKey) {
@@ -340,7 +363,7 @@ function DevelopLoaded({
         <button className="h-6 px-2 rounded-sm text-2xs text-txt3 hover:text-txt2" onClick={() => setShowKeys(true)} title="快捷键速查（?）">
           ⌨ 快捷键
         </button>
-        <span className="num text-2xs text-txt3">照片 #{photoId}</span>
+        {/* 照片 #id 与文件名已由文档标签条/状态栏承载，这里不再重复（副导航条横向空间留给控件） */}
         <Button size="sm" disabled={selectedIds.length === 0} onClick={() => void syncToSelection(selectedIds.filter((id) => id !== photoId))} title="将当前参数同步到所选照片">
           同步设置到所选{selectedIds.length > 1 ? `（${selectedIds.length - 1}）` : ''}
         </Button>
@@ -390,6 +413,8 @@ function DevelopLoaded({
             </aside>
           )}
           <section className="flex-1 min-w-0 flex flex-col overflow-hidden" style={{ background: 'var(--Lumina-Tokens-panel)' }}>
+            {/* G9 文档标签条：多开照片接力修图（单文档时不占高度） */}
+            <DocTabs items={filmItems} />
             <div className="relative flex-1 min-h-0 flex flex-col">
               {/* 画布外围 pasteboard（观察区 #08090B 恒色不动，红线 R5） */}
               <div className="relative flex-1 min-h-0 flex" style={{ background: 'var(--Lumina-Tokens-pasteboard)' }}>
@@ -431,6 +456,8 @@ function DevelopLoaded({
           )}
 
           <section className="flex-1 min-w-0 flex flex-col rounded-lgC overflow-hidden border border-line" style={{ background: 'var(--Lumina-Tokens-panel)', boxShadow: 'var(--Lumina-Tokens-shadow1)' }}>
+            {/* G9 文档标签条：快捷模式同样可用（多开接力），单文档时不占高度 */}
+            <DocTabs items={filmItems} />
             <ViewerToolbar />
             {/* G6 画布外框：#17191D pasteboard 在观察区外围（观察区 #08090B 恒色不动，红线 R5） */}
             <div className="relative flex-1 min-h-0 flex" style={{ background: 'var(--Lumina-Tokens-pasteboard)' }}>
@@ -455,6 +482,9 @@ function DevelopLoaded({
           { keys: ['V'], label: '前后对比' },
           { keys: ['C'], label: '裁剪框' },
           { keys: ['Tab'], label: '隐/显面板' },
+          { keys: ['Ctrl', 'Tab'], label: '下一文档' },
+          { keys: ['Ctrl', '⇧', 'Tab'], label: '上一文档' },
+          { keys: ['Ctrl', 'W'], label: '关闭文档' },
           { keys: ['F'], label: '全屏' },
           ...(mode === 'pro' ? [{ keys: ['Space'], label: '长按看原图' }] : []),
           { keys: ['Ctrl', 'Z'], label: '撤销' },
@@ -485,7 +515,14 @@ function DevelopLoaded({
           节点 <span className="num text-txt2">{nodeCount}</span>
         </span>
         <div className="flex-1" />
-        <span className="num">照片 #{photoId}</span>
+        {tabs.length > 1 && (
+          <span title="已打开的修图文档（Ctrl+Tab 切换、Ctrl+W 关闭）">
+            文档 <span className="num text-txt2">{tabIndex + 1}</span>/{tabs.length}
+          </span>
+        )}
+        <span className="max-w-[200px] truncate" title={summary?.fileName ?? ''}>
+          {summary?.fileName ?? `照片 #${photoId}`}
+        </span>
       </div>
       <EscHandler navigate={navigate} />
 
@@ -613,6 +650,9 @@ const SHORTCUT_TABLE: { keys: string[]; label: string }[] = [
   { keys: ['C'], label: '开/关裁剪框（工具轨 · 裁剪）' },
   { keys: ['Space'], label: '长按临时看原图（专业模式）' },
   { keys: ['Tab'], label: '隐藏/呼出两侧面板（LR）' },
+  { keys: ['Ctrl', 'Tab'], label: '下一个文档（多开时）' },
+  { keys: ['Ctrl', '⇧', 'Tab'], label: '上一个文档（多开时）' },
+  { keys: ['Ctrl', 'W'], label: '关闭当前文档' },
   { keys: ['F'], label: '全屏沉浸（切换）' },
   { keys: ['双击'], label: '参数名归零（滑块行双击）' },
   { keys: ['1-5'], label: '评星' },

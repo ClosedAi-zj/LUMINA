@@ -14,6 +14,22 @@ export type DevelopMode = 'fast' | 'pro';
 export type XmpStatus = 'idle' | 'debouncing' | 'written';
 export type GuidesMode = 'off' | 'thirds' | 'center' | 'grid';
 
+/** G9 文档 Tab 上限：每个 Tab 都要引擎建会话并保留一份解码底图，10 个是内存/心智双上限 */
+export const MAX_DEVELOP_TABS = 10;
+
+/** 把 id 并进 Tab 列表：已在列表里则**原地不动**（切 Tab 时顺序不能跳），
+ *  新 id 追加到末尾；按上限挤掉最早打开的（keep 里的 id 永不被挤）。 */
+function pushTab(tabs: number[], id: number, keep: number[] = []): number[] {
+  if (tabs.includes(id)) return tabs;
+  const out = [...tabs, id];
+  while (out.length > MAX_DEVELOP_TABS) {
+    const victim = out.find((t) => !keep.includes(t));
+    if (victim === undefined) break;
+    out.splice(out.indexOf(victim), 1);
+  }
+  return out;
+}
+
 /** 历史快照条目（UI 侧参数快照，供专业模式点击跳转回放） */
 export interface HistoryEntry {
   label: string;
@@ -97,6 +113,11 @@ interface DevelopStore {
   lastFlushMtime: number | null;
   /** T2.12：蒙版渲染语义升级一次性告知 —— 首启标记（localStorage 键 m2MaskSemanticsNotified，falsy=横幅显示） */
   maskSemanticsNotified: boolean;
+  /** G9 文档 Tab（会话级多开照片，含当前 photoId；不含未打开的库内照片）。
+   *  语义裁定见 docs/v1.2.0/UI-对齐差距评估与改版清单.md §五-D1：
+   *  产品是「库 + 单图」模型，Tab = 图库多选后接力修图的已开文档，不是 PS 的画布多文档。
+   *  上限 MAX_DEVELOP_TABS，超出时挤掉最早打开的（当前照片永不被挤）。 */
+  tabs: number[];
 
   // ---- 专业模式（与快速模式共享同一 params，以下为 UI 侧状态 + params 扩展读写） ----
   /** 历史快照（与 historyLabels 一一对应，commit 时记录） */
@@ -110,6 +131,10 @@ interface DevelopStore {
 
   openPhoto: (id: number) => Promise<void>;
   closePhoto: () => Promise<void>;
+  /** G9：批量打开（首张成为当前文档，其余进 Tab 列表）——图库多选「接力修图」入口 */
+  openTabs: (ids: number[]) => Promise<void>;
+  /** G9：关闭某个文档 Tab；关掉当前时切到相邻 Tab，Tab 清空则结束会话 */
+  closeTab: (id: number) => Promise<void>;
   setMode: (m: DevelopMode) => void;
   applyPatch: (patch: Partial<EditParams>, commit: boolean, label?: string) => Promise<void>;
   setNumeric: (key: keyof EditParams, value: number, commit: boolean) => Promise<void>;
@@ -174,6 +199,7 @@ export const useDevelop = create<DevelopStore>((set, get) => ({
   selectedLayerId: null,
   lockedLayerIds: [],
   guides: 'off',
+  tabs: [],
 
   openPhoto: async (id) => {
     // 切图/关图必须先 endSession{flush:true}（协议 §5.5 / v1.0.1）
@@ -193,7 +219,7 @@ export const useDevelop = create<DevelopStore>((set, get) => ({
     try {
       const [session, base] = await Promise.all([api.edit.beginSession(id), api.preview.getBase(id)]);
       const normalized = normalizeParams(session.params);
-      set({
+      set((s) => ({
         sessionId: session.sessionId,
         params: normalized,
         revision: session.revision,
@@ -203,7 +229,9 @@ export const useDevelop = create<DevelopStore>((set, get) => ({
         loading: false,
         historyLabels: ['导入原状'],
         historySnapshots: [{ label: '导入原状', params: structuredClone(normalized), time: Date.now() }],
-      });
+        // G9：打开成功的照片进入文档 Tab（切 Tab 与首次打开走同一条路径）
+        tabs: pushTab(s.tabs, id, [id]),
+      }));
     } catch (err) {
       set({ loading: false });
       const { useJobStore } = await import('./jobStore');
@@ -230,7 +258,39 @@ export const useDevelop = create<DevelopStore>((set, get) => ({
       }
     }
     if (get().xmpTimer) clearTimeout(get().xmpTimer as ReturnType<typeof setTimeout>);
-    set({ photoId: null, sessionId: null, params: null, baseImageUrl: null, xmpStatus: 'idle' });
+    // G9：退出修图台 = 文档全部关闭（Tab 是会话级，不跨进出图库保留）
+    set({ photoId: null, sessionId: null, params: null, baseImageUrl: null, xmpStatus: 'idle', tabs: [] });
+  },
+
+  openTabs: async (ids) => {
+    const list = [...new Set(ids.filter((id) => Number.isFinite(id) && id > 0))];
+    if (list.length === 0) return;
+    // 首张成为当前文档（走 openPhoto：会先 flush 上一张并建会话），其余只登记进 Tab 列表
+    const [first, ...rest] = list;
+    await get().openPhoto(first);
+    if (rest.length > 0) {
+      set((s) => ({ tabs: rest.reduce((acc, id) => pushTab(acc, id, [s.photoId ?? first]), s.tabs) }));
+    }
+  },
+
+  closeTab: async (id) => {
+    const { tabs, photoId } = get();
+    const idx = tabs.indexOf(id);
+    if (idx < 0) return;
+    const rest = tabs.filter((t) => t !== id);
+    if (photoId !== id) {
+      set({ tabs: rest });
+      return;
+    }
+    // 关掉的是当前文档 → 切到相邻（优先右侧，其次左侧）；没有下一个则结束会话
+    const next = rest[idx] ?? rest[idx - 1] ?? null;
+    if (next === null) {
+      await get().closePhoto();
+      return;
+    }
+    await get().openPhoto(next);
+    // openPhoto 会把 next 追加到末尾；这里恢复原相对位置，避免 Tab 顺序跳动
+    set((s) => ({ tabs: rest, photoId: s.photoId }));
   },
 
   setMode: (m) => {

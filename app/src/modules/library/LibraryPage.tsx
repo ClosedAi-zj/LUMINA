@@ -7,7 +7,7 @@
 import { useEffect, useMemo } from 'react';
 import { useLibrary } from '../../store/libraryStore';
 import { useUi } from '../../store/uiStore';
-import { useDevelop } from '../../store/developStore';
+import { useDevelop, MAX_DEVELOP_TABS } from '../../store/developStore';
 import { api } from '../../api/engine';
 import { errText } from '../../api/rpc-client';
 import { useJobStore } from '../../store/jobStore';
@@ -79,7 +79,24 @@ export default function LibraryPage() {
         if (next) (e.shiftKey ? select(next.id, 'range', items) : setCurrent(next.id));
       } else if (e.key === 'Enter') {
         if (st.currentPhotoId !== null) {
-          void useDevelop.getState().openPhoto(st.currentPhotoId);
+          // G9 文档 Tab：多选时把选中的一起开成文档（当前照片排第一），
+          // 实现「接力修图」——Ctrl+Tab 在已开文档间切换。单选仍是打开单张。
+          const sel = st.selectedIds;
+          const ids =
+            sel.length > 1 && sel.includes(st.currentPhotoId)
+              ? [st.currentPhotoId, ...sel.filter((id) => id !== st.currentPhotoId)]
+              : [st.currentPhotoId];
+          const capped = ids.slice(0, MAX_DEVELOP_TABS);
+          void useDevelop.getState().openTabs(capped);
+          if (capped.length > 1) {
+            useJobStore
+              .getState()
+              .toast(
+                `已打开 ${capped.length} 个文档：Ctrl+Tab 切换、Ctrl+W 关闭${ids.length > capped.length ? `（选中超 ${MAX_DEVELOP_TABS} 张，余下未打开）` : ''}`,
+                'info',
+                4500,
+              );
+          }
           navigate('develop');
         }
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
