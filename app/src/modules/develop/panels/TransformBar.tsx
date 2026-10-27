@@ -7,7 +7,8 @@
 import { useDevelop } from '../../../store/developStore';
 import { Slider, Toggle } from '../../../components/primitives';
 
-const ASPECTS: { label: string; value: number }[] = [
+/** 宽高比四档（OptionBar 裁剪上下文与工具轨共用同一份） */
+export const ASPECTS: { label: string; value: number }[] = [
   { label: '自由', value: 0 },
   { label: '1:1', value: 1 },
   { label: '3:2', value: 1.5 },

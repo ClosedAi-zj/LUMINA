@@ -20,6 +20,8 @@ import HistoryPanel from './panels/HistoryPanel';
 import LayersPanel from './panels/LayersPanel';
 import RangeMaskBar from './panels/RangeMaskBar';
 import TransformBar from './panels/TransformBar';
+import ToolRail from './panels/ToolRail';
+import OptionBar from './panels/OptionBar';
 import Filmstrip from '../library/Filmstrip';
 import { PanelCard } from './panels/panelKit';
 import { NavigatorCard, PresetCard, SnapshotCard, LayersCard } from './panels/LeftRail';
@@ -248,6 +250,13 @@ function DevelopLoaded({
         }
         return;
       }
+      // v1.3.0-m3 工具轨快捷键：C = 开/关裁剪框（与工具轨裁剪按钮同一 setPath）
+      if (e.key.toLowerCase() === 'c' && !ctrl && !e.altKey) {
+        e.preventDefault();
+        const cropped = useDevelop.getState().params?.geometry.hasCrop ?? false;
+        void useDevelop.getState().setPath('geometry.hasCrop', !cropped, true, cropped ? '关闭裁剪' : '开启裁剪');
+        return;
+      }
       if (ctrl && e.key.toLowerCase() === 'z') {
         e.preventDefault();
         if (e.shiftKey) void redo();
@@ -356,14 +365,16 @@ function DevelopLoaded({
         /* 专业模式（v1.2.0 阶段 3）：左栏 240px 卡片（导航器/预设/历史/图层）+ 中 直方图/画面 +
            右栏 8 组折叠卡片（含直方图卡与诚实提示） */
         <div className="flex-1 min-h-0 flex gap-1.5 p-2" style={{ background: 'var(--Lumina-Tokens-canvas)' }}>
+          {/* v1.3.0-m3：PS 工具轨 = 最左缘（左右栏折叠与否都不动它，工具常驻可达） */}
+          <ToolRail />
           {visibleLeft && (
             /* R7 M1：左侧轨道栏 = 通透侧栏材质（玻璃底色/模糊走 .glass-m1 组合类，令牌供色） */
-            <aside className="glass-m1 w-60 shrink-0 overflow-y-auto flex flex-col gap-1.5 rounded-lgC p-1">
+            <aside className="glass-m1 w-60 shrink-0 overflow-y-auto flex flex-col gap-px rounded-smC p-1">
               {/* G4：左栏顺序 = 导航器 → 预设 → 快照 → 历史（R6 §3.2 LR 顺序）；图层常驻其后（原 Dialog 入口移除） */}
               <NavigatorCard />
               <PresetCard />
               <SnapshotCard />
-              <PanelCard title="历史" defaultOpen hint="撤销 / 重做 / 快照">
+              <PanelCard title="历史" icon="history" defaultOpen hint="撤销 / 重做 / 快照">
                 {/* 历史/快照条目可能上百条：卡片内限高滚动，避免把整个左栏顶长 */}
                 <div className="max-h-[420px] overflow-y-auto">
                   <HistoryPanel />
@@ -372,8 +383,9 @@ function DevelopLoaded({
               <LayersCard />
             </aside>
           )}
-          <section className="flex-1 min-w-0 flex flex-col rounded-lgC overflow-hidden border border-line" style={{ background: 'var(--Lumina-Tokens-panel)', boxShadow: 'var(--Lumina-Tokens-shadow1)' }}>
-            <ViewerToolbar />
+          <section className="flex-1 min-w-0 flex flex-col rounded-smC overflow-hidden border border-line" style={{ background: 'var(--Lumina-Tokens-panel)' }}>
+            {/* v1.3.0-m3：上下文选项栏（PS Option Bar）取代原入口工具条；缩放%为画布实测 */}
+            <OptionBar zoomPct={viewerMetrics ? viewerMetrics.zoom * 100 : null} />
             <div className="relative flex-1 min-h-0 flex flex-col">
               {/* G6 画布外框：#17191D pasteboard 在观察区外围（观察区 #08090B 恒色不动，红线 R5） */}
               <div className="relative flex-1 min-h-0 flex" style={{ background: 'var(--Lumina-Tokens-pasteboard)' }}>
@@ -398,7 +410,7 @@ function DevelopLoaded({
           {visibleLeft && (
             /* R7 M1：快捷模式左栏同套通透侧栏材质 */
             <aside className="glass-m1 w-52 shrink-0 overflow-y-auto flex flex-col gap-1.5 rounded-lgC p-1">
-              <PanelCard title="历史" defaultOpen hint="撤销 / 重做 / 快照">
+              <PanelCard title="历史" icon="history" defaultOpen hint="撤销 / 重做 / 快照">
                 {/* 历史/快照条目可能上百条：卡片内限高滚动，避免把整个左栏顶长 */}
                 <div className="max-h-[420px] overflow-y-auto">
                   <HistoryPanel />
@@ -430,6 +442,7 @@ function DevelopLoaded({
         items={[
           { keys: ['\\'], label: '前后对比' },
           { keys: ['V'], label: '前后对比' },
+          { keys: ['C'], label: '裁剪框' },
           { keys: ['Tab'], label: '隐/显面板' },
           { keys: ['F'], label: '全屏' },
           ...(mode === 'pro' ? [{ keys: ['Space'], label: '长按看原图' }] : []),
@@ -586,6 +599,7 @@ const SHORTCUT_TABLE: { keys: string[]; label: string }[] = [
   { keys: ['Ctrl', 'C'], label: '复制当前设置' },
   { keys: ['Ctrl', 'V'], label: '粘贴设置' },
   { keys: ['\\'], label: '前后对比开/关（V 同效）' },
+  { keys: ['C'], label: '开/关裁剪框（工具轨 · 裁剪）' },
   { keys: ['Space'], label: '长按临时看原图（专业模式）' },
   { keys: ['Tab'], label: '隐藏/呼出两侧面板（LR）' },
   { keys: ['F'], label: '全屏沉浸（切换）' },

@@ -163,6 +163,13 @@ export default function ViewerCanvas({ onHistogram }: { onHistogram?: (h: { r: n
     };
   }, []);
 
+  // v1.3.0-m3 OptionBar 前后对比按钮：与 \ 键共用同一 state（事件来自上方选项栏）
+  useEffect(() => {
+    const onToggle = () => setCompare((c) => !c);
+    window.addEventListener('lumina:compare-toggle', onToggle);
+    return () => window.removeEventListener('lumina:compare-toggle', onToggle);
+  }, []);
+
   // 加载底图
   useEffect(() => {
     if (!baseImageUrl) return;
@@ -215,6 +222,10 @@ export default function ViewerCanvas({ onHistogram }: { onHistogram?: (h: { r: n
   // 参数变化 → 重渲染（拖动中间态零延迟）
   const [renderTick, setRenderTick] = useState(0);
   const effectiveCompare = compare || spaceHeld;
+  // 对比选中态广播（OptionBar 按钮高亮与真实 state 同源）
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('lumina:compare-state', { detail: { on: effectiveCompare } }));
+  }, [effectiveCompare]);
   useEffect(() => {
     const canvas = canvasRef.current;
     const r = rendererRef.current;
