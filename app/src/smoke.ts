@@ -688,7 +688,9 @@ export async function runSmokeScenario(): Promise<void> {
       await sleep(300);
       log('overlay-shot'); // 主进程据此拍「浮层打开状态」→ build/review-overlay.png
       await sleep(900);
-      document.querySelector<HTMLButtonElement>('button[aria-label="关闭"]')?.click();
+      // 永久加固：关闭按钮限定在浮层弹窗（.glass-m2）内查找——WindowControls 的窗口关闭
+      // 按钮语义同名，裸查全局第一个会被命中导致整窗退出、冒烟断链
+      document.querySelector<HTMLButtonElement>('.glass-m2 button[aria-label="关闭"]')?.click();
       await sleep(200);
     }
 

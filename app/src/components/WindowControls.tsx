@@ -65,8 +65,8 @@ export function WindowControls() {
       </button>
       <button
         className={`${btnBase} hover:bg-[#e81123] hover:text-white`}
-        title="关闭"
-        aria-label="关闭"
+        title="关闭窗口"
+        aria-label="关闭窗口"
         onClick={() => void window.lumina.win.close()}
       >
         <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>

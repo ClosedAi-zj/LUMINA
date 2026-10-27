@@ -107,7 +107,7 @@ export async function runShellCheck(): Promise<void> {
     winBtn('向下还原')?.click();
     await sleep(700);
     const maxFinal = await window.lumina.win.isMaximized();
-    const closePresent = !!winBtn('关闭');
+    const closePresent = !!winBtn('关闭窗口');
     log(
       `win-controls: max0=${max0} minimize→maximize=${restored} restore→${maxAfterRestore} maximize→${maxAfterMax} restore→${maxFinal} closeBtn=${closePresent} → ${
         !max0 && restored && !maxAfterRestore && maxAfterMax && !maxFinal && closePresent ? 'OK' : 'FAIL'
