@@ -667,6 +667,10 @@ export function buildMask(type: MaskLayer['type'], _index: number): MaskLayer {
     base.amount = -20;
   } else if (type === 'brush') {
     base.strokes = [{ x: 0.5, y: 0.5, radius: 0.08, flow: 80, density: 100, erase: false }];
+    // T2.8 裁决：brush 新蒙版缺省 amount=100（画完即全效，LR/PS 行为）——
+    // 引擎 v3 语义 w = f · opacity · amount，缺省 0 会导致「画笔无效果」；
+    // 与协议 v3 读端 `amount ?? 100` 兜底口径一致（工厂产出即完整）。
+    base.amount = 100;
   } else if (type === 'luminanceRange') {
     // 范围蒙版（协议 §4 MaskLayer.range：low/high 0..1 + samples 采样点）
     base.range = { low: 0.25, high: 0.85, samples: [] };
