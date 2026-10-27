@@ -372,6 +372,57 @@ static void testPlanSequenceOrder() {
     lastRowOp = name;
   }
   CHECK(rowOk, "opSequence 全部算子可归属 20 阶段表且行号单调不减");
+  // T2.10 双向断言（§3.7.1 第 3 条）——执行 → 表：每个算子 rank 可查且 rank 单调不减
+  {
+    bool rankOk = true;
+    int lastRank = 0;
+    for (const std::string& name : plan.opSequence) {
+      int rank = 0;
+      if (!lumina::plan::pipelineRankForOp(name, &rank, &err)) {
+        std::printf("    [未登记] %s 无表内 rank: %s\n", name.c_str(), err.c_str());
+        rankOk = false;
+        continue;
+      }
+      if (rank < lastRank) rankOk = false;
+      lastRank = rank;
+    }
+    CHECK(rankOk, "双向①执行→表：opSequence 每算子 rank 可查且单调不减");
+    // 双向②表 → 执行：opSequence 已按表 rank 排序（stable 按 rank 重排后不变 = 表序即执行序）
+    std::vector<std::string> sorted = plan.opSequence;
+    std::stable_sort(sorted.begin(), sorted.end(), [](const std::string& a, const std::string& b) {
+      int ra = 0, rb = 0;
+      lumina::plan::pipelineRankForOp(a, &ra, nullptr);
+      lumina::plan::pipelineRankForOp(b, &rb, nullptr);
+      return ra < rb;
+    });
+    CHECK(sorted == plan.opSequence, "双向②表→执行：按表 rank 重排与执行序列逐项一致");
+  }
+  // T2.10：S1 收口后 geometry.apply 单算子、旧算子名不再被 Plan 产出
+  {
+    const int geoCount = static_cast<int>(std::count(plan.opSequence.begin(),
+                                                     plan.opSequence.end(), "geometry.apply"));
+    CHECK(geoCount == 1, "geometry.apply 在全参 Plan 中恰出现一次（S1 单一算子）");
+    bool noLegacy = true;
+    for (const char* legacy : {"lens.profile", "lens.manualDistortion",
+                               "lens.chromaticAberration", "geometry.crop",
+                               "geometry.perspective"}) {
+      if (std::find(plan.opSequence.begin(), plan.opSequence.end(), legacy) !=
+          plan.opSequence.end()) {
+        noLegacy = false;
+      }
+      CHECK(lumina::plan::pipelineRowForOp(legacy) == 0,
+            (std::string("旧算子名已未登记: ") + legacy).c_str());
+    }
+    CHECK(noLegacy, "opSequence 不含任何 S1 旧算子名（临时映射已删除）");
+  }
+  // T2.10 表驱动第 2 条：未登记算子硬失败（无 return 1000 兜底）
+  {
+    int rank = 0;
+    std::string rankErr;
+    CHECK(!lumina::plan::pipelineRankForOp("nonexistent.op", &rank, &rankErr) &&
+              !rankErr.empty(),
+          "未登记算子 → pipelineRankForOp 硬失败且写明原因（零静默）");
+  }
   // toneMap 必须恒在序列内（S3 唯一域分界）
   CHECK(std::find(plan.opSequence.begin(), plan.opSequence.end(), "pipeline.toneMap") !=
             plan.opSequence.end(),

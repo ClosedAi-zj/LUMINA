@@ -176,7 +176,7 @@ const PipelineStageDesc kPipelineOrder[kPipelineOrderCount] = {
     {1, "白平衡通道增益", Stage::S0Decode,
      "basic.whiteBalance,basic.temperature,basic.tint", 0, Stage::S0Decode,
      "scene-linear camera"},
-    {2, "镜头 profile 畸变（k1–k3）", Stage::S1Geometry, "", 1, Stage::S1Geometry,
+    {2, "镜头 profile 畸变（k1–k3）", Stage::S1Geometry, "geometry.apply", 1, Stage::S1Geometry,
      "scene-linear working"},
     {3, "色差校正（CA）", Stage::S1Geometry, "", 2, Stage::S1Geometry, "scene-linear working"},
     {4, "光学暗角校正", Stage::S1Geometry, "", 3, Stage::S1Geometry, "scene-linear working"},
@@ -212,34 +212,42 @@ const PipelineStageDesc kPipelineOrder[kPipelineOrderCount] = {
      "effects.vignette,effects.grain,output.encode", 0, Stage::S7Output, "display → 8/16bit"},
 };
 
+// 算子名 → 所在行号（1..20）；未登记返回 0。由 pipelineRankForOp 派生（单一事实源）。
 int pipelineRowForOp(const std::string& opName) {
-  if (opName.empty()) return 0;
-  // ① 精确匹配表内算子（含逗号分隔的多算子行）
+  int rank = 0;
+  return pipelineRankForOp(opName, &rank, nullptr) ? rank / 100 : 0;
+}
+
+// T2.10 表驱动（§3.7.1）：rank = 行号 * 100 + 行内算子下标，全部由 kPipelineOrder
+// 派生。未登记 → err + false（硬失败，无兜底）；旧 S1 算子名的兼容映射已删除。
+bool pipelineRankForOp(const std::string& opName, int* rankOut, std::string* err) {
+  if (opName.empty()) {
+    if (err) *err = "pipelineRankForOp: empty op name";
+    return false;
+  }
   for (int i = 0; i < kPipelineOrderCount; ++i) {
     const std::string ops = kPipelineOrder[i].ops;
     size_t start = 0;
+    int idx = 0;
     while (start <= ops.size()) {
       size_t comma = ops.find(',', start);
       if (comma == std::string::npos) comma = ops.size();
-      if (ops.compare(start, comma - start, opName) == 0) return kPipelineOrder[i].index;
+      if (ops.compare(start, comma - start, opName) == 0) {
+        if (rankOut != nullptr) *rankOut = kPipelineOrder[i].index * 100 + idx;
+        return true;
+      }
       if (comma == ops.size()) break;
       start = comma + 1;
+      ++idx;
     }
   }
-  // ② S1 旧算子名兼容映射（T2.10 合并进 geometry.apply 后整段删除）。
-  //    全部映射到第 2 行 = 「geometry.apply 块」的入口行：第 2–6 行是同一个算子的
-  //    内部子步，子序由 tests/test_geometry_chain.cpp 断言（T2.10），不在本表层面判。
-  //    注意：当前实现里 geometry.crop 排在 geometry.perspective 之前，而 M2 目标
-  //    子序是「透视 → 裁剪」——这正是 O3/L1 要收口的那处顺序不一致，T2.10 修。
-  if (opName == "geometry.apply") return 2;
-  if (opName == "lens.profile") return 2;
-  if (opName == "lens.manualDistortion") return 2;
-  if (opName == "lens.chromaticAberration") return 2;
-  if (opName == "geometry.crop") return 2;
-  if (opName == "geometry.perspective") return 2;
-  // ③ ICC 输入（M4 实装；S4 首位，暂归第 16 行之前）
-  if (opName == "iccInput") return 15;
-  return 0;
+  // 例外白名单：iccInput（M4 实装时正式登记进表；S4 首位，暂归第 15/16 行界）
+  if (opName == "iccInput") {
+    if (rankOut != nullptr) *rankOut = 15 * 100 + 50;
+    return true;
+  }
+  if (err) *err = "pipelineRankForOp: op '" + opName + "' not in kPipelineOrder（T2.10 表驱动硬失败）";
+  return false;
 }
 
 bool registerBuiltinOps(OpTable* table, std::string* err) {

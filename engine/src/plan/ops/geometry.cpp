@@ -1,10 +1,15 @@
-// T1.3 geometry 节点算子（13 叶，S1，CPU oracle）
-// 裁剪/拉直 → plan::applyGeometry（T0.4 单应 + 一次采样）；透视 7 叶 → 同一单应。
+// T1.3/T2.10 geometry 节点算子（13 叶，S1，CPU oracle）
+// T2.10 收口：新增单一算子 geometry.apply（架构 §4.3 子序 1畸变→…→4透视→5aspect
+// →6裁剪，一次重采样，O3/O4），实现基座在 plan/geometry_chain.cpp。
+// 旧算子名 geometry.crop / geometry.perspective 保留注册为**废弃转发**（test_ops93/
+// test_op_table 兼容）：内部转发 GeometryChain 的单参数调用，行为 = 旧独立算子
+// （单参数时几何链退化为原单应）。生产 Plan（compilePlan → opForParam）只产出
+// geometry.apply，S1 路由单一来源。
 // 参数键：geometry.hasCrop/cropLeft/cropTop/cropRight/cropBottom/cropAngle 与
-// geometry.perspective.{x,y,horizontal,vertical,rotate,scale,aspect}。
+// geometry.perspective.{x,y,horizontal,vertical,rotate,scale,aspect} + optics.*。
 #include "plan/ops/ops.h"
 
-#include "plan/geometry.h"
+#include "plan/geometry_chain.h"
 
 #include <algorithm>
 
@@ -12,72 +17,49 @@ namespace lumina {
 namespace plan {
 namespace {
 
+// T2.10：S1 单一算子（表行 2「镜头 profile 畸变」块的入口；行 2–6 = 本算子内部子步）
+class GeometryApplyOp : public ParamOp {
+ public:
+  GeometryApplyOp() : ParamOp("geometry.apply", Stage::S1Geometry) {}
+  bool apply(imaging::ImageBuf* buf, std::string* err) const override {
+    if (!checkBuf(buf, err)) return false;
+    const GeometryChainParams p = collectGeometryChainParams(params_);
+    return applyGeometryChain(buf, p, nullptr, err);
+  }
+};
+
+// 废弃转发：crop/拉直单参数（无旋转时 chain 恒等判定保证全幅 crop 字节不变）
 class GeometryCropOp : public ParamOp {
  public:
   GeometryCropOp() : ParamOp("geometry.crop", Stage::S1Geometry) {}
   bool apply(imaging::ImageBuf* buf, std::string* err) const override {
     if (!checkBuf(buf, err)) return false;
-    const bool hasCrop = params_.get("geometry.hasCrop").asBool(false);
-    const double angle = params_.get("geometry.cropAngle").asDouble(0.0);
-    if (!hasCrop && angle == 0.0) return true;  // identity：无裁剪无拉直
-    GeometryParams gp;
-    gp.cropX = static_cast<int>(params_.get("geometry.cropLeft").asDouble(0.0) / 100.0 * buf->w);
-    gp.cropY = static_cast<int>(params_.get("geometry.cropTop").asDouble(0.0) / 100.0 * buf->h);
-    const double right = params_.get("geometry.cropRight").asDouble(100.0);
-    const double bottom = params_.get("geometry.cropBottom").asDouble(100.0);
-    gp.cropW = std::max(1, static_cast<int>(right / 100.0 * buf->w) - gp.cropX);
-    gp.cropH = std::max(1, static_cast<int>(bottom / 100.0 * buf->h) - gp.cropY);
-    gp.angleDeg = angle;
-    gp.scale = 1.0;
-    imaging::ImageBuf out;
-    uint64_t samples = 0;
-    if (!applyGeometry(*buf, gp, imaging::Kernel::CatmullRom, &out, &samples, err)) {
-      return false;
-    }
-    if (samples != static_cast<uint64_t>(out.w) * out.h) {
-      if (err) *err = "geometry.crop: sample count != dst pixels";
-      return false;
-    }
-    *buf = std::move(out);
-    return true;
+    GeometryChainParams p;
+    p.hasCrop = params_.get("geometry.hasCrop").asBool(false);
+    p.cropLeft = params_.get("geometry.cropLeft").asDouble(0.0);
+    p.cropTop = params_.get("geometry.cropTop").asDouble(0.0);
+    p.cropRight = params_.get("geometry.cropRight").asDouble(100.0);
+    p.cropBottom = params_.get("geometry.cropBottom").asDouble(100.0);
+    p.cropAngle = params_.get("geometry.cropAngle").asDouble(0.0);
+    return applyGeometryChain(buf, p, nullptr, err);
   }
 };
 
+// 废弃转发：透视/变换单参数（perspective 7 叶）
 class GeometryPerspectiveOp : public ParamOp {
  public:
   GeometryPerspectiveOp() : ParamOp("geometry.perspective", Stage::S1Geometry) {}
   bool apply(imaging::ImageBuf* buf, std::string* err) const override {
     if (!checkBuf(buf, err)) return false;
-    const double px = params_.get("geometry.perspective.x").asDouble(0.0);
-    const double py = params_.get("geometry.perspective.y").asDouble(0.0);
-    const double ph = params_.get("geometry.perspective.horizontal").asDouble(0.0);
-    const double pv = params_.get("geometry.perspective.vertical").asDouble(0.0);
-    const double rot = params_.get("geometry.perspective.rotate").asDouble(0.0);
-    // scale 语义 = 倍数（UI 滑杆 0.5–2，protocol/TransformBar 默认 1=恒等）。
-    // 曾按 100=恒等、/100 归一 → 会话默认 scale:1 被判激活且缩到 5%（T1.4 预览 4x3
-    // 回归根因，2026-10-25 修复，与 app oracle93.buildGeomTransform 两端同步）。
-    const double scale = params_.get("geometry.perspective.scale").asDouble(1.0);
-    const double aspect = params_.get("geometry.perspective.aspect").asDouble(0.0);
-    if (px == 0 && py == 0 && ph == 0 && pv == 0 && rot == 0 && scale == 1.0 && aspect == 0) {
-      return true;  // identity
-    }
-    GeometryParams gp;
-    gp.angleDeg = rot;
-    gp.perspectiveH = ph / 100.0 + px / 100.0 * 0.1;
-    gp.perspectiveV = pv / 100.0 + py / 100.0 * 0.1;
-    gp.scale = std::max(0.05, scale);
-    (void)aspect;  // 比例约束与裁剪框联动，T2.4 交互期实装（不静默改像素）
-    imaging::ImageBuf out;
-    uint64_t samples = 0;
-    if (!applyGeometry(*buf, gp, imaging::Kernel::CatmullRom, &out, &samples, err)) {
-      return false;
-    }
-    if (samples != static_cast<uint64_t>(out.w) * out.h) {
-      if (err) *err = "geometry.perspective: sample count != dst pixels";
-      return false;
-    }
-    *buf = std::move(out);
-    return true;
+    GeometryChainParams p;
+    p.perspX = params_.get("geometry.perspective.x").asDouble(0.0);
+    p.perspY = params_.get("geometry.perspective.y").asDouble(0.0);
+    p.perspH = params_.get("geometry.perspective.horizontal").asDouble(0.0);
+    p.perspV = params_.get("geometry.perspective.vertical").asDouble(0.0);
+    p.perspRotate = params_.get("geometry.perspective.rotate").asDouble(0.0);
+    p.perspScale = params_.get("geometry.perspective.scale").asDouble(1.0);
+    p.perspAspect = params_.get("geometry.perspective.aspect").asDouble(0.0);
+    return applyGeometryChain(buf, p, nullptr, err);
   }
 };
 
@@ -85,6 +67,7 @@ class GeometryPerspectiveOp : public ParamOp {
 
 bool registerGeometryOps(OpTable* table, std::string* err) {
   bool ok = true;
+  ok = table->registerOp(std::make_shared<GeometryApplyOp>(), err) && ok;
   ok = table->registerOp(std::make_shared<GeometryCropOp>(), err) && ok;
   ok = table->registerOp(std::make_shared<GeometryPerspectiveOp>(), err) && ok;
   return ok;

@@ -73,6 +73,7 @@ set(LUMINA_SOURCES
   src/imaging/output_encode.cpp
   src/plan/op_table.cpp
   src/plan/geometry.cpp
+  src/plan/geometry_chain.cpp
   src/plan/cache_key.cpp
   src/plan/render_plan.cpp
   src/plan/render_exec.cpp
@@ -292,6 +293,13 @@ add_executable(test_mask_bool tests/test_mask_bool.cpp)
 target_link_libraries(test_mask_bool PRIVATE lumina_core)
 set_target_properties(test_mask_bool PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
 add_test(NAME mask_bool COMMAND test_mask_bool)
+
+# M2 T2.10：S1 几何链收口（O3 aspect 实装 / O4 单次重采样计数器 / §4.3 子序断言 /
+# 旧算子名废弃转发兼容）
+add_executable(test_geometry_chain tests/test_geometry_chain.cpp)
+target_link_libraries(test_geometry_chain PRIVATE lumina_core)
+set_target_properties(test_geometry_chain PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME geometry_chain_t10 COMMAND test_geometry_chain)
 
 # M2 T2.9：曲线精度收口（C1 复合三通道 / C2 分通道 / C3 参数四段三分界 /
 # C4 逐码值平滑门：相邻差 ≤1 LSB 且无周期性平台，含 256 LUT 旧语义对照）

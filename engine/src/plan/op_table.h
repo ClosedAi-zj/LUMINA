@@ -77,10 +77,18 @@ constexpr int kPipelineOrderCount = 20;
 extern const PipelineStageDesc kPipelineOrder[kPipelineOrderCount];
 
 // 算子名 → 所在行号（1..20）；未登记返回 0。
-// 注：S1 的 4 个旧算子名（lens.profile / lens.manualDistortion /
-// geometry.crop / geometry.perspective）在 T2.10 合并为 geometry.apply 后退役，
-// 退役后删除本函数内的兼容映射即可（不删本函数）。
+// T2.10 收口（§3.7.1）：S1 已合并为单一算子 geometry.apply（登记在第 2 行 ops），
+// 旧算子名（lens.profile / lens.manualDistortion / lens.chromaticAberration /
+// geometry.crop / geometry.perspective）的兼容映射已删除——它们不再被 Plan 产出，
+// 查询返回 0（未登记）。
 int pipelineRowForOp(const std::string& opName);
+
+// T2.10 表驱动（§3.7.1 第 1/2 条）：rank 由 kPipelineOrder 派生 =
+// 行号 * 100 + 行内算子下标（单一事实源，执行侧 compilePlan 只认本函数）。
+// 未登记算子 → 写 err 并返回 false（硬失败，**无兜底值**——S3 零静默，
+// 删除了旧 semanticRank 的 return 1000 兜底）。
+// 例外白名单：iccInput（M4 实装时正式登记进表，暂归第 15/16 行界）。
+bool pipelineRankForOp(const std::string& opName, int* rankOut, std::string* err);
 
 // 算子注册表 + 有序求值器（骨架；M0 期末由 Plan 求值器接管 evaluate）
 class OpTable {

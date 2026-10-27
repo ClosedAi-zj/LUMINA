@@ -30,13 +30,11 @@ std::string opForParam(const std::string& path) {
   if (path == "detail.sharpness" || path == "detail.sharpenRadius" ||
       path == "detail.sharpenDetail" || path == "detail.sharpenMasking")
     return "detail.sharpen";
-  // geometry / lens
-  if (path == "geometry.perspective.rotate" ||
-      path.rfind("geometry.perspective.", 0) == 0)
-    return "geometry.perspective";
-  if (path.rfind("geometry.", 0) == 0) return "geometry.crop";
-  if (path == "optics.manualDistortion") return "lens.manualDistortion";
-  if (path == "optics.lensProfileEnable") return "lens.profile";
+  // geometry / lens：T2.10 收口（架构 §4.3）——S1 六个旧算子名退役，全部路由到
+  // 单一算子 geometry.apply（一次重采样，O3/O4；子序由 test_geometry_chain 断言）
+  if (path.rfind("geometry.", 0) == 0) return "geometry.apply";
+  if (path == "optics.manualDistortion") return "geometry.apply";
+  if (path == "optics.lensProfileEnable") return "geometry.apply";
   // curve：点曲线算子名 = 叶路径；参数曲线 7 叶收拢到 curve.parametric
   if (path.rfind("curve.", 0) == 0) return path;
   if (path.rfind("parametric.", 0) == 0) return "curve.parametric";
@@ -51,57 +49,6 @@ std::string opForParam(const std::string& path) {
   // ICC 预留（M2 实装；骨架期映射到 iccInput 占位）
   if (path.rfind("icc.", 0) == 0) return "iccInput";
   return std::string();
-}
-
-int stageRank(const std::string& opName) {
-  const Operator* op = OpTable::instance().find(opName);
-  return op ? stageIndex(op->stage()) : static_cast<int>(Stage::kStageCount);
-}
-
-// T1.5：同 stage 内语义序（口径 = CPU oracle oracle93 的逐像素施加顺序——
-// 算子不可交换，Plan 序列必须复刻 oracle 链内顺序，否则组合链与预览/oracle 分叉）。
-// oracle93 依据：applyWb(temp→tint) → geometry → denoise → localContrast(clarity,texture)
-// → applyToneColor[exposure→contrast→zones(hi,sh,wh,bl)→dehaze→primaries
-//   (shadowTint,red,green,blue)→vibrance→saturation→toneMap→LUTs(RGB,R,G,B)
-//   →parametric→hsl→colorGrade] → sharpen → effects(vignette→grain)。
-// 未登记的算子返回大值（stable_sort 保持首现序，向后兼容）。
-int semanticRank(const std::string& opName) {
-  static const std::map<std::string, int> kRank = {
-      // S0
-      {"basic.whiteBalance", 0}, {"basic.temperature", 1}, {"basic.tint", 2},
-      // S1
-      {"lens.profile", 0}, {"lens.manualDistortion", 1},
-      {"geometry.crop", 2}, {"geometry.perspective", 3},
-      // S1.5
-      {"detail.denoise", 0},
-      // S2：clarity/texture（oracle localContrast）先于 exposure/contrast/zones；
-      //      calibration primaries 先于 vibrance/saturation
-      {"basic.clarity", 0},        {"basic.texture", 1},
-      {"basic.exposure", 2},       {"basic.contrast", 3},
-      {"basic.highlights", 4},     {"basic.shadows", 5},
-      {"basic.whites", 6},         {"basic.blacks", 7},
-      {"basic.dehaze", 8},
-      {"calibration.shadowTint", 9}, {"calibration.red", 10},
-      {"calibration.green", 11},   {"calibration.blue", 12},
-      {"basic.vibrance", 13},      {"basic.saturation", 14},
-      // S3
-      {"pipeline.toneMap", 0},
-      // S4：点曲线 → 参数曲线 → hsl → colorGrade（oracle applyToneColor 尾段顺序）
-      {"iccInput", 0},
-      {"curve.toneCurveRGB", 1}, {"curve.toneCurveR", 2},
-      {"curve.toneCurveG", 3},   {"curve.toneCurveB", 4},
-      {"curve.parametric", 5},   {"color.hsl", 6}, {"color.colorGrade", 7},
-      // T2.6：蒙版局部调整在全部色调/颜色之后（§1.2：本质是基础面板的局部版本）
-      {"mask.apply", 8},
-      // S5
-      {"detail.sharpen", 0},
-      // S6
-      {"effects.vignette", 0}, {"effects.grain", 1},
-      // S7
-      {"output.encode", 0},
-  };
-  const auto it = kRank.find(opName);
-  return it != kRank.end() ? it->second : 1000;
 }
 
 // T1.5：缓存键取值的稳定文本形式（字符串原样，其余 serialize）。
@@ -153,14 +100,22 @@ bool compilePlan(int64_t photoId,
   if (firstSeen.emplace("pipeline.toneMap", ops.size()).second) {
     ops.push_back("pipeline.toneMap");
   }
-  // stage 归并稳定排序：同 stage 内按 oracle 语义序（semanticRank），语义序相同的
-  // 保持参数出现顺序（iccInput 由语义序保证居前，未知算子保持首现序兜底）
+  // T2.10 表驱动排序（§3.7.1 第 1/2 条）：rank 由 kPipelineOrder 派生（pipelineRankForOp，
+  // 单一事实源）。未登记算子 → 硬失败（err + false），**不再有 semanticRank 的
+  // return 1000 兜底**（S3 零静默：表与实现漂移在编译期暴露，而不是静默排尾）。
+  // 行号单调蕴含 stage 单调（表本身 stage 单调不减），单一 rank 全序即可。
+  std::map<std::string, int> ranks;
+  for (const std::string& name : ops) {
+    int rank = 0;
+    if (!pipelineRankForOp(name, &rank, err)) {
+      *err = "compilePlan: " + *err;
+      return false;
+    }
+    ranks.emplace(name, rank);
+  }
   std::stable_sort(ops.begin(), ops.end(),
-                   [](const std::string& a, const std::string& b) {
-                     const int sa = stageRank(a);
-                     const int sb = stageRank(b);
-                     if (sa != sb) return sa < sb;
-                     return semanticRank(a) < semanticRank(b);
+                   [&ranks](const std::string& a, const std::string& b) {
+                     return ranks[a] < ranks[b];
                    });
   plan->opSequence = std::move(ops);
   return true;
