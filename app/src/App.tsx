@@ -12,6 +12,7 @@ import { useLibrary } from './store/libraryStore';
 import { useUi, type AppView, type BootStage } from './store/uiStore';
 import { ToastHost, Icon, ThemeToggle } from './components/shell';
 import { Button } from './components/primitives';
+import { MenuBar } from './components/MenuBar';
 import { WindowControls } from './components/WindowControls';
 import ErrorBoundary from './components/ErrorBoundary';
 import BootProgress from './components/BootProgress';
@@ -71,9 +72,6 @@ function moduleOf(view: AppView): ModuleKey {
   const hit = MODULES.find((m) => m.views.includes(view));
   return hit?.key ?? 'library';
 }
-
-/** 顶栏菜单：本阶段只有视觉与 hover（整项填色），点击给"即将开放"提示 */
-const MENUS = ['文件', '编辑', '图像', '图层', '选择', '滤镜', '视图', '窗口', '帮助'];
 
 /** WP-B3：Mock 兜底横幅 —— 引擎没起来时不许装作一切正常（明示 + 恢复入口） */
 function MockBanner() {
@@ -138,7 +136,6 @@ function TopBar({
   const healthIssueCount = useJobStore((s) => s.healthIssueCount);
   const stats = useLibrary((s) => s.stats);
   const { theme } = useTheme();
-  const toast = useJobStore((s) => s.toast);
 
   return (
     <header
@@ -157,18 +154,8 @@ function TopBar({
         <span className="text-sm font-semibold tracking-wide">Lumina</span>
       </div>
 
-      {/* 左：PS 式全局菜单（视觉与 hover，点击给"即将开放"提示，与 1.1 行为一致） */}
-      <nav className="app-no-drag flex items-center gap-0.5 shrink-0">
-        {MENUS.map((m) => (
-          <button
-            key={m}
-            onClick={() => toast(`${m}菜单即将开放（v1.2.0 后续里程碑）`, 'info', 2000)}
-            className="hover-accent8 h-7 px-1.5 rounded-mdC text-2xs text-txt2 hover:text-txt transition-colors"
-          >
-            {m}
-          </button>
-        ))}
-      </nav>
+      {/* 左：PS 式自绘全局菜单（G1/G11：真接线 + hover 整项填色；无边框窗口内自绘，不动原生菜单） */}
+      <MenuBar />
 
       {/* 左：LR 七大模块 tab（UI 迭代 ④：模块拾取器形态 —— 相连 tab + 细分隔线，
           选中态 = hover 底色 + 2px accent 下缘线，替代原四工作区切换器） */}

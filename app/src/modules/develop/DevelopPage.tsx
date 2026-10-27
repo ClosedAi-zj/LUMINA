@@ -4,7 +4,7 @@
  * 快速↔专业共享同一参数模型（PRD §6.1），切换零解码零闪黑。
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useDevelop } from '../../store/developStore';
 import { useLibrary } from '../../store/libraryStore';
 import { useUi } from '../../store/uiStore';
@@ -29,6 +29,24 @@ import type { EditParams } from '../../api/protocol';
 
 /** WP-B7：复制/粘贴设置的会话级剪贴板（LR 语义：修图设置独立于系统剪贴板） */
 let settingsClipboard: EditParams | null = null;
+
+/** G1 菜单接线：编辑 ▸ 复制设置 与 Ctrl+C 共用同一会话剪贴板（无会话/无参数时为 no-op） */
+export function copyDevelopSettings(): boolean {
+  const params = useDevelop.getState().params;
+  if (!params) return false;
+  settingsClipboard = structuredClone(params);
+  return true;
+}
+
+/** G1 菜单接线：编辑 ▸ 粘贴设置 与 Ctrl+V 共用同一会话剪贴板 */
+export async function pasteDevelopSettings(): Promise<void> {
+  if (!settingsClipboard) {
+    useJobStore.getState().toast('剪贴板里还没有设置：先在任一照片上 Ctrl+C 复制', 'warn', 3000);
+    return;
+  }
+  await useDevelop.getState().applyPatch(structuredClone(settingsClipboard), true, '粘贴设置');
+  useJobStore.getState().toast('已粘贴设置', 'success', 2000);
+}
 
 export default function DevelopPage() {
   const photoId = useDevelop((s) => s.photoId);
@@ -94,6 +112,11 @@ function DevelopLoaded({
     }
   });
   const [showKeys, setShowKeys] = useState(false);
+  // G3：LR 的 Tab = 隐藏/呼出两侧面板（独立于左右栏各自的折叠记忆，整体显隐）
+  const [panelsHidden, setPanelsHidden] = useState(false);
+  /** 菜单命令监听用的最新态快照（listener 只注册一次，避免闭包过期） */
+  const panelsStateRef = useRef({ panels, panelsHidden });
+  panelsStateRef.current = { panels, panelsHidden };
   const togglePanel = (side: 'left' | 'right') => {
     setPanels((prev) => {
       const next = { ...prev, [side]: !prev[side] };
@@ -101,6 +124,9 @@ function DevelopLoaded({
       return next;
     });
   };
+
+  const visibleLeft = !panelsHidden && panels.left;
+  const visibleRight = !panelsHidden && panels.right;
 
   // 同步到序列：先查目标数量，弹确认框（列出目标数量）再执行
   const requestSyncConfirm = async (seqId: number) => {
@@ -122,12 +148,106 @@ function DevelopLoaded({
     [onHistogram],
   );
 
+  // G1 菜单接线：视图 ▸ 显示左/右栏、帮助 ▸ 快捷键速查（真相源在本组件，经 lumina:cmd 命令通道驱动）
+  useEffect(() => {
+    const onCmd = (e: Event) => {
+      const cmd = (e as CustomEvent<string>).detail;
+      if (cmd === 'develop:toggle-left' || cmd === 'develop:toggle-right') {
+        const side = cmd === 'develop:toggle-left' ? 'left' : 'right';
+        const { panels, panelsHidden } = panelsStateRef.current;
+        const visible = !panelsHidden && panels[side];
+        setPanelsHidden(false);
+        setPanels((prev) => {
+          const next = { ...prev, [side]: !visible };
+          localStorage.setItem('lumina.develop.panels', JSON.stringify(next));
+          return next;
+        });
+      } else if (cmd === 'develop:show-shortcuts') {
+        setShowKeys(true);
+      }
+    };
+    window.addEventListener('lumina:cmd', onCmd);
+    return () => window.removeEventListener('lumina:cmd', onCmd);
+  }, []);
+
+  // G1 菜单勾选态广播（MenuBar 订阅；显隐真相源在这里，MenuBar 不自持状态）
+  useEffect(() => {
+    window.dispatchEvent(
+      new CustomEvent('lumina:panels', {
+        detail: { left: !panelsHidden && panels.left, right: !panelsHidden && panels.right },
+      }),
+    );
+  }, [panels, panelsHidden]);
+
+  // G2 状态栏度量：缩放 = 画布显示宽 / 位图宽（contain 适配实测，非写死）；
+  // 文档尺寸 = 画布位图尺寸（ViewerCanvas 渲染的真实底图）。
+  // 位图尺寸随重渲染变化时 ResizeObserver 不触发 → 监听 width/height 属性变更补齐。
+  const [viewerMetrics, setViewerMetrics] = useState<{ zoom: number; w: number; h: number } | null>(null);
+  useEffect(() => {
+    const canvas = document.querySelector<HTMLCanvasElement>('[data-viewer-canvas]');
+    if (!canvas) {
+      setViewerMetrics(null);
+      return;
+    }
+    const update = () => {
+      const rect = canvas.getBoundingClientRect();
+      if (canvas.width <= 0 || rect.width <= 0) return;
+      setViewerMetrics({ zoom: rect.width / canvas.width, w: canvas.width, h: canvas.height });
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(canvas);
+    const mo = new MutationObserver(update);
+    mo.observe(canvas, { attributes: true, attributeFilter: ['width', 'height'] });
+    window.addEventListener('resize', update);
+    return () => {
+      ro.disconnect();
+      mo.disconnect();
+      window.removeEventListener('resize', update);
+    };
+  }, [photoId, mode, panels.left, panels.right, panelsHidden]);
+
+  // G2 状态栏：文件大小取自图库照片详情（真实档案，非估算）
+  const [fileSize, setFileSize] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setFileSize(null);
+    void import('../../api/engine')
+      .then(({ api }) => api.library.getPhotoDetail(photoId))
+      .then((d) => {
+        if (!cancelled) setFileSize(d.fileSize);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [photoId]);
+
+  // G2 状态栏：节点数 = 蒙版 + 调整图层（参数模型里真实存在的编辑节点）
+  const editParams = useDevelop((s) => s.params);
+  const nodeCount = (editParams?.masks.length ?? 0) + (editParams?.adjustmentStack?.length ?? 0);
+
   // 修图台键盘：Ctrl+Z / Ctrl+Shift+Z；数字 1-5 评分；WP-B7：复制/粘贴设置、上/下一张循环、? 速查
+  // G3：Tab 隐藏/呼出两侧面板（LR）；F 全屏沉浸（切换）
   useEffect(() => {
     const onKey = async (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
       const ctrl = e.ctrlKey || e.metaKey;
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        setPanelsHidden((h) => !h);
+        return;
+      }
+      if (e.key.toLowerCase() === 'f' && !ctrl && !e.altKey) {
+        e.preventDefault();
+        if (document.fullscreenElement) {
+          void document.exitFullscreen();
+        } else {
+          void document.documentElement.requestFullscreen().catch(() => useJobStore.getState().toast('无法进入全屏', 'error', 3000));
+        }
+        return;
+      }
       if (ctrl && e.key.toLowerCase() === 'z') {
         e.preventDefault();
         if (e.shiftKey) void redo();
@@ -150,17 +270,9 @@ function DevelopLoaded({
         // 复制设置（LR 习惯：Ctrl+C / Ctrl+V；无选中文本时生效）
         const sel = window.getSelection();
         if (sel && sel.toString().length > 0) return;
-        const params = useDevelop.getState().params;
-        if (!params) return;
-        settingsClipboard = structuredClone(params);
-        useJobStore.getState().toast('已复制当前设置（Ctrl+V 粘贴到其他照片）', 'info', 2500);
+        if (copyDevelopSettings()) useJobStore.getState().toast('已复制当前设置（Ctrl+V 粘贴到其他照片）', 'info', 2500);
       } else if (ctrl && e.key.toLowerCase() === 'v') {
-        if (!settingsClipboard) {
-          useJobStore.getState().toast('剪贴板里还没有设置：先在任一照片上 Ctrl+C 复制', 'warn', 3000);
-          return;
-        }
-        await useDevelop.getState().applyPatch(structuredClone(settingsClipboard), true, '粘贴设置');
-        useJobStore.getState().toast('已粘贴设置', 'success', 2000);
+        await pasteDevelopSettings();
       } else if (e.key === '?') {
         e.preventDefault();
         setShowKeys((v) => !v);
@@ -174,6 +286,9 @@ function DevelopLoaded({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [undo, redo, currentPhotoId, photoId]);
+
+  const filmItems = useFilmstripItems();
+  const summary = filmItems.find((p) => p.id === photoId) ?? null;
 
   return (
     <div className="h-full flex flex-col">
@@ -202,14 +317,14 @@ function DevelopLoaded({
           onClick={() => togglePanel('left')}
           title="折叠/展开左栏（记忆到本机）"
         >
-          {panels.left ? '⟨ 左栏' : '⟩ 左栏'}
+          {visibleLeft ? '⟨ 左栏' : '⟩ 左栏'}
         </button>
         <button
           className="h-6 px-2 rounded-sm border border-line text-2xs text-txt3 hover:text-txt2 hover:bg-hover"
           onClick={() => togglePanel('right')}
           title="折叠/展开右栏（记忆到本机）"
         >
-          {panels.right ? '右栏 ⟩' : '⟨ 右栏'}
+          {visibleRight ? '右栏 ⟩' : '⟨ 右栏'}
         </button>
         <button className="h-6 px-2 rounded-sm text-2xs text-txt3 hover:text-txt2" onClick={() => setShowKeys(true)} title="快捷键速查（?）">
           ⌨ 快捷键
@@ -241,7 +356,7 @@ function DevelopLoaded({
         /* 专业模式（v1.2.0 阶段 3）：左栏 240px 卡片（导航器/预设/历史/图层）+ 中 直方图/画面 +
            右栏 8 组折叠卡片（含直方图卡与诚实提示） */
         <div className="flex-1 min-h-0 flex gap-1.5 p-2" style={{ background: 'var(--Lumina-Tokens-canvas)' }}>
-          {panels.left && (
+          {visibleLeft && (
             /* R7 M1：左侧轨道栏 = 通透侧栏材质（玻璃底色/模糊走 .glass-m1 组合类，令牌供色） */
             <aside className="glass-m1 w-60 shrink-0 overflow-y-auto flex flex-col gap-1.5 rounded-lgC p-1">
               <NavigatorCard />
@@ -265,7 +380,7 @@ function DevelopLoaded({
               <TransformBar />
             </div>
           </section>
-          {panels.right && (
+          {visibleRight && (
             <aside className="w-[320px] shrink-0 overflow-y-auto">
               <ProPanel histogram={histogram} />
             </aside>
@@ -274,7 +389,7 @@ function DevelopLoaded({
       ) : (
         /* 快捷模式：Phase 1 形态保留（左 历史 / 中 直方图+画面 / 右 快速面板） */
         <div className="flex-1 min-h-0 flex gap-1.5 p-2" style={{ background: 'var(--Lumina-Tokens-canvas)' }}>
-          {panels.left && (
+          {visibleLeft && (
             /* R7 M1：快捷模式左栏同套通透侧栏材质 */
             <aside className="glass-m1 w-52 shrink-0 overflow-y-auto flex flex-col gap-1.5 rounded-lgC p-1">
               <PanelCard title="历史" defaultOpen hint="撤销 / 重做 / 快照">
@@ -291,7 +406,7 @@ function DevelopLoaded({
             <ViewerCanvas onHistogram={onHist} />
           </section>
 
-          {panels.right && (
+          {visibleRight && (
             <aside className="w-[296px] shrink-0 overflow-y-auto">
               <FastPanel histogram={histogram} />
             </aside>
@@ -299,11 +414,13 @@ function DevelopLoaded({
         </div>
       )}
 
-      <Filmstrip items={useFilmstripItems()} />
+      <Filmstrip items={filmItems} />
       <KeycapBar
         items={[
           { keys: ['\\'], label: '前后对比' },
           { keys: ['V'], label: '前后对比' },
+          { keys: ['Tab'], label: '隐/显面板' },
+          { keys: ['F'], label: '全屏' },
           ...(mode === 'pro' ? [{ keys: ['Space'], label: '长按看原图' }] : []),
           { keys: ['Ctrl', 'Z'], label: '撤销' },
           { keys: ['Ctrl', '⇧', 'Z'], label: '重做' },
@@ -314,6 +431,27 @@ function DevelopLoaded({
           { keys: ['Esc'], label: '返回图库' },
         ]}
       />
+      {/* G2 专业状态栏：字段全部取真实状态，实时更新（R6 v2-B6 逐字段口径）
+          缩放=画布 contain 实测；RGB/8=预览画布输出口径（sRGB · 8bit/通道，WebGL canvas 8bpc）；
+          尺寸/格式=图库档案；大小=照片详情；节点=蒙版+调整图层 */}
+      <div className="h-6 px-3 flex items-center gap-2 border-t border-line bg-panel text-2xs text-txt3 shrink-0 overflow-x-auto whitespace-nowrap">
+        <span>
+          缩放 <span className="num text-txt2">{viewerMetrics ? `${(viewerMetrics.zoom * 100).toFixed(1)}%` : '—'}</span>
+        </span>
+        <span className="opacity-60">｜</span>
+        <span title="预览画布输出口径：sRGB · 8bit/通道">RGB/8</span>
+        <span className="opacity-60">｜</span>
+        <span className="num text-txt2">{summary ? `${summary.width}×${summary.height}` : '—'}</span>
+        {summary && <span>{summary.format}</span>}
+        <span className="opacity-60">｜</span>
+        <span className="num text-txt2">{fileSize !== null ? `${(fileSize / 1048576).toFixed(1)} MB` : '—'}</span>
+        <span className="opacity-60">｜</span>
+        <span title="蒙版 + 调整图层（编辑节点数）">
+          节点 <span className="num text-txt2">{nodeCount}</span>
+        </span>
+        <div className="flex-1" />
+        <span className="num">照片 #{photoId}</span>
+      </div>
       <EscHandler navigate={navigate} />
 
       {/* 同步到序列确认框（列出目标数量） */}
@@ -438,6 +576,9 @@ const SHORTCUT_TABLE: { keys: string[]; label: string }[] = [
   { keys: ['Ctrl', 'V'], label: '粘贴设置' },
   { keys: ['\\'], label: '前后对比开/关（V 同效）' },
   { keys: ['Space'], label: '长按临时看原图（专业模式）' },
+  { keys: ['Tab'], label: '隐藏/呼出两侧面板（LR）' },
+  { keys: ['F'], label: '全屏沉浸（切换）' },
+  { keys: ['双击'], label: '参数名归零（滑块行双击）' },
   { keys: ['1-5'], label: '评星' },
   { keys: ['?'], label: '本速查浮层' },
   { keys: ['Esc'], label: '返回图库' },

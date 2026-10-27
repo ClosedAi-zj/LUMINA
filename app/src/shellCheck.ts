@@ -78,11 +78,16 @@ export async function runShellCheck(): Promise<void> {
     const lightSeen = theme() === 'Light';
     log(`theme: ${before}→${after}→${theme()} headerBg=${headerBg} → ${darkSeen && lightSeen ? 'OK' : 'FAIL'}`);
 
-    // 菜单项只提示不导航：点「文件」后 view 必须不变
+    // G1 真菜单：点「文件」展开下拉（不直接导航），点「导出…」落到交付视图（export）
     const viewBefore = useUi.getState().view;
     const menuClicked = clickText('文件');
-    await sleep(500);
-    log(`menu 文件: clicked=${menuClicked} view ${viewBefore}→${useUi.getState().view} → ${menuClicked && viewBefore === useUi.getState().view ? 'OK' : 'FAIL'}`);
+    await sleep(400);
+    const dropdownOpen = document.body.innerText.includes('导入照片');
+    log(`menu 文件: clicked=${menuClicked} dropdown=${dropdownOpen} view=${viewBefore}`);
+    const exportClicked = clickText('导出…');
+    await sleep(900);
+    const exportView = useUi.getState().view;
+    log(`menu 导出…: clicked=${exportClicked} view→${exportView} → ${menuClicked && dropdownOpen && exportClicked && exportView === 'export' ? 'OK' : 'FAIL'}`);
 
     // 自定义标题栏窗口三键（frame:false）：真实 DOM 点击 → IPC → 主进程 BrowserWindow。
     // 最小化后渲染层仍在运行，用 toggleMaximize 从最小化恢复并同时验证 maximize 链路。
