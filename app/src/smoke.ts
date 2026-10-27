@@ -870,17 +870,30 @@ export async function runSmokeScenario(): Promise<void> {
     //     位置）；新解释 = 引擎 develop.render（v3 mask pass，与导出同一代码路径）。
     //     报告落盘 {home}/reports/m2-visual-diff.json（主进程捕获 m2-visual-diff-report 行）。
     {
-      // ②a 横幅存在性断言（首启语义：清掉标记 → 重开照片 → 横幅必须出现并写回标记）
+      // ②a 横幅存在性断言（首启语义）：store 的 maskSemanticsNotified 在启动时读
+      // localStorage（developStore.ts readMaskSemanticsNotified），运行时删键不会复位
+      // store——所以模拟首启 = 删键 + 直接复位 store 状态；「知道了」按钮走真实 DOM
+      // 点击，验证标记写回与横幅消失（完整生命周期，不 mock 组件）。
       localStorage.removeItem('m2MaskSemanticsNotified');
+      useDevelop.setState({ maskSemanticsNotified: false });
+      // 横幅在 MaskPanel（修图台左栏局部蒙版卡）内——②b 之后页面停在素材库，
+      // 必须先回修图台并确保照片已打开（params 非空是 MaskPanel 的挂载前提）
+      useUi.getState().navigate('develop');
+      await sleep(400);
       await useDevelop.getState().openPhoto(firstId);
       await sleep(1200);
       const banner = document.querySelector('[data-testid="m2-semantic-change-banner"]');
-      const flagSet = localStorage.getItem('m2MaskSemanticsNotified');
-      log(`m2-banner: present=${banner ? 'true' : 'false'} flagSet=${flagSet ? 'true' : 'false'}`);
-      if (!banner) {
-        log('m2-banner: FAILED banner-missing（首启告知横幅未出现——若 MaskPanel 横幅 commit 未合入属预期待合跑）');
-      } else if (!flagSet) {
-        log('m2-banner: FAILED flag-not-set（横幅出现但首启标记未写回）');
+      const shown = !!banner;
+      const dismissBtn = banner?.querySelector<HTMLButtonElement>('button') ?? null;
+      dismissBtn?.click();
+      await sleep(300);
+      const bannerGone = !document.querySelector('[data-testid="m2-semantic-change-banner"]');
+      const flagSet = localStorage.getItem('m2MaskSemanticsNotified') === 'true';
+      log(`m2-banner: shown=${shown ? 'true' : 'false'} dismissed=${bannerGone ? 'true' : 'false'} flagSet=${flagSet ? 'true' : 'false'}`);
+      if (!shown) {
+        log('m2-banner: FAILED banner-missing（首启告知横幅未出现）');
+      } else if (!bannerGone || !flagSet) {
+        log('m2-banner: FAILED dismiss-or-flag（「知道了」后横幅未消失或标记未写回）');
       }
 
       // ① 差异报告：总体 = sidecar 真相源逐张判定（不编造）。develop_settings 派生缓存
