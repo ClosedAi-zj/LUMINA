@@ -133,12 +133,19 @@ export interface GeomTransform {
   outH: number;
   cropX: number;
   cropY: number;
+  /** T2.10：畸变系数 = amt/100*0.3（0=无）。合并进 geo 单次采样：
+   *  dst → 逆单应 → 中间图坐标 → 畸变逆映射 D → 采样，src(D(H_inv(dx)))，
+   *  即架构 §4.3 子序「畸变先于裁剪/透视」的合成形式（engine geometry_chain 同式） */
+  distK: number;
 }
 
-/** buildForwardHomography + invert3（含 perspective 矩阵的引擎原样展开） */
+/** buildForwardHomography + invert3（含 perspective 矩阵的引擎原样展开）。
+ *  T2.10：aspect 实装（O3）——输出画幅强制 w/h = aspect（内容 x 向适配），
+ *  合成方式 = 逆映射第 0 列除以 sx；distK 返回给采样端复合。 */
 export function buildGeomTransform(p: EditParams, srcW: number, srcH: number): GeomTransform {
   const g = p.geometry;
-  if (!g) return { inv: null, outW: srcW, outH: srcH, cropX: 0, cropY: 0 };
+  const distK = (num(p.optics?.manualDistortion, 0) / 100) * 0.3;
+  if (!g) return { inv: null, outW: srcW, outH: srcH, cropX: 0, cropY: 0, distK };
   const hasCrop = !!g.hasCrop;
   const angle = num(g.cropAngle, 0);
   const cropActive = hasCrop || angle !== 0;
@@ -151,8 +158,10 @@ export function buildGeomTransform(p: EditParams, srcW: number, srcH: number): G
       num(ps.vertical, 0) !== 0 ||
       num(ps.rotate, 0) !== 0 ||
       num(ps.scale, 1) !== 1);
-  if (!cropActive && !perspActive) {
-    return { inv: null, outW: srcW, outH: srcH, cropX: 0, cropY: 0 };
+  const aspect = num(ps?.aspect, 0);
+  const aspectActive = aspect !== 0;
+  if (!cropActive && !perspActive && !aspectActive && distK === 0) {
+    return { inv: null, outW: srcW, outH: srcH, cropX: 0, cropY: 0, distK };
   }
   const cropX = hasCrop ? Math.trunc((num(g.cropLeft, 0) / 100) * srcW) : 0;
   const cropY = hasCrop ? Math.trunc((num(g.cropTop, 0) / 100) * srcH) : 0;
@@ -161,7 +170,7 @@ export function buildGeomTransform(p: EditParams, srcW: number, srcH: number): G
     ? Math.max(1, Math.trunc((num(g.cropBottom, 100) / 100) * srcH) - cropY)
     : srcH;
   // 引擎为两个独立算子（crop 单应 → perspective 单应）顺序执行；此处合并为一次
-  // 单应——单侧激活时与引擎逐式一致，双侧同开为合并近似（偏差④，T2.4 精修）。
+  // 单应——单侧激活时与引擎逐式一致（T2.10 起引擎同样合并为 geometry.apply 单算子）。
   const angleDeg = (cropActive ? angle : 0) + (perspActive ? num(ps.rotate, 0) : 0);
   const pH = perspActive ? num(ps.horizontal, 0) / 100 + (num(ps.x, 0) / 100) * 0.1 : 0;
   const pV = perspActive ? num(ps.vertical, 0) / 100 + (num(ps.y, 0) / 100) * 0.1 : 0;
@@ -182,12 +191,19 @@ export function buildGeomTransform(p: EditParams, srcW: number, srcH: number): G
   const scl: Mat3 = { m: [scale, 0, 0, 0, scale, 0, 0, 0, 1] };
   const fwdNoOut = mul3(scl, mul3(rot, mul3(toCenter, persp)));
   const [minX, minY, maxX, maxY] = mapQuadBounds(fwdNoOut, cw, ch);
-  const outW = Math.max(1, Math.ceil(maxX - minX));
-  const outH = Math.max(1, Math.ceil(maxY - minY));
+  // T2.10 aspect（O3）：sx = 目标宽高比 / 当前宽高比（内容 x 向适配），宽 ×sx
+  const realW = maxX - minX;
+  const realH = maxY - minY;
+  const sx = aspectActive ? (aspect * realH) / realW : 1.0;
+  const outW = Math.max(1, Math.ceil(realW * sx));
+  const outH = Math.max(1, Math.ceil(realH));
   const fwd = mul3({ m: [1, 0, -minX, 0, 1, -minY, 0, 0, 1] }, fwdNoOut);
-  const inv = invert3(fwd);
-  if (!inv) return { inv: null, outW: srcW, outH: srcH, cropX: 0, cropY: 0 };
-  return { inv, outW, outH, cropX: Math.max(0, cropX), cropY: Math.max(0, cropY) };
+  let inv = invert3(fwd);
+  if (!inv) return { inv: null, outW: srcW, outH: srcH, cropX: 0, cropY: 0, distK };
+  if (sx !== 1.0) {
+    inv = { m: [inv.m[0] / sx, inv.m[1], inv.m[2], inv.m[3] / sx, inv.m[4], inv.m[5], inv.m[6] / sx, inv.m[7], inv.m[8]] };
+  }
+  return { inv, outW, outH, cropX: Math.max(0, cropX), cropY: Math.max(0, cropY), distK };
 }
 
 // ---- 主管线 ----
@@ -238,73 +254,45 @@ function applyWb(p: EditParams, buf: Float32Array): void {
   }
 }
 
-/** S1 几何：crop/perspective 单应 + 手动畸变（线性域重映射） */
+/** S1 几何：T2.10 合并采样——crop/perspective/aspect 单应 + 手动畸变复合为一次
+ *  逆映射采样（engine geometry_chain 同式：src(D(H_inv(dx)))，架构子序「畸变先于
+ *  裁剪」，消除旧两步的中间 log16 量化与二次重采样，偏差④收口） */
 function applyGeometryStage(p: EditParams, src: PlaneBuf): PlaneBuf {
   const geom = buildGeomTransform(p, src.w, src.h);
-  let cur: PlaneBuf = src;
-  if (geom.inv) {
-    const out = new Float32Array(geom.outW * geom.outH * 3);
-    const px = new Float64Array(3);
-    const m = geom.inv.m;
-    for (let dy = 0; dy < geom.outH; ++dy) {
-      for (let dx = 0; dx < geom.outW; ++dx) {
-        const sw = m[6] * dx + m[7] * dy + m[8];
-        const sx = (m[0] * dx + m[1] * dy + m[2]) / sw;
-        const sy = (m[3] * dx + m[4] * dy + m[5]) / sw;
-        const fullX = sx + geom.cropX;
-        const fullY = sy + geom.cropY;
-        const q = (dy * geom.outW + dx) * 3;
-        // 出界判定带 1e-4 像素容差（与 GPU FRAG_GEO 同步，见 glsl.ts 注）
-        if (fullX >= -1e-4 && fullY >= -1e-4 && fullX <= src.w - 1 + 1e-4 && fullY <= src.h - 1 + 1e-4) {
-          sampleBilinearT(src.t, src.w, src.h, fullX, fullY, px);
-          out[q] = px[0];
-          out[q + 1] = px[1];
-          out[q + 2] = px[2];
-        } // 出界填黑（t=0）
-      }
-    }
-    cur = { t: out, w: geom.outW, h: geom.outH };
-  }
-  // lens.manualDistortion：线性域重映射（engine lens.cpp 精确镜像）
-  const k = (num(p.optics?.manualDistortion, 0) / 100) * 0.3;
-  if (k !== 0 && cur.w > 0 && cur.h > 0) {
-    const { w, h } = cur;
-    const lin = new Float32Array(cur.t.length);
-    for (let i = 0; i < cur.t.length; ++i) lin[i] = log16Decode(cur.t[i] * 65535);
-    const out = new Float32Array(cur.t.length);
-    const cx = (w - 1) / 2;
-    const cy = (h - 1) / 2;
-    const maxR = Math.sqrt(cx * cx + cy * cy);
-    for (let y = 0; y < h; ++y) {
-      for (let x = 0; x < w; ++x) {
-        const dx = x - cx;
-        const dy = y - cy;
-        const r = Math.sqrt(dx * dx + dy * dy) / maxR;
+  if (!geom.inv) return src;
+  const out = new Float32Array(geom.outW * geom.outH * 3);
+  const px = new Float64Array(3);
+  const m = geom.inv.m;
+  const cx = (src.w - 1) / 2;
+  const cy = (src.h - 1) / 2;
+  const maxR = Math.sqrt(cx * cx + cy * cy);
+  const k = geom.distK;
+  for (let dy = 0; dy < geom.outH; ++dy) {
+    for (let dx = 0; dx < geom.outW; ++dx) {
+      const sw = m[6] * dx + m[7] * dy + m[8];
+      let fullX = (m[0] * dx + m[1] * dy + m[2]) / sw + geom.cropX;
+      let fullY = (m[3] * dx + m[4] * dy + m[5]) / sw + geom.cropY;
+      // 畸变逆映射复合（lens.cpp / FRAG_GEO 同式；r 基于源全图中心）
+      if (k !== 0) {
+        const ddx = fullX - cx;
+        const ddy = fullY - cy;
+        const r = Math.sqrt(ddx * ddx + ddy * ddy) / maxR;
         const rf = r * (1 + k * r * r);
-        const sx = cx + (dx * rf) / Math.max(1e-9, r);
-        const sy = cy + (dy * rf) / Math.max(1e-9, r);
-        const x0 = Math.max(0, Math.min(w - 1, Math.floor(sx)));
-        const y0 = Math.max(0, Math.min(h - 1, Math.floor(sy)));
-        const x1 = Math.min(x0 + 1, w - 1);
-        const y1 = Math.min(y0 + 1, h - 1);
-        const fx = Math.max(0, Math.min(1, sx - x0));
-        const fy = Math.max(0, Math.min(1, sy - y0));
-        const q = (y * w + x) * 3;
-        for (let c = 0; c < 3; ++c) {
-          const p00 = lin[(y0 * w + x0) * 3 + c];
-          const p10 = lin[(y0 * w + x1) * 3 + c];
-          const p01 = lin[(y1 * w + x0) * 3 + c];
-          const p11 = lin[(y1 * w + x1) * 3 + c];
-          const top = p00 + (p10 - p00) * fx;
-          const bot = p01 + (p11 - p01) * fx;
-          const v = top + (bot - top) * fy;
-          out[q + c] = log16Encode(v) / 65535;
-        }
+        const f = rf / Math.max(1e-9, r);
+        fullX = cx + ddx * f;
+        fullY = cy + ddy * f;
       }
+      const q = (dy * geom.outW + dx) * 3;
+      // 出界判定带 1e-4 像素容差（与 GPU FRAG_GEO 同步，见 glsl.ts 注）
+      if (fullX >= -1e-4 && fullY >= -1e-4 && fullX <= src.w - 1 + 1e-4 && fullY <= src.h - 1 + 1e-4) {
+        sampleBilinearT(src.t, src.w, src.h, fullX, fullY, px);
+        out[q] = px[0];
+        out[q + 1] = px[1];
+        out[q + 2] = px[2];
+      } // 出界填黑（t=0）
     }
-    cur = { t: out, w, h };
   }
-  return cur;
+  return { t: out, w: geom.outW, h: geom.outH };
 }
 
 /** S1.5 NR：色度模糊 + 亮度平滑（engine detail.cpp DenoiseOp 精确镜像） */

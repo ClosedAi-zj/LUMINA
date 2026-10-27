@@ -111,19 +111,29 @@ void main() {
 }
 `;
 
-/** P1a：几何（crop/perspective 单应，逆映射 + 手动双线性，出界填黑） */
+/** P1a：S1 几何（T2.10 合并采样：crop/perspective/aspect 单应 + 手动畸变复合，
+ *  一次逆映射采样；engine geometry_chain / oracle93 同式 src(D(H_inv(dx)))） */
 export const FRAG_GEO = `
 ${COMMON}
-uniform mat3 uInv;        // 逆单应（dst 像素 → 源全图像素）
+uniform mat3 uInv;        // 逆单应（dst 像素 → 源全图像素，已含 aspect x 向适配）
 uniform vec2 uOutSize;
 uniform vec2 uCropOff;    // cropX, cropY
 uniform float uGeomActive;
+uniform float uDistK;     // 畸变系数 = amt/100*0.3（0=无；畸变先于裁剪的合成形式）
 
 void main() {
   if (uGeomActive < 0.5) { gl_FragColor = vec4(texture2D(uTex, vUv).rgb, 1.0); return; }
   vec2 dstPx = floor(vUv * uOutSize);
   vec3 s = uInv * vec3(dstPx, 1.0);
   vec2 full = s.xy / s.z + uCropOff;
+  // 畸变逆映射复合（r 基于源全图中心；与 engine/oracle 逐式一致）
+  if (uDistK != 0.0) {
+    vec2 c = (uTexSize - 1.0) * 0.5;
+    vec2 d = full - c;
+    float r = length(d) / length(c);
+    float rf = r * (1.0 + uDistK * r * r);
+    full = c + d * (rf / max(1e-9, r));
+  }
   // 出界判定带 1e-4 像素容差（与 CPU oracle 同步）：fp32/fp64 在边界 ±1e-5 内的
   // 取向差异会产生整像素黑/图翻转，收紧为双侧一致的包含判定（边缘钳位双线性）。
   if (full.x < -1e-4 || full.y < -1e-4 || full.x > uTexSize.x - 1.0 + 1e-4 || full.y > uTexSize.y - 1.0 + 1e-4) {
@@ -140,38 +150,6 @@ void main() {
   vec3 bot = p01 + (p11 - p01) * fr.x;
   vec3 v = (top + (bot - top) * fr.y) / 65535.0;
   gl_FragColor = vec4(clamp(v, 0.0, 1.0), 1.0);
-}
-`;
-
-/** P1b：lens.manualDistortion（线性域重映射，引擎 lens.cpp 镜像） */
-export const FRAG_DISTORT = `
-${COMMON}
-uniform float uDistK;     // amt/100*0.3
-
-void main() {
-  if (uDistK == 0.0) { gl_FragColor = vec4(texture2D(uTex, vUv).rgb, 1.0); return; }
-  vec2 px = floor(vUv * uTexSize);
-  vec2 c = (uTexSize - 1.0) * 0.5;
-  vec2 d = px - c;
-  float r = length(d) / length(c);
-  float rf = r * (1.0 + uDistK * r * r);
-  vec2 src = c + d * (rf / max(1e-9, r));
-  vec2 f = floor(src);
-  vec2 fr = clamp(src - f, 0.0, 1.0);
-  vec3 p0 = fetchPx(f);
-  vec3 p1 = fetchPx(f + vec2(1.0, 0.0));
-  vec3 p2 = fetchPx(f + vec2(0.0, 1.0));
-  vec3 p3 = fetchPx(f + vec2(1.0, 1.0));
-  // 线性域双线性（引擎：decode → 插值 → encode）
-  vec3 lin0 = vec3(log16Decode(p0.r), log16Decode(p0.g), log16Decode(p0.b));
-  vec3 lin1 = vec3(log16Decode(p1.r), log16Decode(p1.g), log16Decode(p1.b));
-  vec3 lin2 = vec3(log16Decode(p2.r), log16Decode(p2.g), log16Decode(p2.b));
-  vec3 lin3 = vec3(log16Decode(p3.r), log16Decode(p3.g), log16Decode(p3.b));
-  vec3 topv = lin0 + (lin1 - lin0) * fr.x;
-  vec3 botv = lin2 + (lin3 - lin2) * fr.x;
-  vec3 linv = topv + (botv - topv) * fr.y;
-  vec3 outv = vec3(log16EncodeF(linv.r), log16EncodeF(linv.g), log16EncodeF(linv.b));
-  gl_FragColor = vec4(clamp(outv, 0.0, 1.0), 1.0);
 }
 `;
 

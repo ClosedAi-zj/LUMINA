@@ -2,7 +2,7 @@
  * T1.4 · GPU 93 叶管线执行器（WebGL1 多 pass + float FBO）。
  *
  * 与 ops/oracle93.ts 逐 pass 对应：
- *   geo → distort → [blur+denoiseApply] → [blur+clarity] → [blur+texture]
+ *   geo（单应+畸变复合，单次采样）→ [blur+denoiseApply] → [blur+clarity] → [blur+texture]
  *   → tone（S2 逐像素 + S3 toneMap + S4 曲线/HSL/分级）→ [blur+sharpen]
  *   → effects（暗角/颗粒/sRGB 编码）→ composite（split + A 侧蒙版）。
  *
@@ -15,7 +15,6 @@ import {
   FRAG_BLUR_H,
   FRAG_BLUR_V,
   FRAG_COMPOSITE,
-  FRAG_DISTORT,
   FRAG_DENOISE_APPLY,
   FRAG_EFFECTS,
   FRAG_GEO,
@@ -85,7 +84,6 @@ export class PipelineGL {
     const passFrags: Record<string, string> = {
       wb: FRAG_WB,
       geo: FRAG_GEO,
-      distort: FRAG_DISTORT,
       blurH: FRAG_BLUR_H,
       blurV: FRAG_BLUR_V,
       denoiseApply: FRAG_DENOISE_APPLY,
@@ -320,7 +318,8 @@ export class PipelineGL {
       inputTex = wbOut.tex;
     }
 
-    // P1a 几何（crop/perspective 单应；无几何直通）
+    // P1a S1 几何（T2.10 合并采样：crop/perspective/aspect 单应 + 畸变复合，一次采样；
+    // buildGeomTransform 在 distK≠0 而无几何变换时也返回恒等 inv → 统一走本 pass）
     const slot0 = this.fbo(gw, gh, slotBase, true);
     if (geom.inv) {
       const cm = geom.inv.m;
@@ -332,6 +331,7 @@ export class PipelineGL {
         gl.uniform2f(p.u['uOutSize'] ?? null, gw, gh);
         gl.uniform2f(p.u['uCropOff'] ?? null, geom.cropX, geom.cropY);
         gl.uniform1f(p.u['uGeomActive'] ?? null, 1);
+        gl.uniform1f(p.u['uDistK'] ?? null, geom.distK);
       });
     } else {
       this.drawPass('geo', inputTex, this.srcW, this.srcH, slot0, (p) => {
@@ -346,16 +346,6 @@ export class PipelineGL {
       const s1 = this.fbo(curW, curH, slotBase + 1, true);
       return curTex === s1.tex ? slot0 : s1;
     };
-
-    // P1b 手动畸变（线性域重映射）
-    const distK = ((params.optics?.manualDistortion ?? 0) / 100) * 0.3;
-    if (distK !== 0) {
-      const out = this.fbo(curW, curH, slotBase + 1, true);
-      this.drawPass('distort', curTex, curW, curH, out, (p) => {
-        gl.uniform1f(p.u['uDistK'] ?? null, distK);
-      });
-      curTex = out.tex;
-    }
 
     // S1.5 NR（引擎顺序：先色度后亮度，亮度模糊必须读色度应用后的缓冲）
     const cnr = params.detail?.colorNR ?? 0;
