@@ -504,9 +504,20 @@ static void testOrderSensitiveCounterexamples() {
   // 现有实现里降噪是盒式模糊（线性）、锐化是反遮罩（线性），线性算子可交换，
   // 只在码域 clamp 处才分叉（实测 Δ = 0.46 LSB，远低于 2 LSB 门槛）。
   // 这里把「不成立」显式断言下来，防止后人误以为漏测而加一条假反例。
+  //
+  // 前置（架构 v1.2.0-M2-1.5 §3.7 裁定）：本负例成立的前提是**锐化走线性路径** ——
+  // SharpenOp 在 masking>0 时带 |resid|<threshold 硬门（detail.cpp:116），非线性，
+  // 线性可交换论证即失效。因此 masking 必须显式钉死为 0 并断言出来
+  //（O2 纪律：反例成立的前提必须写进文档并断言出来，不能只写结论）。
   {
+    JsonValue sharp = numParams("detail.sharpness", 80.0);
+    sharp.setItem("detail.sharpenMasking", 0.0);  // 显式钉死线性路径，不依赖算子默认值
+    // 前置断言：masking 必须 == 0。若将来有人在此夹具上启用 masking（或默认值变化），
+    // 这条先红并明示「非线性前提被破坏」，而不是让下面的 Δ<2 断言假红或被误删。
+    const JsonValue& maskingVal = sharp.get("detail.sharpenMasking");
+    CHECK(maskingVal.isNumber() && std::fabs(maskingVal.asDouble() - 0.0) < 1e-9,
+          "组 4b 前置：detail.sharpenMasking == 0（masking>0 时 SharpenOp 非线性，负例失效）");
     const ImageBuf noisy = makeNoisyFixture(192, 128);
-    const JsonValue sharp = numParams("detail.sharpness", 80.0);
     JsonValue denoise = JsonValue::objectValue();
     denoise.setItem("detail.colorNR", 100.0);
     denoise.setItem("detail.luminanceSmoothing", 100.0);
