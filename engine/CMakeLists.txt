@@ -293,6 +293,13 @@ target_link_libraries(test_mask_bool PRIVATE lumina_core)
 set_target_properties(test_mask_bool PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
 add_test(NAME mask_bool COMMAND test_mask_bool)
 
+# M2 T2.9：曲线精度收口（C1 复合三通道 / C2 分通道 / C3 参数四段三分界 /
+# C4 逐码值平滑门：相邻差 ≤1 LSB 且无周期性平台，含 256 LUT 旧语义对照）
+add_executable(test_curve_precision tests/test_curve_precision.cpp)
+target_link_libraries(test_curve_precision PRIVATE lumina_core)
+set_target_properties(test_curve_precision PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME curve_precision COMMAND test_curve_precision)
+
 # M0 ΔE 基线工具（不入 ctest：依赖本机 RW2 样本；由 scripts/ci/deltae.py 编排）
 add_executable(deltae_baseline tests/color/delta_e_baseline.cpp)
 target_link_libraries(deltae_baseline PRIVATE lumina_core)

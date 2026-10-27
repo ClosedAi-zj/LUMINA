@@ -11,10 +11,16 @@ namespace lumina {
 namespace plan {
 namespace {
 
-// {x,y}[] → 256-entry LUT（0..255 域）；<2 点或 null → 恒等 LUT
+// T2.9 曲线 LUT 栅格：0..255 曲线域上 1024 点重采样（此前 256 点把 16bit 输入
+// 量化到 8bit 档位，逐码值扫描呈周期性平台 + 242 LSB 级跳变）。lut[i] = 曲线在
+// 输入 x = i*255/(N-1) 处的输出；查表 = 分段线性插值（pos = code/65535*(N-1)），
+// 线性插值天然单调无过冲，控制点折线经 1024 栅格重采样不引入新形状。
+constexpr int kCurveLutSize = 1024;
+
+// {x,y}[] → kCurveLutSize-entry LUT（0..255 域）；<2 点或 null → 恒等 LUT
 std::vector<double> lutFromPoints(const json::JsonValue& pts) {
-  std::vector<double> lut(256);
-  for (int i = 0; i < 256; ++i) lut[i] = i;
+  std::vector<double> lut(kCurveLutSize);
+  for (int i = 0; i < kCurveLutSize; ++i) lut[i] = i * 255.0 / (kCurveLutSize - 1);
   if (!pts.isArray() || pts.size() < 2) return lut;
   std::vector<std::pair<double, double>> p;
   for (const auto& pt : pts.arrayItems()) {
@@ -23,8 +29,8 @@ std::vector<double> lutFromPoints(const json::JsonValue& pts) {
   std::sort(p.begin(), p.end());
   if (p.front().first > 0) p.insert(p.begin(), {0.0, p.front().second});
   if (p.back().first < 255) p.push_back({255.0, p.back().second});
-  for (int i = 0; i < 256; ++i) {
-    const double u = static_cast<double>(i);
+  for (int i = 0; i < kCurveLutSize; ++i) {
+    const double u = i * 255.0 / (kCurveLutSize - 1);
     size_t k = 0;
     while (k + 1 < p.size() && p[k + 1].first < u) ++k;
     const double t = (u - p[k].first) / std::max(1e-9, p[k + 1].first - p[k].first);
@@ -42,15 +48,18 @@ class PointCurveOp : public ParamOp {
     if (!checkBuf(buf, err)) return false;
     const std::vector<double> lut = lutFromPoints(params_.get(n_));
     bool identity = true;
-    for (int i = 0; i < 256; ++i) {
-      if (std::fabs(lut[i] - i) > 1e-9) identity = false;
+    for (int i = 0; i < kCurveLutSize; ++i) {
+      if (std::fabs(lut[i] - i * 255.0 / (kCurveLutSize - 1)) > 1e-9) identity = false;
     }
     if (identity) return true;
     for (size_t i = 0; i < buf->channelCount(); ++i) {
       const bool applies = ch_ < 0 || (i % 3) == static_cast<size_t>(ch_);
       if (!applies) continue;
-      const double u = imaging::codeAt(*buf, i) / 65535.0 * 255.0;
-      const double v = lut[std::clamp(static_cast<int>(u + 0.5), 0, 255)];
+      const double pos = imaging::codeAt(*buf, i) / 65535.0 * (kCurveLutSize - 1);
+      const int k = std::clamp(static_cast<int>(pos), 0, kCurveLutSize - 1);
+      const int k1 = std::min(k + 1, kCurveLutSize - 1);
+      const double f = std::max(0.0, pos - static_cast<double>(k));
+      const double v = lut[k] + (lut[k1] - lut[k]) * f;
       imaging::setCodeAt(*buf, i, v / 255.0 * 65535.0);
     }
     return true;

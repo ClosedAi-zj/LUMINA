@@ -268,7 +268,7 @@ void main() {
 /** P3：S2 逐像素色调 + S3 toneMap + S4 曲线/HSL/分级（oracle applyToneColor 镜像） */
 export const FRAG_TONE = `
 ${COMMON}
-uniform sampler2D uCurve;    // 256x1 RGBA NEAREST：r=RGB复合 g=R b=G a=B
+uniform sampler2D uCurve;    // 1024x1 RGBA NEAREST：r=RGB复合 g=R b=G a=B
 uniform vec4 uTone;          // exposure contrast highlights shadows
 uniform vec4 uTone2;         // whites blacks dehaze 0
 uniform vec4 uSatV;          // vibrance saturation 0 0
@@ -288,11 +288,15 @@ float bandW(float h, float center) {
   return max(0.0, 1.0 - d * 12.0);
 }
 
-// 曲线 LUT 查找（256x1，u=t*255 四舍五入取索引；与 CPU applyOne 同口径）
-vec2 curveUv(float t) {
-  float u = clamp(t, 0.0, 1.0) * 255.0;
-  float idx = floor(u + 0.5);
-  return clamp(vec2((idx + 0.5) / 256.0, 0.5), vec2(0.5 / 256.0), vec2(1.0 - 0.5 / 256.0, 0.5));
+// 曲线 LUT 查找（1024x1，分段线性插值；与 CPU applyOne/engine 逐式同口径：
+// pos = t*(N-1) 后相邻 texel 手动 lerp——NEAREST 纹理，不依赖 float-linear 扩展）
+vec4 curveSampleLut(float t) {
+  float pos = clamp(t, 0.0, 1.0) * 1023.0;
+  float k = floor(pos);
+  float f = pos - k;
+  float u0 = (k + 0.5) / 1024.0;
+  float u1 = (min(k + 1.0, 1023.0) + 0.5) / 1024.0;
+  return mix(texture2D(uCurve, vec2(u0, 0.5)), texture2D(uCurve, vec2(u1, 0.5)), f);
 }
 
 // S3 toneMap（Reinhard，唯一域分界）——数值稳定型：
@@ -403,20 +407,20 @@ void main() {
            q65535(toneMapCode(t.g) / 65535.0),
            q65535(toneMapCode(t.b) / 65535.0));
   // S4 点曲线：引擎注册序 RGB复合（三通道）→ R → G → B；恒等 LUT 跳过（engine
-  // curve.cpp 的 if (identity) return true——恒等查表会引入 257 栅格再量化，语义不同）
+  // curve.cpp 的 if (identity) return true——恒等查表会引入栅格再量化，语义不同）
   if (uCurveSkip.x < 0.5) {
-    t.r = clamp(texture2D(uCurve, curveUv(t.r)).r / 255.0, 0.0, 1.0);
-    t.g = clamp(texture2D(uCurve, curveUv(t.g)).r / 255.0, 0.0, 1.0);
-    t.b = clamp(texture2D(uCurve, curveUv(t.b)).r / 255.0, 0.0, 1.0);
+    t.r = clamp(curveSampleLut(t.r).r / 255.0, 0.0, 1.0);
+    t.g = clamp(curveSampleLut(t.g).r / 255.0, 0.0, 1.0);
+    t.b = clamp(curveSampleLut(t.b).r / 255.0, 0.0, 1.0);
   }
   if (uCurveSkip.y < 0.5) {
-    t.r = clamp(texture2D(uCurve, curveUv(t.r)).g / 255.0, 0.0, 1.0);
+    t.r = clamp(curveSampleLut(t.r).g / 255.0, 0.0, 1.0);
   }
   if (uCurveSkip.z < 0.5) {
-    t.g = clamp(texture2D(uCurve, curveUv(t.g)).b / 255.0, 0.0, 1.0);
+    t.g = clamp(curveSampleLut(t.g).b / 255.0, 0.0, 1.0);
   }
   if (uCurveSkip.w < 0.5) {
-    t.b = clamp(texture2D(uCurve, curveUv(t.b)).a / 255.0, 0.0, 1.0);
+    t.b = clamp(curveSampleLut(t.b).a / 255.0, 0.0, 1.0);
   }
   // S4 参数曲线（三通道手动展开）
   if (uParam.x != 0.0 || uParam.y != 0.0 || uParam.z != 0.0 || uParam.w != 0.0) {

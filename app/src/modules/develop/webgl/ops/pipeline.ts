@@ -159,8 +159,9 @@ export class PipelineGL {
     return true;
   }
 
-  /** 曲线 LUT：256x1 RGBA float = (RGB复合, R, G, B)，各 0..255（float 纹理，
+  /** 曲线 LUT：1024x1 RGBA float = (RGB复合, R, G, B)，各 0..255（float 纹理，
    *  与 CPU Float64 LUT 逐值一致，规避 8bit 量化引入的 ±0.5 LSB 偏差）。
+   *  T2.9：宽度随 buildCurveLutData 输出自适应（lut.length/4，当前 1024）。
    *  skip = 四条曲线是否恒等（引擎跳过恒等查表，见 glsl.ts FRAG_TONE 注）。 */
   setCurves(lut: Float32Array, skip: boolean[]): void {
     const gl = this.gl;
@@ -171,7 +172,7 @@ export class PipelineGL {
     if (!this.curveTex) this.curveTex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, this.curveTex);
     this.texParams();
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 1, 0, gl.RGBA, gl.FLOAT, lut);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, lut.length / 4, 1, 0, gl.RGBA, gl.FLOAT, lut);
   }
 
   /** 噪声纹理（R=颗粒块噪声（块内复制） G/B=TPDF u1/u2，w×h 与当前缓冲同尺寸）。

@@ -41,18 +41,21 @@ export interface OracleResult {
 const num = (v: number | undefined, def: number): number =>
   typeof v === 'number' && Number.isFinite(v) ? v : def;
 
-// ---- 曲线 LUT（engine curve.cpp lutFromPoints 精确镜像） ----
+// ---- 曲线 LUT（engine curve.cpp lutFromPoints 精确镜像）----
+// T2.9：0..255 曲线域 1024 点重采样 + 分段线性查表（lut[i] = 曲线在
+// x = i*255/(N-1) 处输出），消除 256 点 LUT 的 8bit 档位量化平台。
 export function lutFromPoints(points: CurvePoint[] | undefined): Float64Array {
-  const lut = new Float64Array(256);
-  for (let i = 0; i < 256; ++i) lut[i] = i;
+  const N = 1024;
+  const lut = new Float64Array(N);
+  for (let i = 0; i < N; ++i) lut[i] = (i * 255) / (N - 1);
   if (!Array.isArray(points) || points.length < 2) return lut;
   const p = [...points]
     .map((pt) => ({ x: num(pt.x, 0), y: num(pt.y, 0) }))
     .sort((a, b) => a.x - b.x);
   if (p[0].x > 0) p.unshift({ x: 0, y: p[0].y });
   if (p[p.length - 1].x < 255) p.push({ x: 255, y: p[p.length - 1].y });
-  for (let i = 0; i < 256; ++i) {
-    const u = i;
+  for (let i = 0; i < N; ++i) {
+    const u = (i * 255) / (N - 1);
     let k = 0;
     while (k + 1 < p.length && p[k + 1].x < u) ++k;
     const t = (u - p[k].x) / Math.max(1e-9, p[k + 1].x - p[k].x);
@@ -372,9 +375,11 @@ function applyToneColor(p: EditParams, buf: PlaneBuf): void {
   const lutR = lutFromPoints(p.toneCurveR);
   const lutG = lutFromPoints(p.toneCurveG);
   const lutB = lutFromPoints(p.toneCurveB);
-  // 引擎 curve.cpp：恒等 LUT 直接跳过（恒等查表会引入 257 栅格再量化，语义不同）
+  // 引擎 curve.cpp：恒等 LUT 直接跳过（恒等查表会引入栅格再量化，语义不同）
   const isIdLut = (lut: Float64Array): boolean => {
-    for (let i = 0; i < 256; ++i) if (Math.abs(lut[i] - i) > 1e-9) return false;
+    const N = lut.length;
+    for (let i = 0; i < N; ++i)
+      if (Math.abs(lut[i] - (i * 255) / (N - 1)) > 1e-9) return false;
     return true;
   };
   const idRgb = isIdLut(lutRgb);
@@ -507,10 +512,15 @@ function applyToneColor(p: EditParams, buf: PlaneBuf): void {
     }
     // --- S4 点曲线：引擎注册序 RGB复合 → R → G → B，逐条在最新码值上顺序作用 ---
     for (let c = 0; c < 3; ++c) {
+      // T2.9：分段线性查表，pos = t*(N-1)（engine code/65535*(N-1) 同口径）
       const applyOne = (lut: Float64Array): void => {
-        const u = t[i + c] * 255;
-        const idx = Math.max(0, Math.min(255, Math.round(u)));
-        t[i + c] = clamp01(lut[idx] / 255);
+        const N = lut.length;
+        const pos = t[i + c] * (N - 1);
+        const k = Math.max(0, Math.min(N - 1, Math.floor(pos)));
+        const k1 = Math.min(k + 1, N - 1);
+        const f = Math.max(0, pos - k);
+        const v = lut[k] + (lut[k1] - lut[k]) * f;
+        t[i + c] = clamp01(v / 255);
       };
       if (!idRgb) applyOne(lutRgb);
       if (c === 0 && !idR) applyOne(lutR);
@@ -695,11 +705,12 @@ export function encode8(buf: PlaneBuf): Uint8Array {
 }
 
 /** 4 条曲线 → LUT 纹理数据 + 恒等跳过标志（pipeline.setCurves 契约；
- *  renderer 与 parity harness 共用，保证两侧曲线口径一致） */
+ *  renderer 与 parity harness 共用，保证两侧曲线口径一致。T2.9：1024×1 RGBA） */
 export function buildCurveLutData(p: EditParams): {
   data: Float32Array;
   skip: boolean[];
 } {
+  const N = 1024;
   const luts = [
     lutFromPoints(p.toneCurveRGB),
     lutFromPoints(p.toneCurveR),
@@ -707,11 +718,12 @@ export function buildCurveLutData(p: EditParams): {
     lutFromPoints(p.toneCurveB),
   ];
   const isId = (lut: Float64Array): boolean => {
-    for (let i = 0; i < 256; ++i) if (Math.abs(lut[i] - i) > 1e-9) return false;
+    for (let i = 0; i < N; ++i)
+      if (Math.abs(lut[i] - (i * 255) / (N - 1)) > 1e-9) return false;
     return true;
   };
-  const data = new Float32Array(256 * 4);
-  for (let i = 0; i < 256; ++i) {
+  const data = new Float32Array(N * 4);
+  for (let i = 0; i < N; ++i) {
     for (let c = 0; c < 4; ++c) {
       data[i * 4 + c] = Math.max(0, Math.min(255, luts[c][i]));
     }
