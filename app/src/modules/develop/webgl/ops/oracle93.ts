@@ -140,6 +140,15 @@ export interface GeomTransform {
   distK: number;
 }
 
+/** 几何输出面积绝对上限（像素数）。outW*outH*3 必须 < 2^32，否则 new Float32Array
+ *  抛 Invalid typed array length 并打穿整块修图台（v1.4.1：Mock 会话 scale=100 实测）。
+ *  64MP 是「病态参数」的量级而非正常量级：预览源通常只有几十万像素，真实画幅 24MP，
+ *  scale≤2 + aspect 最多也就 ~6 倍面积，正常永远碰不到这条线。 */
+const MAX_GEOM_OUT_PIXELS = 64_000_000;
+/** 相对上限：输出不得超过源画幅的 8 倍面积。用于让小尺寸预览源上的病态参数
+ *  直接收敛到几十万像素级（否则绝对上限仍会一次性申请上百 MB 缓冲）。 */
+const MAX_GEOM_OUT_SRC_RATIO = 8;
+
 /** buildForwardHomography + invert3（含 perspective 矩阵的引擎原样展开）。
  *  T2.10：aspect 实装（O3）——输出画幅强制 w/h = aspect（内容 x 向适配），
  *  合成方式 = 逆映射第 0 列除以 sx；distK 返回给采样端复合。 */
@@ -204,7 +213,35 @@ export function buildGeomTransform(p: EditParams, srcW: number, srcH: number): G
   if (sx !== 1.0) {
     inv = { m: [inv.m[0] / sx, inv.m[1], inv.m[2], inv.m[3] / sx, inv.m[4], inv.m[5], inv.m[6] / sx, inv.m[7], inv.m[8]] };
   }
-  return { inv, outW, outH, cropX: Math.max(0, cropX), cropY: Math.max(0, cropY), distK };
+  let outWc = Math.max(1, Math.ceil(realW * sx));
+  let outHc = Math.max(1, Math.ceil(realH));
+  // 面积封顶（v1.4.1）：几何参数只要单位不一致（scale 用百分数而非倍数、aspect 用
+  // 百分数而非比值），输出就被放大到百倍量级，outW*outH*3 越过 2^32 之后
+  // new Float32Array 直接抛 Invalid typed array length，整块修图台打穿成错误页
+  // （Mock 会话实测复现：scale=100/aspect=100 → 请求 4.5e12 长度的缓冲）。
+  // 这里按面积封顶（绝对 64MP 与「源画幅 8 倍」取小）并同步缩放逆映射
+  // （保持宽高比，不是裁切），留痕不静默。
+  const areaLimit = Math.max(
+    1,
+    Math.min(MAX_GEOM_OUT_PIXELS, Math.round(srcW * srcH * MAX_GEOM_OUT_SRC_RATIO)),
+  );
+  if (outWc * outHc > areaLimit) {
+    const k = Math.sqrt(areaLimit / (outWc * outHc));
+    inv = {
+      m: [
+        inv.m[0] / k, inv.m[1] / k, inv.m[2],
+        inv.m[3] / k, inv.m[4] / k, inv.m[5],
+        inv.m[6] / k, inv.m[7] / k, inv.m[8],
+      ],
+    };
+    console.warn(
+      `[oracle93] 几何输出超上限已封顶：${outWc}x${outHc} → ${Math.max(1, Math.round(outWc * k))}x${Math.max(1, Math.round(outHc * k))}` +
+        `（scale=${scale} aspect=${aspect} src=${srcW}x${srcH}）`,
+    );
+    outWc = Math.max(1, Math.round(outWc * k));
+    outHc = Math.max(1, Math.round(outHc * k));
+  }
+  return { inv, outW: outWc, outH: outHc, cropX: Math.max(0, cropX), cropY: Math.max(0, cropY), distK };
 }
 
 // ---- 主管线 ----

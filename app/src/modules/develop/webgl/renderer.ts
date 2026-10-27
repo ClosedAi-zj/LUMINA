@@ -36,13 +36,22 @@ export function imageToCodes(img: HTMLImageElement): { t: Float32Array; w: numbe
   const k = Math.min(1, MAX_PREVIEW / Math.max(img.naturalWidth, img.naturalHeight));
   const w = Math.max(1, Math.round(img.naturalWidth * k));
   const h = Math.max(1, Math.round(img.naturalHeight * k));
+  if (!img.naturalWidth || !img.naturalHeight) return null;
   const cv = document.createElement('canvas');
   cv.width = w;
   cv.height = h;
   const ctx = cv.getContext('2d', { willReadFrequently: true });
   if (!ctx) return null;
   ctx.drawImage(img, 0, 0, w, h);
-  const data = ctx.getImageData(0, 0, w, h).data;
+  let data: Uint8ClampedArray;
+  try {
+    data = ctx.getImageData(0, 0, w, h).data;
+  } catch (e) {
+    // 画布被跨域污染（自定义协议响应缺 CORS 头）或底图无法栅格化（矢量/损坏）
+    // → 返回 null 让调用方走 2D 直出，绝不静默黑屏（v1.4.1）。
+    console.warn(`[renderer] 底图像素读取失败：${(e as Error)?.message ?? e}（src=${img.src.split('/').pop()}）`);
+    return null;
+  }
   const t = new Float32Array(w * h * 3);
   for (let i = 0, j = 0; i < w * h; ++i, j += 3) {
     // 显示 sRGB → 线性 → log16 码（近似 raw 解码域；导出像素管线仍由引擎负责）

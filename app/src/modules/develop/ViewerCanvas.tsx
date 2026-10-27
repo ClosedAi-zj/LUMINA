@@ -126,6 +126,8 @@ export default function ViewerCanvas({ onHistogram }: { onHistogram?: (h: { r: n
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<DevelopRenderer | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
+  /** 底图是否已成功解码为像素（失败时保留 2D 直出，不被空纹理覆盖） */
+  const imageOkRef = useRef(false);
   const histTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** CPU 软渲染最近一次耗时（ms，诊断/冒烟用） */
   const cpuMsRef = useRef<number | null>(null);
@@ -190,11 +192,22 @@ export default function ViewerCanvas({ onHistogram }: { onHistogram?: (h: { r: n
           console.log(`[baseline] vc-ensure: ${r ? 'gpu-ok' : 'gpu-fail→cpu'}`);
         }
         if (r) {
-          r.setImage(img);
-          setRenderNotice(null);
-          // 冒烟证据：着色器编译告警必须为空（红线 R1：编译期常量索引问题曾整屏黑）
-          if (window.lumina?.isSmoke) {
-            console.log(`[smoke-scenario] shader: warnings=${r.warnings.length > 0 ? r.warnings : 'none'}`);
+          // v1.4.1：setImage 的返回值曾被调用方丢弃 —— 底图解码不成像素时
+          // （Mock 会话底图是矢量 SVG / 文件损坏 / 跨域受限）整块画布静默全黑，
+          // 既无提示也无回退。现在失败必须可见：先告知，再 2D 直出原图。
+          const okImg = r.setImage(img);
+          imageOkRef.current = okImg;
+          if (IS_BASELINE) console.log(`[baseline] vc-setimage: ${okImg ? 'ok' : 'fail→2d'}`);
+          if (okImg) {
+            setRenderNotice(null);
+            // 冒烟证据：着色器编译告警必须为空（红线 R1：编译期常量索引问题曾整屏黑）
+            if (window.lumina?.isSmoke) {
+              console.log(`[smoke-scenario] shader: warnings=${r.warnings.length > 0 ? r.warnings : 'none'}`);
+            }
+          } else {
+            console.warn(`[viewer] 底图解码失败，已 2D 直出原图（参数不生效）：src=${img.src.split('/').pop()} ${img.naturalWidth}x${img.naturalHeight}`);
+            setRenderNotice('底图无法解码为像素，已直出原图（参数调整暂不生效）');
+            drawFallback2d(canvas, img);
           }
         } else {
           // 无 WebGL：引擎 Plan CPU 渲染保底（与导出同一实现，T1.5），保证不黑屏
@@ -230,6 +243,8 @@ export default function ViewerCanvas({ onHistogram }: { onHistogram?: (h: { r: n
     const canvas = canvasRef.current;
     const r = rendererRef.current;
     if (!canvas || !params || !imgRef.current) return;
+    // 底图解码失败且已 2D 直出：不要再用空纹理把它刷黑（v1.4.1）
+    if (r && !imageOkRef.current) return;
     if (r) {
       const ok = r.render(canvas, {
         params,

@@ -19,24 +19,33 @@ interface Props {
 interface State {
   error: Error | null;
   info: string;
+  /** 出错函数的真实调用栈（排查用；与组件栈互补） */
+  stack: string;
   count: number;
 }
 
 export default class ErrorBoundary extends Component<Props, State> {
-  state: State = { error: null, info: '', count: 0 };
+  state: State = { error: null, info: '', stack: '', count: 0 };
 
   static getDerivedStateFromError(error: Error): Partial<State> {
     return { error };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
-    // 主进程 stdout 留痕（冒烟/日志可用 [renderer][error] 检索）
-    console.error(`[error-boundary] ${this.props.scope ?? 'app'}: ${error.message}`, info.componentStack ?? '');
-    this.setState({ info: info.componentStack ?? '' });
+    // 主进程 stdout 留痕（冒烟/日志可用 [renderer][error] 检索）。
+    // v1.4.1：补 error.stack —— 组件栈只告诉「哪个组件炸了」，不告诉「哪一行炸了」，
+    // 之前排查 Mock 下的 Invalid typed array length 只能靠猜。
+    console.error(
+      `[error-boundary] ${this.props.scope ?? 'app'}: ${error.message}`,
+      info.componentStack ?? '',
+      '\nstack:\n',
+      error.stack ?? '',
+    );
+    this.setState({ info: info.componentStack ?? '', stack: error.stack ?? '' });
   }
 
   private reset = (): void => {
-    this.setState((s) => ({ error: null, info: '', count: s.count + 1 }));
+    this.setState((s) => ({ error: null, info: '', stack: '', count: s.count + 1 }));
     this.props.onReset?.();
   };
 
@@ -47,6 +56,7 @@ export default class ErrorBoundary extends Component<Props, State> {
       return <div key={count} className="h-full">{this.props.children}</div>;
     }
     const scope = this.props.scope ?? '界面';
+    const { stack } = this.state;
     return (
       <div className="h-full flex flex-col items-center justify-center gap-3 px-8" role="alert">
         <div className="text-sm text-txt">{scope} 渲染出错，已拦截（应用未退出）</div>
@@ -55,6 +65,14 @@ export default class ErrorBoundary extends Component<Props, State> {
           <pre className="text-2xs text-txt3 max-w-2xl max-h-40 overflow-auto whitespace-pre-wrap leading-4 px-3 py-2 rounded-md border border-line" style={{ background: 'var(--Lumina-Tokens-card)' }}>
             {info.trim()}
           </pre>
+        )}
+        {stack && (
+          <details className="max-w-2xl w-full" data-testid="error-stack">
+            <summary className="cursor-pointer text-2xs text-txt3 hover:text-txt2 select-none">技术细节（调用栈）</summary>
+            <pre className="mt-1.5 text-[10px] text-txt3 max-h-56 overflow-auto whitespace-pre-wrap leading-4 px-3 py-2 rounded-md border border-line" style={{ background: 'var(--Lumina-Tokens-card)' }}>
+              {stack.trim()}
+            </pre>
+          </details>
         )}
         <div className="flex items-center gap-2">
           <button className="h-7 px-3 rounded-md border border-line text-xs text-txt2 hover:text-txt hover:bg-hover" onClick={this.reset}>
