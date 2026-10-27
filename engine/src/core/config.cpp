@@ -1,6 +1,8 @@
 // {home} 目录布局、settings.json 读写、库根目录管理实现
 #include "core/config.h"
 
+#include <cctype>
+#include <cstdlib>
 #include <fstream>
 
 #include "core/logger.h"
@@ -242,14 +244,98 @@ void Config::pushRecentSource(const std::string& path) {
   settings_.setItem("recentSources", out);
 }
 
+namespace {
+
+// 从锁文件内容里取出 pid（格式 "pid=N ts=N"）。取不到返回 0。
+DWORD parseLockPid(const std::string& text) {
+  const std::string key = "pid=";
+  const std::string::size_type at = text.find(key);
+  if (at == std::string::npos) return 0;
+  std::string digits;
+  for (std::string::size_type i = at + key.size(); i < text.size() && isdigit((unsigned char)text[i]); ++i) {
+    digits.push_back(text[i]);
+  }
+  if (digits.empty()) return 0;
+  return static_cast<DWORD>(strtoul(digits.c_str(), nullptr, 10));
+}
+
+// 进程是否还活着（只做查询，不等待）。
+bool processAlive(DWORD pid) {
+  if (pid == 0) return false;
+  HANDLE p = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+  if (!p) {
+    // ERROR_ACCESS_DENIED 也是「存在但不可查询」；其余（无效参数/不存在）按不存在。
+    return GetLastError() == ERROR_ACCESS_DENIED;
+  }
+  DWORD code = 0;
+  const bool still = GetExitCodeProcess(p, &code) && code == STILL_ACTIVE;
+  CloseHandle(p);
+  return still;
+}
+
+// 读现存锁文件内容。打不开返回 false（多半是持有者仍以独占方式开着，视为活锁）。
+bool readLockFile(const std::string& path, std::string* text) {
+  std::wstring w = utf8ToUtf16(path);
+  HANDLE h = CreateFileW(w.c_str(), GENERIC_READ,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                         OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (h == INVALID_HANDLE_VALUE) return false;
+  char buf[256] = {0};
+  DWORD got = 0;
+  const bool ok = ReadFile(h, buf, sizeof(buf) - 1, &got, nullptr) != FALSE;
+  CloseHandle(h);
+  if (!ok) return false;
+  text->assign(buf, got);
+  return true;
+}
+
+}  // namespace
+
 bool Config::acquireLock(std::string* err) {
   std::string path = lockPath();
   std::wstring w = utf8ToUtf16(path);
-  // 独占创建；已存在即说明同 home 有另一实例在跑（架构 §9-D8）
-  HANDLE h = CreateFileW(w.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
-                         FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+  // 独占创建；已存在即说明同 home 有另一实例在跑（架构 §9-D8）。
+  // 持有期间允许他人只读（FILE_SHARE_READ），这样别的进程能读出 pid 判断死活；
+  // 不给 WRITE/DELETE 共享，避免活锁被别人删掉。
+  // v1.4.1：补陈旧锁回收 —— 引擎被强杀/断电后 DELETE_ON_CLOSE 不一定生效，
+  // 残留的 engine.lock 会让之后每一次启动都失败并降级 Mock，且用户无从自救。
+  HANDLE h = INVALID_HANDLE_VALUE;
+  for (int attempt = 0; attempt < 12 && h == INVALID_HANDLE_VALUE; ++attempt) {
+    h = CreateFileW(w.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_NEW,
+                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+    if (h != INVALID_HANDLE_VALUE) break;
+    const DWORD e = GetLastError();
+    if (e == ERROR_FILE_EXISTS || e == ERROR_ACCESS_DENIED) {
+      // 文件存在，或处于「已关闭待删除」的中间态（上一个进程刚退出）。
+      std::string text;
+      if (readLockFile(path, &text)) {
+        const DWORD pid = parseLockPid(text);
+        if (pid != 0 && pid != GetCurrentProcessId() && processAlive(pid)) {
+          if (err) {
+            *err = "another engine instance is running for home: " + homeDir() + " (pid=" +
+                   std::to_string(static_cast<unsigned long>(pid)) + ")";
+          }
+          return false;
+        }
+        // 陈旧锁（pid 已死 / 无 pid 字段）：删掉重来，留痕不静默。
+        logWarn("config", "回收陈旧单实例锁 " + path + "（pid=" +
+                              std::to_string(static_cast<unsigned long>(pid)) + " 已不存在）");
+        DeleteFileW(w.c_str());
+        continue;
+      }
+      // 读不到：持有者很可能仍以独占方式开着（旧版引擎），或正处于删除中间态。
+      // 短暂等待后重试，等对方退出/系统完成删除。
+      Sleep(150);
+      continue;
+    }
+    // 其它错误（路径不存在、权限问题等）不必重试
+    break;
+  }
   if (h == INVALID_HANDLE_VALUE) {
-    if (err) *err = "another engine instance is running for home: " + homeDir();
+    if (err) {
+      *err = "another engine instance is running for home: " + homeDir() +
+             " (lock busy, win32=" + std::to_string(static_cast<unsigned long>(GetLastError())) + ")";
+    }
     return false;
   }
   lockHandle_ = h;
