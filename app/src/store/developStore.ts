@@ -62,6 +62,19 @@ export function normalizeTemperature(v: number): number {
   return Math.abs(v) >= WB_KELVIN_MIN ? kelvinToTemperature(v) : v;
 }
 
+// ---------- T2.12：蒙版语义升级首启标记（跨代理契约：键名 m2MaskSemanticsNotified 不许改） ----------
+
+const MASK_SEMANTICS_NOTICE_KEY = 'm2MaskSemanticsNotified';
+
+function readMaskSemanticsNotified(): boolean {
+  try {
+    return localStorage.getItem(MASK_SEMANTICS_NOTICE_KEY) === 'true';
+  } catch {
+    // localStorage 不可用（极少数隐私场景）→ 按未告知处理，横幅每次显示（可见性优先）
+    return false;
+  }
+}
+
 interface DevelopStore {
   photoId: number | null;
   sessionId: number | null;
@@ -82,6 +95,8 @@ interface DevelopStore {
   xmpTimer: ReturnType<typeof setTimeout> | null;
   /** 协议 v1.0.1：最后一次 endSession{flush:true} 返回的 sidecarMtime（null=未确认落盘，禁示"已写入"） */
   lastFlushMtime: number | null;
+  /** T2.12：蒙版渲染语义升级一次性告知 —— 首启标记（localStorage 键 m2MaskSemanticsNotified，falsy=横幅显示） */
+  maskSemanticsNotified: boolean;
 
   // ---- 专业模式（与快速模式共享同一 params，以下为 UI 侧状态 + params 扩展读写） ----
   /** 历史快照（与 historyLabels 一一对应，commit 时记录） */
@@ -114,6 +129,8 @@ interface DevelopStore {
   syncToSelection: (targetIds: number[]) => Promise<void>;
   syncToSequence: (seqId: number) => Promise<void>;
   toggleBeforeAfter: () => void;
+  /** T2.12：点击「知道了」——置 localStorage 标记 + 关横幅（此后不再显示） */
+  dismissMaskSemanticsNotice: () => void;
 
   // ---- 专业模式 actions ----
   /** 点路径设值：'detail.sharpness' / 'geometry.perspective.rotate' / 'exposure' */
@@ -152,6 +169,7 @@ export const useDevelop = create<DevelopStore>((set, get) => ({
   loading: false,
   xmpTimer: null,
   lastFlushMtime: null,
+  maskSemanticsNotified: readMaskSemanticsNotified(),
   historySnapshots: [],
   selectedLayerId: null,
   lockedLayerIds: [],
@@ -531,6 +549,15 @@ export const useDevelop = create<DevelopStore>((set, get) => ({
   },
 
   toggleBeforeAfter: () => set((st) => ({ beforeParams: st.beforeParams ? null : st.beforeParams })),
+
+  dismissMaskSemanticsNotice: () => {
+    try {
+      localStorage.setItem(MASK_SEMANTICS_NOTICE_KEY, 'true');
+    } catch {
+      // 写失败不阻塞关闭（本次会话仍消失），但下次启动横幅会再次出现 —— 不静默吞告知义务
+    }
+    set({ maskSemanticsNotified: true });
+  },
 }));
 
 // ---------- 帮助 ----------

@@ -42,6 +42,8 @@ const PERF_HINT_SLOTS = 20;
 
 export default function MaskPanel() {
   const params = useDevelop((s) => s.params);
+  const maskSemanticsNotified = useDevelop((s) => s.maskSemanticsNotified);
+  const dismissMaskSemanticsNotice = useDevelop((s) => s.dismissMaskSemanticsNotice);
   const selectedMaskId = useDevelop((s) => s.selectedMaskId);
   const selectMask = useDevelop((s) => s.selectMask);
   const addMask = useDevelop((s) => s.addMask);
@@ -54,6 +56,26 @@ export default function MaskPanel() {
 
   return (
     <div>
+      {/* T2.12：蒙版渲染语义升级一次性告知（v2 composite → v3 mask pass，无静默改观感路径）。
+          仅首次启动显示，「知道了」后经 localStorage 标记不再出现（键 m2MaskSemanticsNotified）。 */}
+      {!maskSemanticsNotified && (
+        <div
+          data-testid="m2-semantic-change-banner"
+          className="text-2xs rounded-md px-2 py-1.5 mb-2 flex items-start gap-2"
+          style={{ background: 'var(--Lumina-Tokens-accentSoft)', color: 'var(--Lumina-Tokens-accent)' }}
+        >
+          <span className="flex-1 leading-relaxed">
+            蒙版渲染语义已升级（v2 合成 → v3 mask pass）：旧照片库中含蒙版的作品将按新口径重新解释，观感可能与升级前存在轻微差异，属预期行为；参数与蒙版结构本身不受影响。
+          </span>
+          <button
+            className="shrink-0 text-2xs px-1.5 py-0.5 rounded-sm border border-line hover:bg-hover select-none"
+            onClick={dismissMaskSemanticsNotice}
+          >
+            知道了
+          </button>
+        </div>
+      )}
+
       <div className="flex items-center gap-1.5 mb-2 flex-wrap">
         {TOOLS.map((t) => (
           <Button key={t.type} size="sm" onClick={() => void addMask(t.type)} title={`新建${maskName(t.type)}蒙版`}>
