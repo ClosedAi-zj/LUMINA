@@ -74,6 +74,7 @@ set(LUMINA_SOURCES
   src/plan/op_table.cpp
   src/plan/geometry.cpp
   src/plan/geometry_chain.cpp
+  src/plan/lens_profile.cpp
   src/plan/cache_key.cpp
   src/plan/render_plan.cpp
   src/plan/render_exec.cpp
@@ -126,6 +127,11 @@ set_source_files_properties(${LUMINA_SQLITE_SRC} PROPERTIES
   COMPILE_FLAGS "-DSQLITE_ENABLE_FTS5 -D_WIN32_WINNT=0x0A00 -DSQLITE_THREADSAFE=1 -O1")
 
 add_library(lumina_core STATIC ${LUMINA_SOURCES} ${LUMINA_SQLITE_SRC})
+
+# T2.11：profile 数据源码树目录注入（LensProfileDb::global() 兜底加载路径 +
+# test_lens_profile 的 L4 扫描路径；PUBLIC 传播给链接本库的测试目标）
+target_compile_definitions(lumina_core PUBLIC
+  LUMINA_LENS_PROFILES_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/lens-profiles")
 
 target_link_libraries(lumina_core PUBLIC
   "${THIRDPARTY_DIR}/libraw/lib/libraw.a"
@@ -307,6 +313,13 @@ add_executable(test_curve_precision tests/test_curve_precision.cpp)
 target_link_libraries(test_curve_precision PRIVATE lumina_core)
 set_target_properties(test_curve_precision PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
 add_test(NAME curve_precision COMMAND test_curve_precision)
+
+# M2 T2.11：镜头 profile 库 + CA 新叶 #94（L1 四角位移单调 / L2 暗角 −100 压角 /
+# L3 色边边带能量 / L4 无 LCP 双证 / 未命中零静默 / O4 单次重采样保持）
+add_executable(test_lens_profile tests/test_lens_profile.cpp)
+target_link_libraries(test_lens_profile PRIVATE lumina_core)
+set_target_properties(test_lens_profile PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME lens_profile COMMAND test_lens_profile)
 
 # M0 ΔE 基线工具（不入 ctest：依赖本机 RW2 样本；由 scripts/ci/deltae.py 编排）
 add_executable(deltae_baseline tests/color/delta_e_baseline.cpp)

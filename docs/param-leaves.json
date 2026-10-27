@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "totalLeaves": 93,
+ "totalLeaves": 94,
  "previewRenderedCount": 39,
  "exportRenderedCount": 27,
  "sourceOfTruth": "engine code grep-verified 2026-10-25",
@@ -12,7 +12,8 @@
   "detail.luminanceSmoothing / detail.colorNR 经 AI/NLM 降噪卡缓存 TIFF 间接生效，但非预览渲染管线算子，按判定标准记 false",
   "masks 预览仅 6 个槽位（超出截断），导出完全丢弃",
   "与架构文档 §4 现预/现导标注一致：preview=39（含 masks），export=27",
-  "basic.clarity / basic.dehaze 仅 GPU 管线实现（CPU 软渲染保底不含这两项，见 cpu-render.ts 头注释）"
+  "basic.clarity / basic.dehaze 仅 GPU 管线实现（CPU 软渲染保底不含这两项，见 cpu-render.ts 头注释）",
+  "T2.11：新增叶 #94 optics.chromaticAberration（Q3 拍板 93→94 口径）；导出引擎 CPU 路径已消费，GPU 预览待 app 域跟进"
  ],
  "leaves": [
   {
@@ -1043,6 +1044,20 @@
    "exportRendered": false,
    "previewEvidence": [],
    "exportEvidence": []
+  },
+  {
+   "id": 94,
+   "path": "optics.chromaticAberration",
+   "node": "lens",
+   "previewRendered": false,
+   "exportRendered": true,
+   "previewEvidence": [],
+   "exportEvidence": [
+    "engine/src/plan/geometry_chain.cpp collectGeometryChainParams（T2.11 叶 #94 消费，S1 子步 2）",
+    "engine/src/xmp/xmp_mapper.cpp:198 ↔ crs:ChromaticAberrationScale（T2.5 键表）",
+    "app/src/api/protocol.ts:236（-100..100 强度口径）"
+   ],
+   "note": "T2.11 Q3：93→94 叶口径变更。GPU 预览侧（M21 FRAG_GEO 补 CA）为后续 app 域任务，previewRendered 暂 false"
   }
  ]
 }

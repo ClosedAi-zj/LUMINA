@@ -8,6 +8,8 @@
 #include <cmath>
 #include <vector>
 
+#include "plan/lens_profile.h"
+
 namespace lumina {
 namespace plan {
 
@@ -98,12 +100,38 @@ void sampleBilinear(const imaging::ImageBuf& src, double x, double y, double out
 
 std::atomic<int> g_resampleCount{0};
 
+// T2.11：单通道双线性采样（CA 通道径向缩放用；式与 sampleBilinear 同源）
+double sampleBilinearChannel(const imaging::ImageBuf& src, double x, double y, int c) {
+  const int x0 = static_cast<int>(std::floor(x));
+  const int y0 = static_cast<int>(std::floor(y));
+  const double fx = x - x0;
+  const double fy = y - y0;
+  const int x1 = std::min(x0 + 1, src.w - 1);
+  const int y1 = std::min(y0 + 1, src.h - 1);
+  const int cx0 = std::max(0, std::min(x0, src.w - 1));
+  const int cy0 = std::max(0, std::min(y0, src.h - 1));
+  const double p00 = imaging::codeAt(src, (static_cast<size_t>(cy0) * src.w + cx0) * 3 + c);
+  const double p10 = imaging::codeAt(src, (static_cast<size_t>(cy0) * src.w + x1) * 3 + c);
+  const double p01 = imaging::codeAt(src, (static_cast<size_t>(y1) * src.w + cx0) * 3 + c);
+  const double p11 = imaging::codeAt(src, (static_cast<size_t>(y1) * src.w + x1) * 3 + c);
+  const double top = p00 + (p10 - p00) * fx;
+  const double bot = p01 + (p11 - p01) * fx;
+  return std::max(0.0, std::min(65535.0, top + (bot - top) * fy));
+}
+
 }  // namespace
 
 GeometryChainParams collectGeometryChainParams(const json::JsonValue& params) {
   GeometryChainParams p;
   p.lensProfileEnable = params.get("optics.lensProfileEnable").asDouble(0.0);
   p.manualDistortion = params.get("optics.manualDistortion").asDouble(0.0);
+  // T2.11：profile 匹配输入 + CA 叶 #94（非用户叶的匹配键缺省空 → 未命中 → identity）
+  p.lensProfileMake = params.get("optics.lensProfileMake").asString();
+  p.lensProfileModel = params.get("optics.lensProfileModel").asString();
+  p.lensProfileLensMake = params.get("optics.lensProfileLensMake").asString();
+  p.lensProfileLensModel = params.get("optics.lensProfileLensModel").asString();
+  p.lensProfileFocalMm = params.get("optics.lensProfileFocalMm").asDouble(0.0);
+  p.chromaticAberration = params.get("optics.chromaticAberration").asDouble(0.0);
   p.perspX = params.get("geometry.perspective.x").asDouble(0.0);
   p.perspY = params.get("geometry.perspective.y").asDouble(0.0);
   p.perspH = params.get("geometry.perspective.horizontal").asDouble(0.0);
@@ -133,10 +161,59 @@ bool applyGeometryChain(imaging::ImageBuf* buf, const GeometryChainParams& p,
   GeometryChainStats stats;
   const double kDistort = p.manualDistortion / 100.0 * 0.3;
 
-  // ---- 子步 1/2/3：镜头 profile / CA / 光学暗角（T2.11 接库前占位 identity）----
-  // lensProfileEnable 是选择器叶：无 profile 数据时 identity 不猜测（零静默）。
-  // 子步记录：2/3 无叶不记录；1 仅登记选择器激活（当前仍 identity）。
+  // ---- 子步 1/2/3：镜头 profile / CA / 光学暗角（T2.11 实装，架构 §4.3）----
+  // lensProfileEnable 是选择器叶：未命中 profile 时 identity + warning（零静默，不猜测）。
+  // 子步记录：2/3 无激活不记录；1 仅登记选择器激活。
   if (p.lensProfileEnable != 0.0) stats.subSteps.push_back(1);
+
+  // ---- T2.11 profile 解析（lens_profile 库，架构 §3.4）----
+  // 命中 → 畸变/CA/暗角系数进入唯一一次采样（子步 1 进映射、2 通道缩放、3 仅乘）；
+  // 未命中 → 全部恒等 + stats.warning 显式告知（UI 置灰，M30）。
+  double profK1 = 0.0, profK2 = 0.0, profK3 = 0.0;
+  double profScaleR = 1.0, profScaleB = 1.0;
+  double profVignA = 0.0, profVignB = 0.0, profVignC = 0.0;
+  bool profileDistortActive = false;  // 子步 1（畸变进映射）
+  bool caActive = false;              // 子步 2（通道径向缩放）
+  bool vignActive = false;            // 子步 3（暗角仅乘不采样）
+  if (p.lensProfileEnable != 0.0) {
+    LensProfile matched;
+    if (!p.lensProfileModel.empty() &&
+        LensProfileDb::global().match(p.lensProfileMake, p.lensProfileModel,
+                                      p.lensProfileLensMake, p.lensProfileLensModel,
+                                      p.lensProfileFocalMm, &matched)) {
+      const LensFocalBucket b = matched.bucketForFocal(p.lensProfileFocalMm);
+      profK1 = b.k1;
+      profK2 = b.k2;
+      profK3 = b.k3;
+      profVignA = b.vignA;
+      profVignB = b.vignB;
+      profVignC = b.vignC;
+      stats.profileHit = true;
+      profileDistortActive = (profK1 != 0.0 || profK2 != 0.0 || profK3 != 0.0);
+      vignActive = (profVignA != 0.0 || profVignB != 0.0 || profVignC != 0.0);
+      // CA 口径（架构 §3.4）：profile 命中 + 叶 0 → profile scaleR/scaleB；
+      // 叶非 0 → 按 1 + leaf/100 缩放强度；profile 无 CA 数据（scale≡1）→
+      // 无参自动估计（限幅 ±0.3%，平坦图不猜测）。
+      double scaleR = b.scaleR;
+      double scaleB = b.scaleB;
+      if (scaleR == 1.0 && scaleB == 1.0) {
+        estimateLateralCa(*buf, &scaleR, &scaleB);
+      }
+      profScaleR = lensCaScale(scaleR, p.chromaticAberration);
+      profScaleB = lensCaScale(scaleB, p.chromaticAberration);
+      caActive = (profScaleR != 1.0 || profScaleB != 1.0);
+    } else {
+      stats.warning = "未检测到镜头配置（profile 未命中：make=" + p.lensProfileMake +
+                      " model=" + p.lensProfileModel + " lens=" + p.lensProfileLensModel +
+                      "）；镜头校正未生效";
+      lensProfileSetWarning(stats.warning);
+    }
+  }
+  // CA 叶非 0 且未启用 profile：identity（零静默——无 profile 数据时引擎不猜测，
+  // UI 按「未检测到镜头配置」置灰；与 manualDistortion 废弃转发口径一致）。
+  if (p.chromaticAberration != 0.0 && p.lensProfileEnable == 0.0 && !stats.warning.empty()) {
+    stats.warning += "；optics.chromaticAberration 需要 lensProfileEnable=1 且命中 profile";
+  }
 
   // ---- 激活判定（oracle93.buildGeomTransform 同口径 + T2.10 新增 aspect/畸变）----
   const bool cropActive = p.hasCrop || p.cropAngle != 0.0;
@@ -144,10 +221,13 @@ bool applyGeometryChain(imaging::ImageBuf* buf, const GeometryChainParams& p,
                            p.perspV != 0.0 || p.perspRotate != 0.0 || p.perspScale != 1.0;
   const bool aspectActive = p.perspAspect != 0.0;
   const bool distortActive = kDistort != 0.0;
-  if (!cropActive && !perspActive && !aspectActive && !distortActive) {
+  if (!cropActive && !perspActive && !aspectActive && !distortActive &&
+      !profileDistortActive && !caActive && !vignActive) {
     if (statsOut != nullptr) *statsOut = stats;
     return true;  // 恒等：字节不变（aspect=0 → max|Δ|=0 由本判定保证）
   }
+  if (caActive) stats.subSteps.push_back(2);
+  if (vignActive) stats.subSteps.push_back(3);
   if (perspActive) stats.subSteps.push_back(4);
   if (aspectActive) stats.subSteps.push_back(5);
   if (cropActive) stats.subSteps.push_back(6);
@@ -227,6 +307,9 @@ bool applyGeometryChain(imaging::ImageBuf* buf, const GeometryChainParams& p,
   const double ccx = (srcW - 1) / 2.0;
   const double ccy = (srcH - 1) / 2.0;
   const double maxR = std::sqrt(ccx * ccx + ccy * ccy);
+  // T2.11：暗角归一化半径基准 = 输出图对角半径（仅乘不采样，键到输出位置）
+  const double vMaxR =
+      std::max(1e-9, std::hypot((outW - 1) / 2.0, (outH - 1) / 2.0));
   uint64_t samples = 0;
   for (int dy = 0; dy < outH; ++dy) {
     for (int dx = 0; dx < outW; ++dx) {
@@ -234,21 +317,48 @@ bool applyGeometryChain(imaging::ImageBuf* buf, const GeometryChainParams& p,
       const double mx = (inv.m[0] * dx + inv.m[1] * dy + inv.m[2]) / sw + cropX;
       const double my = (inv.m[3] * dx + inv.m[4] * dy + inv.m[5]) / sw + cropY;
       // 子步 1 复合：畸变逆映射 D（src(D(H_inv(dx)))，畸变先于裁剪/透视的合成形式）
+      // T2.11：manual k 模型 × profile Brown-Conrady（amount=+100 全量校正），
+      // 两者均为径向乘数，直接相乘复合；profile 非激活时与 T2.10 逐位一致。
       double fx = mx;
       double fy = my;
-      if (distortActive) {
+      if (distortActive || profileDistortActive) {
         const double ddx = mx - ccx;
         const double ddy = my - ccy;
         const double r = std::sqrt(ddx * ddx + ddy * ddy) / maxR;
-        const double rf = r * (1.0 + kDistort * r * r);
-        const double k = rf / std::max(1e-9, r);
+        double k = 1.0;
+        if (distortActive) {
+          const double rf = r * (1.0 + kDistort * r * r);
+          k = rf / std::max(1e-9, r);
+        }
+        if (profileDistortActive) {
+          k *= lensDistortRadiusFactor(r, profK1, profK2, profK3, 100.0);
+        }
         fx = ccx + ddx * k;
         fy = ccy + ddy * k;
       }
       double px[3] = {0.0, 0.0, 0.0};
-      if (fx >= 0.0 && fy >= 0.0 && fx <= srcW - 1 && fy <= srcH - 1) {
+      if (caActive) {
+        // 子步 2（T2.11）：横向 CA 校正——R/B 通道按径向缩放独立采样回位
+        //（src_c = src · m_c，复合在畸变之后；G 通道与几何坐标一致）。
+        for (int c = 0; c < 3; ++c) {
+          const double m = (c == 0) ? profScaleR : (c == 2 ? profScaleB : 1.0);
+          const double cxr = ccx + (fx - ccx) * m;
+          const double cyr = ccy + (fy - ccy) * m;
+          if (cxr >= 0.0 && cyr >= 0.0 && cxr <= srcW - 1 && cyr <= srcH - 1) {
+            px[c] = sampleBilinearChannel(*buf, cxr, cyr, c);
+          }  // 出界填黑（与 3 通道路径同判定）
+        }
+      } else if (fx >= 0.0 && fy >= 0.0 && fx <= srcW - 1 && fy <= srcH - 1) {
         sampleBilinear(*buf, fx, fy, px);
       }  // 出界填黑（t=0，与 GPU FRAG_GEO 同判定）
+      // 子步 3（T2.11）：profile 光学暗角校正——径向增益仅乘不采样（架构 §3.4）。
+      if (vignActive) {
+        const double vdx = dx - (outW - 1) / 2.0;
+        const double vdy = dy - (outH - 1) / 2.0;
+        const double vr = std::sqrt(vdx * vdx + vdy * vdy) / vMaxR;
+        const double gain = lensVignetteGain(vr, profVignA, profVignB, profVignC, 100.0);
+        for (int c = 0; c < 3; ++c) px[c] = std::max(0.0, std::min(65535.0, px[c] * gain));
+      }
       const size_t q = (static_cast<size_t>(dy) * outW + dx) * 3;
       if (floatChain) {
         out.dataF[q] = static_cast<float>(px[0]);

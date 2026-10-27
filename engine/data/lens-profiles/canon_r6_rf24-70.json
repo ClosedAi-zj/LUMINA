@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "source": "self-built",
+  "attribution": "",
+  "camera": { "make": "Canon", "model": "EOS R6" },
+  "lens": { "make": "Canon", "model": "RF 24-70mm F2.8 L IS USM" },
+  "focalBuckets": [
+    {
+      "focalMm": 24,
+      "distortion": { "model": "brown-conrady", "k1": -0.048, "k2": 0.012, "k3": -0.002 },
+      "ca": { "scaleR": 1.0062, "scaleB": 0.9938 },
+      "vignetting": { "a": 0.42, "b": -0.02, "c": 0.02 }
+    },
+    {
+      "focalMm": 50,
+      "distortion": { "model": "brown-conrady", "k1": -0.009, "k2": 0.003, "k3": 0.0 },
+      "ca": { "scaleR": 1.0035, "scaleB": 0.9965 },
+      "vignetting": { "a": 0.22, "b": -0.01, "c": 0.01 }
+    },
+    {
+      "focalMm": 70,
+      "distortion": { "model": "brown-conrady", "k1": 0.011, "k2": 0.0, "k3": 0.0 },
+      "ca": { "scaleR": 1.0022, "scaleB": 0.9978 },
+      "vignetting": { "a": 0.16, "b": -0.01, "c": 0.01 }
+    }
+  ]
+}

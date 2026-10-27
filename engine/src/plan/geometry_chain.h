@@ -29,6 +29,13 @@ struct GeometryChainParams {
   // lens
   double lensProfileEnable = 0.0;  // optics.lensProfileEnable（选择器，T2.11 前 identity）
   double manualDistortion = 0.0;   // optics.manualDistortion（-100..100，k = v/100*0.3）
+  // T2.11 镜头 profile 匹配输入（非用户叶：生产由 EXIF 元数据填充，测试直注）
+  std::string lensProfileMake;     // optics.lensProfileMake
+  std::string lensProfileModel;    // optics.lensProfileModel
+  std::string lensProfileLensMake;   // optics.lensProfileLensMake
+  std::string lensProfileLensModel;  // optics.lensProfileLensModel
+  double lensProfileFocalMm = 0.0;   // optics.lensProfileFocalMm（<=0 取首桶）
+  double chromaticAberration = 0.0;  // 叶 #94 optics.chromaticAberration（-100..100 强度）
   // geometry.perspective.*
   double perspX = 0.0;
   double perspY = 0.0;
@@ -61,6 +68,9 @@ struct GeometryChainStats {
   int resampleCalls = 0;      // 本链重采样调用数（恒 1）
   // 实际执行的子步号（按执行序；1/4/5/6 激活时记录，2/3 占位无叶不记录）
   std::vector<int> subSteps;
+  // T2.11：profile 命中与零静默告知（未命中 → identity + warning，不猜测）
+  bool profileHit = false;
+  std::string warning;  // 未命中 / 数据库未加载等显式告知（空 = 无）
 };
 
 // 就地变换：buf 进（源全图）→ 几何链出（可能改尺寸）。全参恒等时字节不变。

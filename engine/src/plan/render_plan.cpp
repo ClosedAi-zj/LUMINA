@@ -35,6 +35,12 @@ std::string opForParam(const std::string& path) {
   if (path.rfind("geometry.", 0) == 0) return "geometry.apply";
   if (path == "optics.manualDistortion") return "geometry.apply";
   if (path == "optics.lensProfileEnable") return "geometry.apply";
+  // T2.11：CA 新叶 #94 + profile 匹配输入 → geometry.apply（S1 子步 1/2/3 消费）
+  if (path == "optics.chromaticAberration") return "geometry.apply";
+  if (path == "optics.lensProfileMake" || path == "optics.lensProfileModel" ||
+      path == "optics.lensProfileLensMake" || path == "optics.lensProfileLensModel" ||
+      path == "optics.lensProfileFocalMm")
+    return "geometry.apply";
   // curve：点曲线算子名 = 叶路径；参数曲线 7 叶收拢到 curve.parametric
   if (path.rfind("curve.", 0) == 0) return path;
   if (path.rfind("parametric.", 0) == 0) return "curve.parametric";

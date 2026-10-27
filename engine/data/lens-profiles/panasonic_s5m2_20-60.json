@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "source": "self-built",
+  "attribution": "",
+  "camera": { "make": "Panasonic", "model": "DC-S5M2" },
+  "lens": { "make": "Panasonic", "model": "LUMIX S 20-60mm F3.5-5.6" },
+  "focalBuckets": [
+    {
+      "focalMm": 20,
+      "distortion": { "model": "brown-conrady", "k1": -0.082, "k2": 0.021, "k3": -0.004 },
+      "ca": { "scaleR": 1.0083, "scaleB": 0.9917 },
+      "vignetting": { "a": 0.46, "b": -0.03, "c": 0.03 }
+    },
+    {
+      "focalMm": 35,
+      "distortion": { "model": "brown-conrady", "k1": -0.031, "k2": 0.008, "k3": -0.001 },
+      "ca": { "scaleR": 1.005, "scaleB": 0.995 },
+      "vignetting": { "a": 0.36, "b": -0.02, "c": 0.02 }
+    },
+    {
+      "focalMm": 60,
+      "distortion": { "model": "brown-conrady", "k1": 0.014, "k2": 0.0, "k3": 0.0 },
+      "ca": { "scaleR": 1.0028, "scaleB": 0.9972 },
+      "vignetting": { "a": 0.24, "b": -0.01, "c": 0.01 }
+    }
+  ]
+}
