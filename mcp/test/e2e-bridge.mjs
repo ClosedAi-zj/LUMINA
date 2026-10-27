@@ -95,8 +95,9 @@ async function main() {
   const tools = list.result?.tools ?? [];
   console.log(`# tools/list -> ${tools.length} tools: ${tools.map((t) => t.name).join(', ')}`);
   // v1.4.1：新增 set_develop_mode / set_theme（AI 自检切模式与主题）→ 13；
-  // 再加 G9 文档 Tab 三件套 open_tabs / close_tab / list_tabs → 16
-  if (tools.length !== 16) failures.push(`tools/list 期望 16 个工具，实际 ${tools.length}`);
+  // 再加 G9 文档 Tab 三件套 open_tabs / close_tab / list_tabs → 16，M3-03 加 psd_inspect → 17，
+  // M4-03 加 softproof_preview → 18
+  if (tools.length !== 18) failures.push(`tools/list 期望 18 个工具，实际 ${tools.length}`);
 
   await callTool('lumina_status');
   await callTool('list_photos', { offset: 0, limit: 5 });

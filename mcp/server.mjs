@@ -328,6 +328,38 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'psd_inspect',
+    description:
+      'M3-03：PSD 文件自检与来源判定。返回 width/height/depth/channelCount/layerCount/hasLuminaSnapshot/foreign/unknownBlockCount。' +
+      'foreign=true 表示该 PSD 非 LUMINA 导出（无本方节点快照），打开时会被降级为合并像素层、调整历史不可编辑；' +
+      'foreign=false 表示是 LUMINA 导出的可还原 PSD。',
+    inputSchema: {
+      type: 'object',
+      properties: { path: { type: 'string', description: 'PSD 文件绝对路径，如 D:/out/DSC_0142.psd' } },
+      required: ['path'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'softproof_preview',
+    description:
+      'M4-03：软打样预览。按目标 ICC 把照片打样一次（lcms2，相对色度/感知/绝对色度/饱和度可选），' +
+      '返回打样后 PNG 路径与 ΔE00 统计（打样后 vs 打样前：mean/median/p95/max）。' +
+      'targetProfile 省略时使用内置演示目标；真实印刷请传打印机 ICC 文件绝对路径。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        photoId: { type: 'number', description: '照片 id（与 inputPath 二选一）' },
+        inputPath: { type: 'string', description: '图像文件绝对路径（与 photoId 二选一）' },
+        targetProfile: { type: 'string', description: '打样目标 ICC 绝对路径，省略 = 内置演示目标' },
+        intent: { type: 'number', description: '0 感知 / 1 相对色度（默认）/ 2 饱和度 / 3 绝对色度' },
+        simulatePaper: { type: 'boolean', description: '是否模拟纸白，默认 true' },
+        longEdge: { type: 'number', description: '预览长边像素，默认 1200' },
+      },
+      additionalProperties: false,
+    },
+  },
 ];
 
 // ---------- MCP 服务 ----------
