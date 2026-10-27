@@ -29,25 +29,33 @@ import PortfolioPage from './modules/portfolio/PortfolioPage';
 import GalleryPage from './modules/gallery/GalleryPage';
 
 /**
- * v1.2.0 外壳信息架构：四个工作区 → 十一个视图（沿用 1.1 的模块，不改模块内部）。
- * 映射由 team-lead 指定，不要自创：
- *   库   = library(默认) / ingest / culling / map / health
- *   修图 = develop(默认) / landscape / timelapse
- *   精修 = 本阶段无实现（v1.2.0 M1 NodeGraph 交付）→ 显式占位，不许静默空白
- *   输出 = export(默认) / portfolio / gallery
+ * v1.2.0 外壳信息架构（UI 迭代 ④）：顶部模块切换对齐 LR 七大模块 tab 形态
+ * （图库 / 修改照片 / 地图 / 书籍 / 幻灯片 / 打印 / Web）。
+ * LUMINA 定位：综合图像处理软件 —— 风光摄影是"特色模块"（修改照片 ▸ 风光，带特色徽标），
+ * 不是唯一身份。映射：
+ *   图库     = library(默认) / ingest / culling / health
+ *   修改照片 = develop(默认) / landscape(风光·特色) / timelapse
+ *   地图     = map
+ *   书籍     = 本阶段未实现 → 显式占位，不许静默空白
+ *   幻灯片   = 本阶段未实现 → 显式占位
+ *   打印     = LUMINA 交付中心（export / portfolio / gallery），LR 中打印/导出同属输出模块
+ *   Web      = 本阶段未实现 → 显式占位
  */
-type WorkspaceKey = 'library' | 'develop' | 'retouch' | 'output';
+type ModuleKey = 'library' | 'develop' | 'map' | 'book' | 'slideshow' | 'print' | 'web';
 
-const WORKSPACES: { key: WorkspaceKey; label: string; defaultView: AppView | null; views: AppView[] }[] = [
-  { key: 'library', label: '库', defaultView: 'library', views: ['library', 'ingest', 'culling', 'map', 'health'] },
-  { key: 'develop', label: '修图', defaultView: 'develop', views: ['develop', 'landscape', 'timelapse'] },
-  { key: 'retouch', label: '精修', defaultView: null, views: [] },
-  { key: 'output', label: '输出', defaultView: 'export', views: ['export', 'portfolio', 'gallery'] },
+const MODULES: { key: ModuleKey; label: string; views: AppView[]; defaultView: AppView | null }[] = [
+  { key: 'library', label: '图库', views: ['library', 'ingest', 'culling', 'health'], defaultView: 'library' },
+  { key: 'develop', label: '修改照片', views: ['develop', 'landscape', 'timelapse'], defaultView: 'develop' },
+  { key: 'map', label: '地图', views: ['map'], defaultView: 'map' },
+  { key: 'book', label: '书籍', views: [], defaultView: null },
+  { key: 'slideshow', label: '幻灯片', views: [], defaultView: null },
+  { key: 'print', label: '打印', views: ['export', 'portfolio', 'gallery'], defaultView: 'export' },
+  { key: 'web', label: 'Web', views: [], defaultView: null },
 ];
 
 const VIEW_LABEL: Record<AppView, string> = {
   library: '图库',
-  develop: '修图台',
+  develop: '修改照片',
   ingest: '导入',
   health: '存储健康',
   culling: '精选',
@@ -59,8 +67,8 @@ const VIEW_LABEL: Record<AppView, string> = {
   gallery: '画廊',
 };
 
-function workspaceOf(view: AppView): WorkspaceKey {
-  const hit = WORKSPACES.find((w) => w.views.includes(view));
+function moduleOf(view: AppView): ModuleKey {
+  const hit = MODULES.find((m) => m.views.includes(view));
   return hit?.key ?? 'library';
 }
 
@@ -105,21 +113,22 @@ function MockBanner() {
 }
 
 /**
- * 顶栏 = 自定义标题栏 + 工具栏一体化（UI 改版 batch 1，LR 式身份牌 chrome）。
+ * 顶栏 = 自定义标题栏 + 工具栏一体化（UI 改版 batch 1；UI 迭代 batch 2 升级 LR 七模块 tab）。
  *
  * 替代原先「原生标题栏 + TopBar + SubNav」三层结构，合并为一条 40px 深色 chrome：
- *   左：产品标识 + PS 式全局菜单占位 + 模块切换器（LR 模块拾取器式四工作区）
- *   中：当前模块上下文（工作区内视图胶囊）+ 引擎状态
+ *   左：产品标识 + PS 式全局菜单占位 + LR 七大模块 tab（图库/修改照片/地图/书籍/幻灯片/打印/Web，
+ *       选中态 = 亮底 + 2px accent 下缘线，LR 模块拾取器形态）
+ *   中：当前模块上下文（模块内视图胶囊，风光带"特色"徽标）+ 引擎状态
  *   右：搜索 / 导出 / 主题 / 窗口三键（min·max·close）
  * 空白区域 `-webkit-app-region: drag` 可拖拽窗口，双击最大化/还原；交互子元素 app-no-drag。
  */
 function TopBar({
-  workspace,
-  onPickWorkspace,
+  module,
+  onPickModule,
   searchRef,
 }: {
-  workspace: WorkspaceKey;
-  onPickWorkspace: (k: WorkspaceKey) => void;
+  module: ModuleKey;
+  onPickModule: (k: ModuleKey) => void;
   searchRef: { current: HTMLInputElement | null };
 }) {
   const view = useUi((s) => s.view);
@@ -161,49 +170,66 @@ function TopBar({
         ))}
       </nav>
 
-      {/* 左：模块切换器（四工作区，LR 模块拾取器式：文字 + 亮底选中态） */}
-      <nav className="app-no-drag flex items-center gap-0.5 shrink-0 pl-1">
-        {WORKSPACES.map((w) => {
-          const active = workspace === w.key;
+      {/* 左：LR 七大模块 tab（UI 迭代 ④：模块拾取器形态 —— 相连 tab + 细分隔线，
+          选中态 = hover 底色 + 2px accent 下缘线，替代原四工作区切换器） */}
+      <nav className="app-no-drag flex items-center shrink-0" aria-label="模块切换">
+        {MODULES.map((m, i) => {
+          const active = module === m.key;
           return (
             <button
-              key={w.key}
-              onClick={() => onPickWorkspace(w.key)}
-              className={`h-7 px-2.5 rounded-mdC text-xs transition-colors ${
-                active
-                  ? 'bg-hover text-txt font-medium'
-                  : 'text-txt2 hover:text-txt hover:bg-hover'
+              key={m.key}
+              onClick={() => onPickModule(m.key)}
+              className={`relative h-7 px-3 text-xs transition-colors ${i > 0 ? 'border-l border-line' : ''} ${
+                active ? 'text-txt font-semibold' : 'text-txt2 hover:text-txt'
               }`}
+              style={
+                active
+                  ? { background: 'var(--Lumina-Tokens-hover)', boxShadow: 'inset 0 -2px 0 var(--Lumina-Tokens-accent)' }
+                  : undefined
+              }
             >
-              {w.label}
+              {m.label}
             </button>
           );
         })}
       </nav>
 
-      {/* 中：当前模块上下文 = 工作区内视图胶囊（原 SubNav 并入）+ 引擎状态 */}
+      {/* 中：当前模块上下文 = 模块内视图胶囊（风光带"特色"徽标）+ 引擎状态 */}
       <div className="flex-1 min-w-0 flex items-center justify-center gap-3 px-2">
         <nav className="app-no-drag flex items-center gap-1 min-w-0 overflow-hidden">
           {(() => {
-            const spec = WORKSPACES.find((w) => w.key === workspace);
+            const spec = MODULES.find((m) => m.key === module);
             if (!spec || spec.views.length === 0) {
               return (
                 <span className="text-2xs text-txt3 truncate">
-                  精修工作区：v1.2.0 M1（NodeGraph）交付，当前版本此工作区为空
+                  {spec?.label ?? '该模块'}模块：后续里程碑交付，当前版本暂未开放
                 </span>
               );
             }
             return spec.views.map((v) => {
               const active = view === v;
+              const isLandscape = v === 'landscape';
               return (
                 <button
                   key={v}
                   onClick={() => navigate(v)}
-                  className={`relative h-6 px-2.5 rounded-pill text-2xs transition-colors shrink-0 ${
+                  className={`relative h-6 px-2.5 rounded-pill text-2xs transition-colors shrink-0 inline-flex items-center gap-1 ${
                     active ? 'bg-accent text-onaccent font-medium' : 'text-txt2 hover:text-txt hover:bg-hover'
                   }`}
                 >
                   {VIEW_LABEL[v]}
+                  {/* 定位迭代：风光 = 特色模块入口，显式高亮而非全站喊风光 */}
+                  {isLandscape && (
+                    <span
+                      className="px-1 rounded-sm text-[9px] leading-[14px]"
+                      style={{
+                        background: active ? 'rgba(0,0,0,0.18)' : 'var(--Lumina-Tokens-accentSoft)',
+                        color: active ? 'var(--Lumina-Tokens-onAccent)' : 'var(--Lumina-Tokens-accent)',
+                      }}
+                    >
+                      特色
+                    </span>
+                  )}
                   {v === 'health' && healthIssueCount > 0 && (
                     <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full" style={{ background: 'var(--Lumina-Tokens-danger)' }} />
                   )}
@@ -257,19 +283,25 @@ function TopBar({
   );
 }
 
-/** 精修工作区占位：本阶段无实现，必须显式告知（不许静默空白） */
-function RetouchPlaceholder() {
+/** 未实现模块占位（书籍/幻灯片/Web）：必须显式告知（不许静默空白），沿用精修占位式提示 */
+const MODULE_META: Partial<Record<ModuleKey, { title: string; desc: string }>> = {
+  book: { title: '书籍', desc: '书籍排版模块将在后续里程碑交付。现阶段请在「图库」整理照片，在「修改照片」完成编辑后经「打印」模块交付。' },
+  slideshow: { title: '幻灯片', desc: '幻灯片放映模块将在后续里程碑交付。现阶段可先在「图库」用星级/旗标精选出放映序列。' },
+  web: { title: 'Web', desc: 'Web 画廊模块将在后续里程碑交付。现阶段可用「打印」模块导出作品集后自行发布。' },
+};
+
+function ModulePlaceholder({ module }: { module: ModuleKey }) {
   const navigate = useUi((s) => s.navigate);
+  const meta = MODULE_META[module];
   return (
     <div className="h-full flex items-center justify-center px-6">
       <div className="max-w-md rounded-lgC border border-line p-6 bg-panel" style={{ boxShadow: 'var(--Lumina-Tokens-shadow1)' }}>
-        <div className="text-sm font-medium mb-2">精修工作区</div>
+        <div className="text-sm font-medium mb-2">{meta?.title ?? '该模块'}模块</div>
         <div className="text-2xs text-txt3 leading-6">
-          精修工作区将在 <span className="text-accent">v1.2.0 M1（NodeGraph）</span> 交付。
-          现阶段请使用「修图」工作区完成参数调整、局部蒙版与画笔精修。
+          {meta?.desc ?? '该模块将在后续里程碑交付，当前版本暂未开放。'}
         </div>
         <div className="mt-4 flex items-center gap-2">
-          <Button onClick={() => navigate('develop')}>前往修图工作区</Button>
+          <Button onClick={() => navigate('develop')}>前往修改照片</Button>
         </div>
       </div>
     </div>
@@ -280,10 +312,10 @@ function Shell() {
   const view = useUi((s) => s.view);
   const [bootError, setBootError] = useState<string | null>(null);
   const [stage, setStage] = useState<BootStage>('handshake');
-  /** 精修工作区没有对应视图：用本地占位态，任何一次导航都会自动退出占位 */
-  const [retouch, setRetouch] = useState(false);
+  /** 未实现模块（书籍/幻灯片/Web）没有对应视图：用本地占位态，任何一次导航都会自动退出占位 */
+  const [modulePlaceholder, setModulePlaceholder] = useState<ModuleKey | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
-  const workspace: WorkspaceKey = retouch ? 'retouch' : workspaceOf(view);
+  const module: ModuleKey = modulePlaceholder ?? moduleOf(view);
   // goStage：setState + 立即留痕（避免 React 批处理吞掉短暂中间态的日志）
   const goStage = useCallback((next: BootStage) => {
     setStage(next);
@@ -406,9 +438,9 @@ function Shell() {
     return () => window.removeEventListener('keydown', onKey);
   }, [navigate]);
 
-  // 视图切换即退出「精修」占位（占位不是路由，避免用户卡在空页面）
+  // 视图切换即退出「未实现模块」占位（占位不是路由，避免用户卡在空页面）
   useEffect(() => {
-    setRetouch(false);
+    setModulePlaceholder(null);
   }, [view]);
 
   // 冒烟场景：全模块流程驱动（证据经 console → 主进程 stdout）
@@ -464,11 +496,16 @@ function Shell() {
   return (
     <div className="h-full flex flex-col relative">
       <TopBar
-        workspace={workspace}
-        onPickWorkspace={(k) => {
-          const spec = WORKSPACES.find((w) => w.key === k);
-          setRetouch(k === 'retouch');
-          if (spec?.defaultView) navigate(spec.defaultView);
+        module={module}
+        onPickModule={(k) => {
+          const spec = MODULES.find((m) => m.key === k);
+          if (spec?.defaultView) {
+            setModulePlaceholder(null);
+            navigate(spec.defaultView);
+          } else {
+            // 书籍/幻灯片/Web：显式占位（不许静默空白，也不自创路由）
+            setModulePlaceholder(k);
+          }
         }}
         searchRef={searchRef}
       />
@@ -480,9 +517,9 @@ function Shell() {
           className="h-full rounded-lgC overflow-hidden border border-line"
           style={{ background: 'var(--Lumina-Tokens-canvas)', boxShadow: 'var(--Lumina-Tokens-shadow1)' }}
         >
-          <ErrorBoundary scope={retouch ? '精修' : (VIEW_LABEL[view] ?? view)}>
-            {retouch ? (
-              <RetouchPlaceholder />
+          <ErrorBoundary scope={modulePlaceholder ? `${MODULE_META[modulePlaceholder]?.title ?? '模块'}占位` : (VIEW_LABEL[view] ?? view)}>
+            {modulePlaceholder ? (
+              <ModulePlaceholder module={modulePlaceholder} />
             ) : (
               <>
                 {view === 'library' && <LibraryPage />}

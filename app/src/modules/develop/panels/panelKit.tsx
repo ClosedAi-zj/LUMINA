@@ -11,6 +11,7 @@
  */
 
 import { useCallback, useRef, useState, type ReactNode } from 'react';
+import { Icon } from '../../../components/shell';
 
 const EASE = 'cubic-bezier(.2,.8,.2,1)';
 
@@ -19,12 +20,15 @@ const EASE = 'cubic-bezier(.2,.8,.2,1)';
 export function PanelCard({
   title,
   hint,
+  icon,
   defaultOpen = false,
   children,
   right,
 }: {
   title: string;
   hint?: ReactNode;
+  /** LR 式分组图标（1.5px 线性，语义对齐 LR 面板：sliders/curve/droplet/mask/histogram…） */
+  icon?: string;
   defaultOpen?: boolean;
   children: ReactNode;
   right?: ReactNode;
@@ -43,7 +47,9 @@ export function PanelCard({
         style={{ transitionTimingFunction: EASE }}
         aria-expanded={open}
       >
-        {/* batch 1 规范：分组标题小型大写（.panel-section-title，10px/加字距）+ 28px 紧凑行高 */}
+        {/* batch 1 规范：分组标题小型大写（.panel-section-title，11px/加字距）+ 28px 紧凑行高；
+            UI 迭代 ②：分组标题前置 1.5px 线性专项图标（LR 面板图标语义） */}
+        {icon && <Icon name={icon} size={13} className="text-txt3 shrink-0" />}
         <span className="panel-section-title">{title}</span>
         {hint && <span className="text-2xs text-txt3 font-normal truncate">{hint}</span>}
         <span className="flex-1" />

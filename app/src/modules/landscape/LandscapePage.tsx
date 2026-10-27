@@ -58,6 +58,17 @@ export default function LandscapePage() {
     <div className="h-full overflow-y-auto p-5" style={{ background: 'var(--Lumina-Tokens-canvas)' }}>
       <div className="flex items-center gap-3 mb-4">
         <h2 className="text-base font-semibold">风光专项</h2>
+        {/* 定位迭代：LUMINA 是综合图像处理软件，风光是"特色模块"而非唯一身份 —— 显式打上特色标签 */}
+        <span
+          className="text-2xs px-1.5 py-0.5 rounded-sm border"
+          style={{
+            color: 'var(--Lumina-Tokens-accent)',
+            borderColor: 'color-mix(in srgb, var(--Lumina-Tokens-accent) 45%, transparent)',
+            background: 'var(--Lumina-Tokens-accentSoft)',
+          }}
+        >
+          特色模块
+        </span>
         <span className="text-2xs text-txt3">COMPOSITE · 合成 / 降噪</span>
         <div className="flex-1" />
         {groupsLoading && <span className="text-2xs text-txt3">检测包围组中…</span>}

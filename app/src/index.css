@@ -83,11 +83,13 @@ body {
 }
 
 /* ---- LR 式面板分组骨架（batch 1 全局规范） ----
-   分组标题小型大写 + 细分隔线；行高紧凑（24-28px）。 */
+   分组标题小型大写 + 细分隔线；行高紧凑（24-28px）。
+   UI 迭代 ③（对齐 LR）：11px / 700 / 0.06em 字距，标题字色用 --textStrong 分层。 */
 .panel-section-title {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--Lumina-Tokens-textSecondary);
+  color: var(--Lumina-Tokens-textStrong);
+  opacity: 0.88;
 }

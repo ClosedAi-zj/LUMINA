@@ -148,6 +148,97 @@ export function Icon({ name, size = 16, className = '' }: { name: string; size?:
         <path d="M12 2v3M12 19v3M2 12h3M19 12h3" stroke="currentColor" strokeWidth="1.5" />
       </>
     ),
+    // —— LR 式专项图标（1.5px 线性 / currentColor，与 batch 1 规范一致）——
+    crop: (
+      <>
+        <path d="M8 2v13a1 1 0 0 0 1 1h13" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M2 8h13a1 1 0 0 1 1 1v13" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      </>
+    ),
+    brush: (
+      <>
+        <path d="M4 20c1.5-1 2.5-2.5 4-4M8 16l6-6" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M13 5l6 6-3 3-6-6z" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+      </>
+    ),
+    gradient: (
+      <>
+        <rect x="5" y="4" width="14" height="16" rx="1" fill="none" stroke="currentColor" strokeWidth="1.5" />
+        <path d="M5 9h14M5 12h14M5 15h14" stroke="currentColor" strokeWidth="1.5" opacity="0.45" />
+      </>
+    ),
+    mask: (
+      <>
+        <circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="3 2.2" />
+        <circle cx="12" cy="12" r="2.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      </>
+    ),
+    histogram: <path d="M4 20v-6M9 20v-11M14 20v-4M19 20v-9" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />,
+    sliders: (
+      <>
+        <path d="M4 8h7M15 8h5M4 16h5M13 16h7" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        <circle cx="13" cy="8" r="1.8" fill="currentColor" />
+        <circle cx="11" cy="16" r="1.8" fill="currentColor" />
+      </>
+    ),
+    compare: (
+      <>
+        <rect x="3" y="5" width="7" height="14" rx="1" fill="none" stroke="currentColor" strokeWidth="1.5" />
+        <rect x="14" y="5" width="7" height="14" rx="1" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      </>
+    ),
+    spot: (
+      <>
+        <circle cx="12" cy="12" r="6" fill="none" stroke="currentColor" strokeWidth="1.5" />
+        <path d="M12 8.5v7M8.5 12h7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      </>
+    ),
+    sync: (
+      <>
+        <path d="M4 12a8 8 0 0 1 13.5-5.5L20 9" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M20 4v5h-5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M20 12a8 8 0 0 1-13.5 5.5L4 15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M4 20v-5h5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      </>
+    ),
+    reset: (
+      <>
+        <path d="M4 10a8 8 0 1 1 1.5 5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        <path d="M4 5v5h5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      </>
+    ),
+    auto: <path d="M12 4l1.6 4.4L18 10l-4.4 1.6L12 16l-1.6-4.4L6 10l4.4-1.6z" fill="currentColor" opacity="0.9" />,
+    book: <path d="M4 5a2 2 0 0 1 2-2h13v15H6a2 2 0 0 0-2 2V5z" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />,
+    print: (
+      <>
+        <path d="M7 9V4h10v5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+        <path d="M5 9h14a2 2 0 0 1 2 2v5h-4v4H7v-4H3v-5a2 2 0 0 1 2-2z" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+      </>
+    ),
+    web: (
+      <>
+        <circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" strokeWidth="1.5" />
+        <path d="M4 12h16M12 4c2.4 2.4 2.4 13.6 0 16M12 4c-2.4 2.4-2.4 13.6 0 16" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      </>
+    ),
+    curve: <path d="M4 16c4 0 4-8 8-8s4 8 8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />,
+    droplet: <path d="M12 3s5 5.5 5 9a5 5 0 0 1-10 0c0-3.5 5-9 5-9z" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />,
+    lens: (
+      <>
+        <circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" strokeWidth="1.5" />
+        <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      </>
+    ),
+    target: (
+      <>
+        <circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" strokeWidth="1.5" />
+        <path d="M12 2v3M12 19v3M2 12h3M19 12h3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      </>
+    ),
+    transform: (
+      <path d="M4 9h11l-3-3M20 15H9l3 3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    ),
+    grid: <path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />,
   };
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" className={className} aria-hidden>

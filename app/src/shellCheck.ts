@@ -1,6 +1,6 @@
 /**
  * v1.2.0 外壳自检（`LUMINA_SHELLCHECK=1` → `?shellcheck=1`）：
- * 用真实点击验证四工作区切换、二级导航、精修占位提示与深浅主题切换。
+ * 用真实点击验证 LR 七大模块 tab 切换、二级导航、未实现模块占位与深浅主题切换。
  * 证据经 console → 主进程 stdout（`[renderer][log] [shellcheck] ...`），走完打 DONE 让主进程退出。
  */
 
@@ -17,6 +17,14 @@ function clickText(text: string): boolean {
   return true;
 }
 
+/** 含徽标的按钮（如「风光+特色」胶囊）textContent 不等于单字，按包含匹配 */
+function clickTextContains(text: string): boolean {
+  const el = Array.from(document.querySelectorAll('button')).find((b) => (b.textContent ?? '').includes(text));
+  if (!el) return false;
+  el.click();
+  return true;
+}
+
 const theme = (): string => document.documentElement.getAttribute('data-theme') ?? 'none';
 
 export async function runShellCheck(): Promise<void> {
@@ -24,26 +32,28 @@ export async function runShellCheck(): Promise<void> {
     await sleep(6000); // 等启动（引擎握手 + 库加载）
     log(`boot view=${useUi.getState().view} theme=${theme()} header=${document.querySelectorAll('header').length}`);
 
-    const cases: Array<{ label: string; expect: 'library' | 'develop' | 'retouch' | 'export' }> = [
-      { label: '库', expect: 'library' },
-      { label: '修图', expect: 'develop' },
-      { label: '精修', expect: 'retouch' },
-      { label: '输出', expect: 'export' },
+    const cases: Array<{ label: string; expect: 'library' | 'develop' | 'map' | 'export' | 'placeholder' }> = [
+      { label: '图库', expect: 'library' },
+      { label: '修改照片', expect: 'develop' },
+      { label: '地图', expect: 'map' },
+      { label: '书籍', expect: 'placeholder' },
+      { label: '打印', expect: 'export' },
+      { label: 'Web', expect: 'placeholder' },
     ];
     for (const c of cases) {
       const clicked = clickText(c.label);
       await sleep(900);
       const view = useUi.getState().view;
       const body = document.body.innerText;
-      const retouchShown = body.includes('精修工作区') && body.includes('NodeGraph');
-      const ok = c.expect === 'retouch' ? clicked && retouchShown : clicked && view === c.expect;
-      log(`workspace ${c.label}: clicked=${clicked} view=${view} retouchPlaceholder=${retouchShown} → ${ok ? 'OK' : 'FAIL'}`);
+      const placeholderShown = body.includes('后续里程碑') && body.includes(`${c.label}模块`);
+      const ok = c.expect === 'placeholder' ? clicked && placeholderShown : clicked && view === c.expect;
+      log(`module ${c.label}: clicked=${clicked} view=${view} placeholder=${placeholderShown} → ${ok ? 'OK' : 'FAIL'}`);
     }
 
-    // 二级导航：回到「修图」工作区，点其中的「风光」
-    clickText('修图');
+    // 二级导航：回到「修改照片」模块，点其中的「风光」（特色模块入口）
+    clickText('修改照片');
     await sleep(700);
-    const tabClicked = clickText('风光');
+    const tabClicked = clickTextContains('风光');
     await sleep(700);
     log(`subnav 风光: clicked=${tabClicked} view=${useUi.getState().view} → ${tabClicked && useUi.getState().view === 'landscape' ? 'OK' : 'FAIL'}`);
 

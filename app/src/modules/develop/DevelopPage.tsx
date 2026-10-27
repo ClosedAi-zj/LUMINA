@@ -11,7 +11,7 @@ import { useUi } from '../../store/uiStore';
 import { useJobStore } from '../../store/jobStore';
 import { errText } from '../../api/rpc-client';
 import { Button, Segmented } from '../../components/primitives';
-import { Dialog, EmptyState, KeycapBar } from '../../components/shell';
+import { Dialog, EmptyState, KeycapBar, Icon } from '../../components/shell';
 import ViewerCanvas from './ViewerCanvas';
 import { type Histogram } from './panels/HistogramPanel';
 import FastPanel from './panels/FastPanel';
@@ -369,7 +369,8 @@ function ViewerToolbar() {
   const cropped = params?.geometry.hasCrop ?? false;
   const brushMaskSelected = params?.masks.some((m) => m.id === selectedMaskId && m.type === 'brush') ?? false;
 
-  const btn = 'h-7 px-2 rounded-mdC text-2xs text-txt2 hover:text-txt hover:bg-hover transition-colors';
+  // UI 迭代 ②：工具条按钮 = 1.5px 线性 LR 语义图标 + 文字（裁剪/修复/蒙版/同步/复位）
+  const btn = 'inline-flex items-center gap-1 h-7 px-2 rounded-mdC text-2xs text-txt2 hover:text-txt hover:bg-hover transition-colors';
 
   return (
     <div className="h-9 px-2 flex items-center gap-1 border-b border-line shrink-0" style={{ background: 'var(--Lumina-Tokens-panel)' }}>
@@ -378,9 +379,11 @@ function ViewerToolbar() {
         style={{ background: cropped ? 'var(--Lumina-Tokens-accentSoft)' : undefined, color: cropped ? 'var(--Lumina-Tokens-accent)' : undefined }}
         onClick={() => void useDevelop.getState().setPath('geometry.hasCrop', !cropped, true, cropped ? '关闭裁剪' : '开启裁剪')}
       >
+        <Icon name="crop" size={13} />
         裁剪
       </button>
       <button className={btn} onClick={() => toast('修复画笔（去物）随 v1.2.0 M1 交付', 'info', 3000)}>
+        <Icon name="spot" size={13} />
         修复
       </button>
       <button
@@ -393,6 +396,7 @@ function ViewerToolbar() {
           useDevelop.getState().setMaskTool('brush');
         }}
       >
+        <Icon name="mask" size={13} />
         蒙版
       </button>
       <div className="flex-1" />
@@ -414,9 +418,11 @@ function ViewerToolbar() {
           }
         }}
       >
+        <Icon name="sync" size={13} />
         同步
       </button>
       <button className={btn} onClick={() => void useDevelop.getState().reset()}>
+        <Icon name="reset" size={13} />
         复位
       </button>
     </div>

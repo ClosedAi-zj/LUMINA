@@ -9,7 +9,8 @@
   --Lumina-Tokens-hover: #23272d;
   --Lumina-Tokens-viewer: #08090b;
   --Lumina-Tokens-browserBar: #181b1f;
-  --Lumina-Tokens-border: #23272d;
+  /* UI 迭代 ③（对齐 LR）：分隔线略提亮一档，面板/卡片边界更清晰可辨 */
+  --Lumina-Tokens-border: #2a2f36;
   --Lumina-Tokens-textPrimary: #f2f2f2;
   --Lumina-Tokens-textSecondary: #a8adb5;
   --Lumina-Tokens-textMuted: #6b7078;
@@ -55,6 +56,8 @@
   --Lumina-Tokens-shadow2: 0 8px 24px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.5);
   /* 顶栏玻璃底色（模糊由组件 backdrop-blur-[18px] 提供，令牌只存底色） */
   --Lumina-Tokens-glass: rgba(21, 23, 28, 0.72);
+  /* UI 迭代 ③（对齐 LR 字重分层）：标题级文字最亮档（面板分组标题/模块标签用） */
+  --Lumina-Tokens-textStrong: #ffffff;
 }
 
 [data-theme='Light'] {
@@ -96,6 +99,7 @@
   --Lumina-Tokens-shadow1: 0 1px 2px rgba(24, 20, 12, 0.06);
   --Lumina-Tokens-shadow2: 0 10px 30px rgba(24, 20, 12, 0.1), 0 1px 2px rgba(24, 20, 12, 0.06);
   --Lumina-Tokens-glass: rgba(255, 255, 255, 0.75);
+  --Lumina-Tokens-textStrong: #0c0d10;
 }
 
 /* ---- v1.2.0 R7 macOS 玻璃组合类（材质层，双主题底色走 --glass 令牌） ----

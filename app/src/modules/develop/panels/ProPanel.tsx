@@ -90,12 +90,12 @@ export default function ProPanel({ histogram }: { histogram?: Histogram | null }
       <CalibrationGroup params={params} />
 
       {/* 02-B3：已建蒙版必须常驻可见（设计依据 LR 蒙版面板常驻列出），默认展开 */}
-      <PanelCard title="蒙版" defaultOpen hint="局部调整 · 已建列表常驻">
+      <PanelCard title="蒙版" icon="mask" defaultOpen hint="局部调整 · 已建列表常驻">
         <MaskPanel />
       </PanelCard>
 
       {/* 02-5：直方图移到右栏下部，RGB 三色叠（chartRed/Green/Blue 令牌） */}
-      <PanelCard title="直方图" defaultOpen hint="RGB 叠加 + 亮度">
+      <PanelCard title="直方图" icon="histogram" defaultOpen hint="RGB 叠加 + 亮度">
         <HistogramPanel histogram={histogram ?? null} bare />
       </PanelCard>
     </div>
@@ -107,7 +107,7 @@ export default function ProPanel({ histogram }: { histogram?: Histogram | null }
 function BasicGroup({ params }: { params: EditParams }) {
   const applyPatch = useDevelop((s) => s.applyPatch);
   return (
-    <PanelCard title="基础" defaultOpen hint="14 项">
+    <PanelCard title="基础" icon="sliders" defaultOpen hint="14 项">
       <div className="px-2 pb-1 flex items-center gap-2">
         <ParamSegmented
           value={params.whiteBalance}
@@ -142,7 +142,7 @@ function CurveGroup({ params }: { params: EditParams }) {
   const [which, setWhich] = useState<CurveKey>('toneCurveRGB');
   const pts = params[which] ?? IDENTITY_CURVE;
   return (
-    <PanelCard title="曲线" defaultOpen hint="11 项">
+    <PanelCard title="曲线" icon="curve" defaultOpen hint="11 项">
       <div className="px-2 pb-1">
         <ParamSegmented
           value={which}
@@ -184,7 +184,7 @@ function ColorGroup({ params }: { params: EditParams }) {
   const [band, setBand] = useState<HslBand>('red');
   const hsl = params.hsl[band];
   return (
-    <PanelCard title="色彩" defaultOpen={false} hint="32 项">
+    <PanelCard title="色彩" icon="droplet" defaultOpen={false} hint="32 项">
       <GroupLabel>混色器 · 8 色带 × 色相/饱和/明度</GroupLabel>
       <div className="px-2 pb-1 flex flex-wrap gap-1">
         {HSL_BANDS.map((b) => {
@@ -238,7 +238,7 @@ function ColorGroup({ params }: { params: EditParams }) {
 
 function DetailGroup({ params }: { params: EditParams }) {
   return (
-    <PanelCard title="细节" defaultOpen={false} hint="7 项">
+    <PanelCard title="细节" icon="lens" defaultOpen={false} hint="7 项">
       <GroupLabel>锐化</GroupLabel>
       <Row params={params} path="detail.sharpness" label="数量" min={0} max={150} defaultValue={25} />
       <Row params={params} path="detail.sharpenRadius" label="半径" min={0.5} max={3} step={0.1} defaultValue={1} format={(v) => v.toFixed(1)} />
@@ -256,7 +256,7 @@ function DetailGroup({ params }: { params: EditParams }) {
 
 function LensGroup({ params }: { params: EditParams }) {
   return (
-    <PanelCard title="镜头" defaultOpen={false} hint="3 项">
+    <PanelCard title="镜头" icon="target" defaultOpen={false} hint="3 项">
       <ParamToggle
         label="启用镜头配置文件"
         checked={params.optics.lensProfileEnable}
@@ -275,7 +275,7 @@ function LensGroup({ params }: { params: EditParams }) {
 function GeometryGroup({ params }: { params: EditParams }) {
   const g = params.geometry;
   return (
-    <PanelCard title="几何" defaultOpen={false} hint="13 项">
+    <PanelCard title="几何" icon="transform" defaultOpen={false} hint="13 项">
       <GroupLabel>裁剪</GroupLabel>
       <ParamToggle label="启用裁剪框" checked={g.hasCrop} onChange={(v) => void useDevelop.getState().setPath('geometry.hasCrop', v, true, v ? '开启裁剪' : '关闭裁剪')} />
       <Row params={params} path="geometry.cropTop" label="上边距" min={0} max={50} />
@@ -300,7 +300,7 @@ function GeometryGroup({ params }: { params: EditParams }) {
 
 function EffectsGroup({ params }: { params: EditParams }) {
   return (
-    <PanelCard title="效果" defaultOpen={false} hint="6 项">
+    <PanelCard title="效果" icon="auto" defaultOpen={false} hint="6 项">
       <GroupLabel>暗角</GroupLabel>
       <Row params={params} path="optics.vignetteAmount" label="数量" min={-100} max={100} />
       <Row params={params} path="optics.vignetteMidpoint" label="中点" min={0} max={100} defaultValue={50} />
@@ -317,7 +317,7 @@ function EffectsGroup({ params }: { params: EditParams }) {
 
 function CalibrationGroup({ params }: { params: EditParams }) {
   return (
-    <PanelCard title="校准" defaultOpen={false} hint="7 项">
+    <PanelCard title="校准" icon="grid" defaultOpen={false} hint="7 项">
       <Row params={params} path="calibration.shadowTint" label="阴影色调" min={-100} max={100} />
       <GroupLabel>原色</GroupLabel>
       <Row params={params} path="calibration.redHue" label="红 色相" min={-100} max={100} />
