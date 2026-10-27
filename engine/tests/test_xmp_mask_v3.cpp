@@ -40,14 +40,19 @@ using namespace lumina;
 using namespace lumina::graph;
 
 static int g_fail = 0;
-#define CHECK(cond, msg)                                       \
-  do {                                                         \
-    if (cond) {                                                \
-      std::printf("  [PASS] %s\n", msg);                       \
-    } else {                                                   \
-      std::printf("  [FAIL] %s:%d %s\n", __FILE__, __LINE__, msg); \
-      ++g_fail;                                                \
-    }                                                          \
+// 注意：msg 必须先物化为 std::string 再经 c_str() 传 printf——直接把 std::string
+// 临时对象塞进 printf 可变参数是 UB（MinGW GCC 8 不报错）：SSO 缓冲内容被当作
+// char* 解引用 → 断言消息乱码 / 偶发段错误。
+#define CHECK(cond, msg)                                                    \
+  do {                                                                      \
+    const std::string check_msg_ = (msg);                                   \
+    if (cond) {                                                             \
+      std::printf("  [PASS] %s\n", check_msg_.c_str());                     \
+    } else {                                                                \
+      std::printf("  [FAIL] %s:%d %s\n", __FILE__, __LINE__,                \
+                  check_msg_.c_str());                                      \
+      ++g_fail;                                                             \
+    }                                                                       \
   } while (0)
 
 namespace {
@@ -320,8 +325,13 @@ int main() {
           "读端：optics.chromaticAberration 往返");
     // 经图往返不丢（Lens 节点 3 叶）
     NodeGraph g = XmpMapper::paramsToGraph(back);
+    // graphToJson(g) 按值返回临时 JsonValue；若在 range-for 里直接对
+    // “临时.get(...).arrayItems()”迭代，__range 绑定的是临时对象内部成员的引用，
+    // 临时对象在 range-init 全表达式末尾即销毁 → 迭代悬垂内存（flaky/段错误）。
+    // 必须先落回具名左值延长生命周期。
+    const JsonValue graphJson = graphToJson(g);
     bool found = false;
-    for (const JsonValue& n : graphToJson(g).get("nodes").arrayItems()) {
+    for (const JsonValue& n : graphJson.get("nodes").arrayItems()) {
       if (n.get("type").asString() == "lens" &&
           n.get("params").get("chromaticAberration").asDouble() == 12.0) {
         found = true;
