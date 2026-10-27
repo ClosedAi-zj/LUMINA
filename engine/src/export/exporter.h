@@ -69,6 +69,15 @@ class Exporter {
   // JobManager 工作线程内执行（methods.cpp 装配 job 时调用）
   void runExport(const std::vector<int64_t>& photoIds, const ExportSpec& spec, JobContext& ctx);
 
+  /**
+   * 测试入口：TIFF 写出与导出走**同一实现**（测试不复制 TIFF 布局代码，避免两边各自漂移）。
+   * 生产路径只由 exportOne 调用。
+   */
+  static bool writeTiffForTest(const std::string& path, const imaging::Image& image,
+                               const std::vector<uint8_t>& icc, std::string* err) {
+    return writeTiff(path, image, icc, err);
+  }
+
  private:
   // 单张导出：解码 → 近似色调 → 长边缩放 → 色彩空间 → 水印 → 命名 → 编码
   bool exportOne(const PhotoRecord& record, const ExportSpec& spec, const std::string& outDir,
@@ -85,10 +94,15 @@ class Exporter {
   static std::string expandTemplate(const std::string& tmpl, const PhotoRecord& record, int seqNo,
                                     int seqTotal, const std::string& extension);
 
-  // 最小 baseline TIFF 写出（RGB8 未压缩，小端），供 format="tiff"
-  static bool writeTiff(const std::string& path, const imaging::Image& image, std::string* err);
-  // 色彩空间：sRGB 直通；AdobeRGB 用线性域矩阵近似（v1.0.0 不做 ICC 精确转换）
-  static void applyColorSpace(imaging::Image* image, const std::string& colorSpace);
+  // 最小 baseline TIFF 写出（RGB8 未压缩，小端），icc 非空时写 tag 34675
+  static bool writeTiff(const std::string& path, const imaging::Image& image,
+                        const std::vector<uint8_t>& icc, std::string* err);
+  /**
+   * 色彩空间落地（M4-01）：走 lcms2 ICC 转换（矩阵近似已删除）；失败时降级 sRGB 并写
+   * warning。achieved 返回**实际**写入文件的色彩空间 —— 嵌入 ICC 必须与它一致，不得谎报。
+   */
+  static void applyColorSpace(imaging::Image* image, const std::string& colorSpace,
+                              std::string* achieved, std::string* warning);
   // 水印：图片水印真合成；文字水印用内置 5x7 点阵（仅 ASCII，非 ASCII 记 warning 不静默）
   static bool applyWatermark(imaging::Image* image, const WatermarkSpec& wm, std::string* warning,
                              std::string* err);

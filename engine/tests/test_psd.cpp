@@ -234,6 +234,31 @@ static void testUnknownBlockByteIdentical() {
   CHECK(same, "未知块「读→写→读」逐字节一致（含 padding 规则）");
 }
 
+// ---- 5. decodePsdComposite：合并图解码为 imaging::Image（M3-03 打开 PSD 的像素来源） ----
+static void testDecodeComposite() {
+  const int w = 37, h = 23;
+  const Document doc = makeDoc(w, h, 1, {});
+  WriteOptions opts;
+  opts.width = w;
+  opts.height = h;
+  opts.depth = 8;
+  opts.rle = true;
+  const std::string path = tmpPath("m3-psd-decode.psd");
+  std::string err;
+  CHECK(writePsd(path, doc, opts, &err), (std::string("decode 写: ") + err).c_str());
+  PsdInfo info;
+  std::string rerr;
+  CHECK(readPsd(path, &info, &rerr), (std::string("decode 读: ") + rerr).c_str());
+  lumina::imaging::Image img;
+  std::string derr;
+  const bool ok = decodePsdComposite(path, &img, &derr);
+  CHECK(ok, (std::string("decodePsdComposite: ") + derr).c_str());
+  if (!ok) return;
+  CHECK(img.width == w && img.height == h, "解码画幅一致");
+  CHECK(img.pixels.size() == static_cast<size_t>(w) * h * 3, "解码像素数（RGB 8bit = w*h*3）");
+  CHECK(img.pixels == info.composite, "解码像素 == 合并图（8bit 直出，零差异）");
+}
+
 // ---- 4. 入参不自洽必须报错，不写坏文件 ----
 static void testRejects() {
   const Document doc = makeDoc(8, 8, 1, {});
@@ -267,6 +292,7 @@ int main() {
   testRoundtrip(16, false);
   testUnknownBlockByteIdentical();
   testRejects();
+  testDecodeComposite();
   if (g_fail == 0) {
     std::printf("test_psd: ALL PASS\n");
     return 0;

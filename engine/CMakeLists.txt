@@ -45,6 +45,7 @@ file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/schema_sql.inc"
 set(LUMINA_SOURCES
   src/json/json_value.cpp
   src/core/config.cpp
+  src/color/icc.cpp
   src/core/logger.cpp
   src/core/job_manager.cpp
   src/core/md5.cpp
@@ -116,6 +117,7 @@ set(LUMINA_SOURCES
   src/export/text_raster.cpp
   src/export/psd_writer.cpp
   src/export/psd_reader.cpp
+  src/export/icc_embed.cpp
   src/gallery/gallery_service.cpp
   src/specialty/hdr_service.cpp
   src/specialty/denoise_service.cpp
@@ -128,6 +130,15 @@ set_source_files_properties(${LUMINA_SQLITE_SRC} PROPERTIES
   LANGUAGE C
   COMPILE_FLAGS "-DSQLITE_ENABLE_FTS5 -D_WIN32_WINNT=0x0A00 -DSQLITE_THREADSAFE=1 -O1")
 
+# ---- M4-01：LCMS2（Little CMS 2.16，MIT）色彩管理内核 ----
+# 源码内置（thirdparty/lcms2），不依赖系统 ICC 引擎；导出/软打样统一走 lcms2 transform。
+file(GLOB LUMINA_LCMS2_SRC "${THIRDPARTY_DIR}/lcms2/src/*.c")
+set_source_files_properties(${LUMINA_LCMS2_SRC} PROPERTIES
+  LANGUAGE C
+  COMPILE_FLAGS "-O2 -DCMS_DONT_USE_INT64=0")
+add_library(lumina_lcms2 STATIC ${LUMINA_LCMS2_SRC})
+target_include_directories(lumina_lcms2 PUBLIC "${THIRDPARTY_DIR}/lcms2/include")
+
 add_library(lumina_core STATIC ${LUMINA_SOURCES} ${LUMINA_SQLITE_SRC})
 
 # T2.11：profile 数据源码树目录注入（LensProfileDb::global() 兜底加载路径 +
@@ -137,6 +148,7 @@ target_compile_definitions(lumina_core PUBLIC
 
 target_link_libraries(lumina_core PUBLIC
   "${THIRDPARTY_DIR}/libraw/lib/libraw.a"
+  lumina_lcms2
   ws2_32 m gdi32 user32)
 
 # ---- 主程序 ----
@@ -347,6 +359,22 @@ add_executable(test_sidecar_repair tests/test_sidecar_repair.cpp)
 target_link_libraries(test_sidecar_repair PRIVATE lumina_core)
 set_target_properties(test_sidecar_repair PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
 add_test(NAME sidecar_repair COMMAND test_sidecar_repair)
+
+# M4-01：ICC 色彩管理（lcms2 接入 → 内置 sRGB/AdobeRGB profile 构造与序列化 →
+# 16bit 中间态往返 mean|Δ|=0 / max≤1 LSB → 灰阶零染色 → 软打样实现冒烟）
+# 产物：m4-icc-roundtrip.json
+add_executable(test_icc tests/test_icc.cpp)
+target_link_libraries(test_icc PRIVATE lumina_core)
+set_target_properties(test_icc PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME icc COMMAND test_icc)
+
+# M4-02：导出嵌入 ICC（JPEG APP2 / TIFF tag 34675 / PSD 0x040F），
+# 三格式 × 两色彩空间 = 6 个文件，独立解析后 profile 字节逐字节一致
+# 产物：m4-embed-report.json
+add_executable(test_icc_embed tests/test_icc_embed.cpp)
+target_link_libraries(test_icc_embed PRIVATE lumina_core)
+set_target_properties(test_icc_embed PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME icc_embed COMMAND test_icc_embed)
 
 # M0 ΔE 基线工具（不入 ctest：依赖本机 RW2 样本；由 scripts/ci/deltae.py 编排）
 add_executable(deltae_baseline tests/color/delta_e_baseline.cpp)

@@ -393,5 +393,34 @@ bool readPsd(const std::string& path, PsdInfo* out, std::string* err) {
   return true;
 }
 
+bool decodePsdComposite(const std::string& path, imaging::Image* out, std::string* err) {
+  PsdInfo info;
+  if (!readPsd(path, &info, err)) return false;
+  if (info.width <= 0 || info.height <= 0) {
+    if (err) *err = "PSD 尺寸非法";
+    return false;
+  }
+  out->width = info.width;
+  out->height = info.height;
+  const int bps = info.depth == 16 ? 2 : 1;
+  const size_t px = static_cast<size_t>(info.width) * info.height * 3;
+  if (info.composite.size() < px * static_cast<size_t>(bps)) {
+    if (err) *err = "PSD 合并图数据不足";
+    return false;
+  }
+  out->pixels.resize(px);
+  const uint8_t* src = info.composite.data();
+  if (bps == 1) {
+    std::memcpy(out->pixels.data(), src, px);
+  } else {
+    // 16bit 大端样本 → 8bit（取高字节；16bit 在 v1.2.0 是 8bit 拓宽口径，非线性映射足够）
+    for (size_t i = 0; i < px; ++i) {
+      const uint16_t v = (static_cast<uint16_t>(src[2 * i]) << 8) | src[2 * i + 1];
+      out->pixels[i] = static_cast<uint8_t>(v >> 8);
+    }
+  }
+  return true;
+}
+
 }  // namespace psd
 }  // namespace lumina

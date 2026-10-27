@@ -13,6 +13,8 @@
 #include <vector>
 
 #include "core/jpeg_encoder.h"
+#include "color/icc.h"
+#include "export/icc_embed.h"
 #include "core/logger.h"
 #include "core/str_util.h"
 #include "export/psd_writer.h"
@@ -746,8 +748,9 @@ bool Exporter::exportOne(const PhotoRecord& record, const ExportSpec& spec,
     }
   }
 
-  // ---- 4. 色彩空间（sRGB 直通 / AdobeRGB 线性矩阵近似，非 ICC 精确转换） ----
-  applyColorSpace(&image, spec.colorSpace);
+  // ---- 4. 色彩空间（M4-01：lcms2 ICC 精确转换；不可用时降级 sRGB 并记 warning） ----
+  std::string achievedSpace = "sRGB";
+  applyColorSpace(&image, spec.colorSpace, &achievedSpace, warning);
 
   // ---- 5. 水印（真合成；失败即报错，不允许"导出了无水印的文件"） ----
   if (spec.watermark.enabled) {
@@ -779,15 +782,30 @@ bool Exporter::exportOne(const PhotoRecord& record, const ExportSpec& spec,
     }
   }
 
-  // ---- 7. 编码落盘 ----
+  // ---- 7. 编码落盘（M4-02：同步嵌入 ICC；标记与像素必须一致，不允许谎报空间） ----
+  std::vector<uint8_t> iccBytes;
+  {
+    std::string iccErr;
+    const color::ProfileId pid =
+        (achievedSpace == "AdobeRGB") ? color::ProfileId::AdobeRgb : color::ProfileId::Srgb;
+    if (!color::profileBytes(pid, &iccBytes, &iccErr)) {
+      if (error) *error = "ICC profile 生成失败: " + iccErr;
+      return false;
+    }
+  }
   std::string encodeErr;
   bool ok = false;
   if (spec.format == "jpg") {
     ok = core::jpeg::encodeToFile(target, image, spec.quality, &encodeErr);
+    if (ok) ok = icc_embed::injectJpegIcc(target, iccBytes, &encodeErr);
   } else if (spec.format == "tiff") {
-    ok = writeTiff(target, image, &encodeErr);
+    ok = writeTiff(target, image, iccBytes, &encodeErr);
   } else if (spec.format == "png") {
     ok = imaging::encodePng(target, image, &encodeErr);
+    if (ok) {
+      // PNG 的 iCCP 需要 deflate 流，v1.2.0 未接入；如实告知而不是假装已标记
+      appendWarning(warning, "PNG 不嵌入 ICC（v1.2.0 仅 JPG/TIFF/PSD 标记色彩空间）");
+    }
   } else {
     // createJob 已拦截；这里再兜一层，避免将来加格式时静默写错
     if (error) *error = "导出格式未实现: " + spec.format;
@@ -876,6 +894,8 @@ bool Exporter::exportOnePsd(const PhotoRecord& record, const ExportSpec& spec,
   };
 
   psd::Document doc;
+  // 实际落地的色彩空间（ICC 嵌入以它为准；转换失败会退成 sRGB）
+  std::string achievedSpace = "sRGB";
 
   // ---- 合成图（顶层）：完整参数（含蒙版）+ 色彩空间 + 水印 ----
   imaging::Image composite = base;
@@ -886,7 +906,7 @@ bool Exporter::exportOnePsd(const PhotoRecord& record, const ExportSpec& spec,
       return false;
     }
   }
-  applyColorSpace(&composite, spec.colorSpace);
+  applyColorSpace(&composite, spec.colorSpace, &achievedSpace, warning);
   if (spec.watermark.enabled) {
     std::string wmErr;
     if (!applyWatermark(&composite, spec.watermark, warning, &wmErr)) {
@@ -900,7 +920,7 @@ bool Exporter::exportOnePsd(const PhotoRecord& record, const ExportSpec& spec,
   std::vector<psd::Layer> layers;
   {
     imaging::Image bg = base;
-    applyColorSpace(&bg, spec.colorSpace);
+    applyColorSpace(&bg, spec.colorSpace, nullptr, nullptr);
     layers.push_back(makeLayer("背景 · 原片", bg));
   }
 
@@ -927,7 +947,7 @@ bool Exporter::exportOnePsd(const PhotoRecord& record, const ExportSpec& spec,
           okAll = false;
           break;
         }
-        applyColorSpace(&rendered, spec.colorSpace);
+        applyColorSpace(&rendered, spec.colorSpace, nullptr, nullptr);
         psd::Layer L = makeLayer(psdNodeLayerName(node.type), rendered);
         L.luminaSnapshot = node.params.serialize();
         layers.push_back(L);
@@ -975,6 +995,16 @@ bool Exporter::exportOnePsd(const PhotoRecord& record, const ExportSpec& spec,
   opts.rle = true;
   opts.writeComposite = true;
   opts.dpi = 72;
+  // M4-02：嵌入与像素一致的 ICC（AdobeRGB 像素必须带 AdobeRGB profile，否则 PS 按 sRGB 解释）
+  {
+    std::string iccErr;
+    const color::ProfileId pid = (achievedSpace == "AdobeRGB") ? color::ProfileId::AdobeRgb
+                                                              : color::ProfileId::Srgb;
+    if (!color::profileBytes(pid, &opts.iccProfile, &iccErr)) {
+      if (error) *error = "ICC profile 生成失败: " + iccErr;
+      return false;
+    }
+  }
   std::string werr;
   if (!psd::writePsd(target, doc, opts, &werr)) {
     if (error) *error = "PSD 写出失败: " + werr;
@@ -1016,7 +1046,8 @@ std::string Exporter::expandTemplate(const std::string& tmpl, const PhotoRecord&
   return name;
 }
 
-bool Exporter::writeTiff(const std::string& path, const imaging::Image& image, std::string* err) {
+bool Exporter::writeTiff(const std::string& path, const imaging::Image& image,
+                         const std::vector<uint8_t>& icc, std::string* err) {
   if (image.width <= 0 || image.height <= 0) {
     if (err) *err = "tiff: 空图像";
     return false;
@@ -1031,18 +1062,24 @@ bool Exporter::writeTiff(const std::string& path, const imaging::Image& image, s
   const uint32_t w = static_cast<uint32_t>(image.width);
   const uint32_t h = static_cast<uint32_t>(image.height);
   const uint32_t pixelBytes = static_cast<uint32_t>(need);
+  // ICC profile 按 TIFF 要求补齐到偶数字节（count 仍为原始长度）
+  std::vector<uint8_t> iccData = icc;
+  if (iccData.size() % 2) iccData.push_back(0);
+  const bool hasIcc = !iccData.empty();
 
-  // IFD 布局：13 个条目（按 tag 升序），紧随其后的值区依次为 BitsPerSample / XRes / YRes
-  const uint16_t kEntryCount = 13;
+  // IFD 布局：13 / 14 个条目（按 tag 升序），紧随其后的值区依次为
+  // BitsPerSample / XRes / YRes，最后是像素数据，再是 ICC profile
+  const uint16_t kEntryCount = hasIcc ? 14 : 13;
   const size_t ifdOffset = 8;
   const size_t ifdSize = 2 + static_cast<size_t>(kEntryCount) * 12 + 4;
   const size_t bitsOffset = ifdOffset + ifdSize;   // 3 × SHORT = 6 字节
   const size_t xResOffset = bitsOffset + 6;        // RATIONAL = 8 字节
   const size_t yResOffset = xResOffset + 8;        // RATIONAL = 8 字节
   const size_t dataOffset = yResOffset + 8;
+  const size_t iccOffset = dataOffset + static_cast<size_t>(pixelBytes);
 
   std::string out;
-  out.reserve(dataOffset + static_cast<size_t>(pixelBytes));
+  out.reserve(iccOffset + iccData.size());
 
   put16(&out, 0x4949);  // "II" 小端
   put16(&out, 42);      // TIFF magic
@@ -1068,6 +1105,10 @@ bool Exporter::writeTiff(const std::string& path, const imaging::Image& image, s
   entry(283, 5, 1, static_cast<uint32_t>(yResOffset));        // YResolution
   entry(284, 3, 1, 1);                                        // PlanarConfiguration = chunky
   entry(296, 3, 1, 2);                                        // ResolutionUnit = inch
+  if (hasIcc) {
+    entry(34675, 7, static_cast<uint32_t>(icc.size()),        // ICC Profile（UNDEFINED）
+          static_cast<uint32_t>(iccOffset));
+  }
   put32(&out, 0);                                             // 无下一个 IFD
 
   put16(&out, 8);
@@ -1079,48 +1120,30 @@ bool Exporter::writeTiff(const std::string& path, const imaging::Image& image, s
   put32(&out, 1);
 
   out.append(reinterpret_cast<const char*>(image.pixels.data()), need);
+  if (hasIcc) out.append(reinterpret_cast<const char*>(iccData.data()), iccData.size());
   if (!writeFileBytes(path, out, err)) return false;
   return true;
 }
 
-void Exporter::applyColorSpace(imaging::Image* image, const std::string& colorSpace) {
-  if (!image || image->pixels.empty() || colorSpace != "AdobeRGB") return;  // sRGB 直通
-  // sRGB(linear) → AdobeRGB(1998)(linear) 矩阵（D65；Bruce Lindbloom 标准矩阵）
-  // 说明：v1.0.0 不做 ICC 精确转换（无 ICC profile 嵌入、无 BPC），仅矩阵近似。
-  static const double kMatrix[3][3] = {
-      {1.96253, -0.61068, -0.34137},
-      {-0.97876, 1.91615, 0.04240},
-      {0.02869, -0.14067, 1.34926},
-  };
-  const double kAdobeGamma = 563.0 / 256.0;  // ≈ 2.19921875
-  const size_t count = image->pixels.size() / 3;
-  uint8_t* px = image->pixels.data();
-  for (size_t i = 0; i < count; ++i) {
-    const double r = px[i * 3 + 0] / 255.0;
-    const double g = px[i * 3 + 1] / 255.0;
-    const double b = px[i * 3 + 2] / 255.0;
-    // sRGB 解码 gamma（分段函数）
-    auto toLinear = [](double v) {
-      return v <= 0.04045 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4);
-    };
-    // AdobeRGB 编码 gamma（纯幂函数）
-    auto fromLinear = [kAdobeGamma](double v) {
-      const double c = v < 0.0 ? 0.0 : v;
-      return std::pow(c, 1.0 / kAdobeGamma);
-    };
-    const double lr = toLinear(r);
-    const double lg = toLinear(g);
-    const double lb = toLinear(b);
-    double ar = kMatrix[0][0] * lr + kMatrix[0][1] * lg + kMatrix[0][2] * lb;
-    double ag = kMatrix[1][0] * lr + kMatrix[1][1] * lg + kMatrix[1][2] * lb;
-    double ab = kMatrix[2][0] * lr + kMatrix[2][1] * lg + kMatrix[2][2] * lb;
-    ar = clampDouble(ar, 0.0, 1.0);
-    ag = clampDouble(ag, 0.0, 1.0);
-    ab = clampDouble(ab, 0.0, 1.0);
-    px[i * 3 + 0] = static_cast<uint8_t>(fromLinear(ar) * 255.0 + 0.5);
-    px[i * 3 + 1] = static_cast<uint8_t>(fromLinear(ag) * 255.0 + 0.5);
-    px[i * 3 + 2] = static_cast<uint8_t>(fromLinear(ab) * 255.0 + 0.5);
+void Exporter::applyColorSpace(imaging::Image* image, const std::string& colorSpace,
+                               std::string* achieved, std::string* warning) {
+  if (achieved) *achieved = "sRGB";
+  if (!image || image->pixels.empty()) return;
+  if (colorSpace != "AdobeRGB") return;  // sRGB 直通（工作空间即 sRGB）
+
+  // M4-01：走 lcms2 ICC 转换（相对色度意图），矩阵近似已删除。
+  std::vector<uint8_t> converted;
+  std::string iccErr;
+  if (!color::convertRgb8(image->pixels.data(), image->width, image->height,
+                          color::ProfileId::Srgb, color::ProfileId::AdobeRgb, &converted,
+                          &iccErr)) {
+    // 无 ICC 兜底：像素保持 sRGB，且**不**标 AdobeRGB（否则文件谎报色彩空间）
+    appendWarning(warning, "ICC 转换不可用，已按 sRGB 导出: " + iccErr);
+    logWarn("export", "ICC 转换失败，降级 sRGB: " + iccErr);
+    return;
   }
+  image->pixels.swap(converted);
+  if (achieved) *achieved = "AdobeRGB";
 }
 
 bool Exporter::applyWatermark(imaging::Image* image, const WatermarkSpec& wm, std::string* warning,

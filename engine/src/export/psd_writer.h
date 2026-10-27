@@ -60,6 +60,8 @@ struct WriteOptions {
   bool writeComposite = true;  // 是否写合并图（PS 兼容建议写；M3-02 对拍依赖它）
   /** 分辨率资源（Image Resource 0x03ED），默认 72dpi；0 = 不写该资源 */
   int dpi = 72;
+  /** 嵌入 ICC（Image Resource 0x040F）；空 = 不写（PS 会提示"未标记的 RGB"） */
+  std::vector<uint8_t> iccProfile;
 };
 
 struct Document {

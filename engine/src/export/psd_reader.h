@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "export/psd_writer.h"
+#include "imaging/imaging.h"
 
 namespace lumina {
 namespace psd {
@@ -56,6 +57,11 @@ struct PsdInfo {
 
 /** 解析 PSD。任何不自洽（截断、越界、不支持的格式）都返回 false + 原文错误。 */
 bool readPsd(const std::string& path, PsdInfo* out, std::string* err);
+
+/** M3-03：把 PSD 合并图解码为 imaging::Image（RGB，8bit；16bit 样本缩放为 8bit）。
+ *  用于「打开 PSD」时把任意 PSD（外来或本方）先作为合并像素层呈现 —— 即「降级为像素层」。
+ *  不依赖任何可编辑信息（节点快照），因此外来 PSD 也能安全显示。 */
+bool decodePsdComposite(const std::string& path, imaging::Image* out, std::string* err);
 
 }  // namespace psd
 }  // namespace lumina

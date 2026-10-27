@@ -5,10 +5,12 @@
 #include <cmath>
 #include <cstdlib>
 
+#include "color/icc.h"
 #include "core/logger.h"
 #include "core/md5.h"
 #include "core/str_util.h"
 #include "export/exporter.h"
+#include "export/psd_reader.h"
 #include "gallery/gallery_service.h"
 #include "imaging/imaging.h"
 #include "import/rename.h"
@@ -135,11 +137,21 @@ void registerMethods(Dispatcher* d, EngineServices* s) {
                       capabilities.setItem("fts5", true);
                       capabilities.setItem("mock", true);
                       json::JsonValue codecs = json::JsonValue::arrayValue();
-                      // 能力声明必须与实际可用集一致：导出只承诺 jpg + tiff（自写 baseline 未压缩）。
-                      // png/psd 已在 export.createJob 明确返回 5001，不能在这里假装支持。
+                      // 能力声明必须与实际可用集一致（M3 起 psd 带图层导出已落地）：
+                      // jpeg / tiff / png / psd 全可用；psd 支持 8/16bit 与分层。
                       codecs.addItem("jpeg");
                       codecs.addItem("tiff");
+                      codecs.addItem("png");
+                      codecs.addItem("psd");
                       capabilities.setItem("codecs", codecs);
+                      json::JsonValue colors = json::JsonValue::arrayValue();
+                      // M4：ICC 色彩管理（lcms2）+ 导出嵌入 ICC + 软打样
+                      colors.addItem("sRGB");
+                      colors.addItem("AdobeRGB");
+                      capabilities.setItem("colorSpaces", colors);
+                      capabilities.setItem("icc", color::available());
+                      capabilities.setItem("softProof", color::available());
+                      capabilities.setItem("printPdf", true);
                       out.setItem("capabilities", capabilities);
                       out.setItem("homeDir", s->config->homeDir());
                       out.setItem("dbPath", s->config->dbPath());
@@ -534,6 +546,9 @@ void registerMethods(Dispatcher* d, EngineServices* s) {
                       if (raw::isSupportedExtension(ext) && ext != "jpg" && ext != "jpeg" &&
                           ext != "png") {
                         ok = s->decoder->decodeToBitmap(file, true, &image, &decodeErr);
+                      } else if (ext == "psd") {
+                        // M3-03：PSD 合并图解码（外来/本方都先作为合并像素层呈现）
+                        ok = lumina::psd::decodePsdComposite(file, &image, &decodeErr);
                       } else {
                         ok = imaging::decodeImageFile(file, &image, &decodeErr);
                       }
@@ -597,6 +612,160 @@ void registerMethods(Dispatcher* d, EngineServices* s) {
                       out.setItem("path", target);
                       out.setItem("width", outImage.width);
                       out.setItem("height", outImage.height);
+                      return out;
+                    });
+  // ================= 5.4b softproof.preview（M4-03：软打样预览 + ΔE 报告） =================
+  // 入参：photoId 或 inputPath、params（缺省读 sidecar）、longEdge（默认 1200）、
+  //       targetProfile（ICC 文件路径，空 = 内置 AdobeRGB 作为演示目标）、
+  //       intent（0..3，默认 1 相对色度）、simulatePaper（默认 true）。
+  // 出参：{ path, width, height, target, deltaE:{mean,median,p95,max}, samples }。
+  // 说明：ΔE00 = 打样后 vs 打样前（同一 sRGB Lab 口径），用于"这一版打样把画面推了多远"
+  //       的量化；PRD 要求的"与 Photoshop 软打样比对"需外部参考，不在本 op 内冒充。
+  d->registerMethod("softproof.preview",
+                    [s](const json::JsonValue& params, RpcError* err) -> json::JsonValue {
+                      const std::string inputPath = params.get("inputPath").asString();
+                      const int64_t id = params.get("photoId").asInt();
+                      PhotoRecord p;
+                      std::string file = inputPath;
+                      if (file.empty()) {
+                        std::string dbErr;
+                        if (!s->photos->getById(id, &p, &dbErr)) {
+                          *err = RpcError(kFileNotFound, "photo not found: " + std::to_string(id));
+                          return json::JsonValue::nullValue();
+                        }
+                        if (!fileExists(p.filePath)) {
+                          *err = RpcError(kFileNotFound, "original file missing: " + p.filePath);
+                          return json::JsonValue::nullValue();
+                        }
+                        file = p.filePath;
+                      }
+                      int longEdge = static_cast<int>(params.get("longEdge").asInt(1200));
+                      if (longEdge < 64 || longEdge > 8000) longEdge = 1200;
+
+                      imaging::Image image;
+                      const std::string ext = extensionOf(file);
+                      std::string decodeErr;
+                      bool ok = false;
+                      if (raw::isSupportedExtension(ext) && ext != "jpg" && ext != "jpeg" &&
+                          ext != "png") {
+                        ok = s->decoder->decodeToBitmap(file, true, &image, &decodeErr);
+                      } else if (ext == "psd") {
+                        ok = lumina::psd::decodePsdComposite(file, &image, &decodeErr);
+                      } else {
+                        ok = imaging::decodeImageFile(file, &image, &decodeErr);
+                      }
+                      if (!ok) {
+                        *err = RpcError(kRawDecodeFailed, decodeErr);
+                        return json::JsonValue::nullValue();
+                      }
+                      const int nativeLong = std::max(image.width, image.height);
+                      if (nativeLong > longEdge) {
+                        imaging::Image scaled;
+                        if (!imaging::resizeImage(
+                                image, &scaled, longEdge,
+                                thumbScaledHeight(image.width, image.height, longEdge))) {
+                          *err = RpcError(kInternalError, "softproof.preview 缩放失败");
+                          return json::JsonValue::nullValue();
+                        }
+                        image = scaled;
+                      }
+
+                      json::JsonValue editParams = params.get("params");
+                      if (!editParams.isObject()) {
+                        if (inputPath.empty() && id > 0) {
+                          std::string loadErr;
+                          if (!s->xmp->loadParams(id, &editParams, &loadErr)) {
+                            *err = RpcError(kInternalError, "sidecar 参数读取失败: " + loadErr);
+                            return json::JsonValue::nullValue();
+                          }
+                        } else {
+                          editParams = json::JsonValue::objectValue();
+                        }
+                      }
+
+                      imaging::ImageBuf buf = plan::displayToPlanBuf(image);
+                      plan::RenderPlan renderPlan;
+                      std::string planErr;
+                      if (!plan::runEditPlan(editParams, &buf, &renderPlan, &planErr)) {
+                        *err = RpcError(kInternalError, "Plan 求值失败: " + planErr);
+                        return json::JsonValue::nullValue();
+                      }
+                      imaging::Image before;
+                      if (!plan::planBufToDisplay(buf, &before, &planErr)) {
+                        *err = RpcError(kInternalError, "Plan 输出编码失败: " + planErr);
+                        return json::JsonValue::nullValue();
+                      }
+
+                      color::SoftProofOptions opts;
+                      opts.targetProfilePath = params.get("targetProfile").asString();
+                      opts.intent = static_cast<int>(params.get("intent").asInt(1));
+                      if (opts.intent < 0 || opts.intent > 3) opts.intent = 1;
+                      opts.proofingIntent = opts.intent;
+                      opts.simulatePaper = params.get("simulatePaper").asBool(true);
+
+                      std::vector<uint8_t> proofed;
+                      if (!color::softProofRgb8(before.pixels.data(), before.width, before.height,
+                                                opts, &proofed, &planErr)) {
+                        *err = RpcError(kInternalError, "软打样转换失败: " + planErr);
+                        return json::JsonValue::nullValue();
+                      }
+                      imaging::Image after = before;
+                      after.pixels.swap(proofed);
+
+                      // ---- ΔE00：打样前 vs 打样后（sRGB Lab，绝对意图） ----
+                      std::vector<double> labA, labB;
+                      if (!color::srgb8ToLab(before.pixels.data(), before.width, before.height,
+                                             &labA, &planErr) ||
+                          !color::srgb8ToLab(after.pixels.data(), after.width, after.height, &labB,
+                                             &planErr)) {
+                        *err = RpcError(kInternalError, "ΔE 计算失败: " + planErr);
+                        return json::JsonValue::nullValue();
+                      }
+                      std::vector<double> des;
+                      des.reserve(static_cast<size_t>(before.width) * before.height);
+                      for (size_t i = 0; i < des.capacity(); ++i) {
+                        des.push_back(color::deltaE00(&labA[i * 3], &labB[i * 3]));
+                      }
+                      std::sort(des.begin(), des.end());
+                      double sum = 0.0;
+                      for (double d : des) sum += d;
+
+                      const std::string outDir = joinPath(s->config->rendersDir(), "softproof");
+                      if (!dirExists(outDir)) makeDirs(outDir);
+                      uint64_t h = 1469598103934665603ull;  // FNV-1a，确定性命名
+                      const std::string key = renderPlan.cacheKeys[2] + "|" +
+                                              opts.targetProfilePath + "|" +
+                                              std::to_string(opts.intent) +
+                                              (opts.simulatePaper ? "|paper" : "|nopaper");
+                      for (unsigned char c : key) {
+                        h ^= c;
+                        h *= 1099511628211ull;
+                      }
+                      const std::string target =
+                          joinPath(outDir, "softproof-" + std::to_string(h) + ".png");
+                      std::string writeErr;
+                      if (!imaging::encodePng(target, after, &writeErr)) {
+                        *err = RpcError(kIoError, writeErr);
+                        return json::JsonValue::nullValue();
+                      }
+
+                      json::JsonValue de = json::JsonValue::objectValue();
+                      de.setItem("mean", des.empty() ? 0.0 : sum / static_cast<double>(des.size()));
+                      de.setItem("median", des.empty() ? 0.0 : des[des.size() / 2]);
+                      de.setItem("p95",
+                                 des.empty() ? 0.0 : des[static_cast<size_t>(des.size() * 95 / 100)]);
+                      de.setItem("max", des.empty() ? 0.0 : des.back());
+
+                      json::JsonValue out = json::JsonValue::objectValue();
+                      out.setItem("path", target);
+                      out.setItem("width", after.width);
+                      out.setItem("height", after.height);
+                      out.setItem("target", opts.targetProfilePath.empty()
+                                                 ? std::string(color::profileName(opts.builtinTarget))
+                                                 : opts.targetProfilePath);
+                      out.setItem("simulatePaper", opts.simulatePaper);
+                      out.setItem("deltaE", de);
+                      out.setItem("samples", static_cast<int64_t>(des.size()));
                       return out;
                     });
   d->registerMethod("cache.clear",
@@ -1602,6 +1771,36 @@ void registerMethods(Dispatcher* d, EngineServices* s) {
   d->registerMethod("export.savePreset",
                     [exportSvc](const json::JsonValue& params, RpcError* err) -> json::JsonValue {
                       return exportSvc->savePreset(params, err);
+                    });
+
+  // ================= 5.10 M3-03：psd.inspect（PSD 自检 / 外来判定） =================
+  // 入参：{ path }；出参：{ path, width, height, depth, channelCount, layerCount,
+  //        hasLuminaSnapshot, foreign, unknownBlockCount }。
+  // foreign = !hasLuminaSnapshot：该 PSD 非 LUMINA 导出 → 打开时降级为合并像素层并显式告知。
+  d->registerMethod("psd.inspect",
+                    [](const json::JsonValue& params, RpcError* err) -> json::JsonValue {
+                      const std::string path = params.get("path").asString();
+                      if (path.empty()) {
+                        *err = RpcError(kInvalidParams, "psd.inspect 需要 path");
+                        return json::JsonValue::nullValue();
+                      }
+                      lumina::psd::PsdInfo info;
+                      std::string rerr;
+                      if (!lumina::psd::readPsd(path, &info, &rerr)) {
+                        *err = RpcError(kIoError, rerr);
+                        return json::JsonValue::nullValue();
+                      }
+                      json::JsonValue out = json::JsonValue::objectValue();
+                      out.setItem("path", path);
+                      out.setItem("width", info.width);
+                      out.setItem("height", info.height);
+                      out.setItem("depth", info.depth);
+                      out.setItem("channelCount", info.channels);
+                      out.setItem("layerCount", static_cast<int>(info.layers.size()));
+                      out.setItem("hasLuminaSnapshot", info.hasLuminaSnapshot);
+                      out.setItem("foreign", !info.hasLuminaSnapshot);
+                      out.setItem("unknownBlockCount", info.unknownBlockCount);
+                      return out;
                     });
 
   // ================= 5.11 Web 客户画廊（已实现）：静态站生成 + 密码门禁 + 反馈回收 =================

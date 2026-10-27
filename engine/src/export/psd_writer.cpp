@@ -323,7 +323,7 @@ bool writePsd(const std::string& path, const Document& doc, const WriteOptions& 
   putU32BE(&four, 0);
   if (!write(four)) return fail("PSD color mode 写入失败");
 
-  // ---- 3. Image resources（可选 ResolutionInfo 0x03ED，提升 PS 兼容） ----
+  // ---- 3. Image resources（ResolutionInfo 0x03ED + ICC profile 0x040F） ----
   std::vector<uint8_t> resBlock;
   if (opts.dpi > 0) {
     const uint32_t fixed = static_cast<uint32_t>(opts.dpi) << 16;
@@ -339,6 +339,16 @@ bool writePsd(const std::string& path, const Document& doc, const WriteOptions& 
     putU16BE(&resBlock, 0);  // 空名（Pascal，补齐到偶）
     putU32BE(&resBlock, static_cast<uint32_t>(data.size()));
     putBytes(&resBlock, data.data(), data.size());
+  }
+  if (!opts.iccProfile.empty()) {
+    // ICC profile（0x040F）：数据段补齐到偶数，长度字段写补齐后的长度（PS 口径）
+    std::vector<uint8_t> icc = opts.iccProfile;
+    if (icc.size() % 2) icc.push_back(0);
+    putStr(&resBlock, "8BIM");
+    putU16BE(&resBlock, 0x040F);
+    putU16BE(&resBlock, 0);
+    putU32BE(&resBlock, static_cast<uint32_t>(icc.size()));
+    putBytes(&resBlock, icc.data(), icc.size());
   }
   std::vector<uint8_t> resLen;
   putU32BE(&resLen, static_cast<uint32_t>(resBlock.size()));
