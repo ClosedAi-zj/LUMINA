@@ -8,6 +8,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { EngineBridge, RpcCallError, resolveEnginePath, resolveHomeDir, legacyHomeDir, type BridgeLifecycle, type EngineNotification } from './engine-bridge';
 import { registerFileProtocol, registerFileScheme } from './file-protocol';
+import { startMcpBridge, stopMcpBridge } from './mcp-bridge';
 
 const isDev = process.env.LUMINA_DEV === '1';
 const isSmoke = process.env.LUMINA_SMOKE === '1';
@@ -632,6 +633,9 @@ async function bootstrap(): Promise<void> {
 
   createWindow();
 
+  // v1.3.0-m3：MCP 控制端口（TCP 桥接 → renderer 执行器），失败只打日志不挡启动
+  startMcpBridge({ homeDir, wc: () => mainWindow?.webContents ?? null });
+
   if (isSmoke) {
     // 冒烟模式：跑完全模块场景（素材库→修图台→导入→健康→协议契约→主题）后截图并退出；
     // T1.7 起逐控件像素断言（19 控件 × ~1.2s）+ 夹具 import/引擎交叉验证 + 导出=预览断言
@@ -698,6 +702,7 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', async (e) => {
+  stopMcpBridge();
   if (bridge) {
     e.preventDefault();
     const b = bridge;

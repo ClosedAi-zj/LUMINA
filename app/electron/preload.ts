@@ -32,6 +32,10 @@ export interface LuminaPreload {
     /** 订阅最大化状态推送（主进程 maximize/unmaximize 时触发） */
     onMaximizeChange(cb: (maximized: boolean) => void): () => void;
   };
+  /** v1.3.0-m3 MCP 桥接：订阅主进程从控制端口转发来的指令（op 由渲染层执行器分发） */
+  onMcpCall(cb: (req: { reqId: number; op: string; params?: unknown }) => void): () => void;
+  /** v1.3.0-m3 MCP 桥接：执行完成后回传结果（reqId 对应 onMcpCall 的 reqId） */
+  resolveMcpCall(result: { reqId: number; ok: boolean; result?: unknown; error?: string }): void;
 }
 
 contextBridge.exposeInMainWorld('lumina', {
@@ -65,5 +69,14 @@ contextBridge.exposeInMainWorld('lumina', {
       ipcRenderer.on('lumina:win:maximized', listener);
       return () => ipcRenderer.removeListener('lumina:win:maximized', listener);
     },
+  },
+  // v1.3.0-m3：MCP 桥接通道（接收 → 执行 → 回传；send 单向回传，主进程 ipcMain.on 承接）
+  onMcpCall: (cb: (req: { reqId: number; op: string; params?: unknown }) => void) => {
+    const listener = (_e: unknown, req: { reqId: number; op: string; params?: unknown }) => cb(req);
+    ipcRenderer.on('lumina:mcp:call', listener);
+    return () => ipcRenderer.removeListener('lumina:mcp:call', listener);
+  },
+  resolveMcpCall: (result: { reqId: number; ok: boolean; result?: unknown; error?: string }) => {
+    ipcRenderer.send('lumina:mcp:call-result', result);
   },
 } satisfies LuminaPreload);
