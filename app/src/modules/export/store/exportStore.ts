@@ -18,6 +18,7 @@ export const DEFAULT_SPEC: ExportSpec = {
   colorSpace: 'sRGB',
   quality: 90,
   psdKeepLayers: true,
+  psdDepth: 8,
   // WP-B8：position/scale 改为引擎原生语义（5 锚点 kebab-case；scale = 相对图宽 12% 的倍率）。
   // 旧默认 bottomRight/scale:8 发给引擎会静默落到右下角且放大到 96% 图宽。
   watermark: { enabled: false, position: 'bottom-right', scale: 0.88, opacity: 60, text: 'LUMINA PHOTO' },

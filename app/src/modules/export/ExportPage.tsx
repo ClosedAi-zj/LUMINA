@@ -53,18 +53,20 @@ export default function ExportPage() {
           <div className="rounded-lg border border-line p-3 flex flex-col gap-3" style={{ background: 'var(--Lumina-Tokens-panel)' }}>
             <div className="flex items-center gap-3">
               <span className="text-2xs text-txt2 w-16 shrink-0">格式</span>
-              {/* v1.1.1 引擎支持 jpg/tiff/png（PNG 为无损，与 TIFF 逐像素一致）；
-                  选 psd 会在 export.createJob 被明确拒绝（5001），UI 先收窄到可用集 */}
+              {/* 引擎自研 PSD（M3-01）：带图层或单层合成。PNG/TIFF 为无损，JPG 带质量。 */}
               <Segmented
-                value={spec.format === 'psd' ? 'jpg' : spec.format}
+                value={spec.format}
                 onChange={(v) => useExport.getState().patchSpec({ format: v })}
                 options={[
                   { value: 'jpg', label: 'JPG' },
                   { value: 'png', label: 'PNG' },
                   { value: 'tiff', label: 'TIFF' },
+                  { value: 'psd', label: 'PSD' },
                 ]}
               />
-              <span className="text-2xs text-txt3">PSD · 带图层：引擎 v1.1.1 暂不支持（见协议缺口清单）</span>
+              {spec.format === 'psd' && (
+                <span className="text-2xs text-txt3">PSD · 节点分层（背景+各调整层+合成层）</span>
+              )}
             </div>
             <div className="flex items-center gap-3">
               <span className="text-2xs text-txt2 w-16 shrink-0">长边</span>
@@ -97,16 +99,35 @@ export default function ExportPage() {
                   format={(v) => `${v}%`}
                 />
               </div>
+            ) : spec.format === 'psd' ? (
+              <div className="flex items-center gap-3 pl-20">
+                <span className="text-2xs text-txt3">质量参数仅 JPG 支持</span>
+              </div>
             ) : (
               <div className="flex items-center gap-3 pl-20">
                 <span className="text-2xs text-txt3">质量参数仅 JPG 支持</span>
               </div>
             )}
             {spec.format === 'psd' && (
-              <div className="flex items-center gap-3">
-                <span className="text-2xs text-txt2 w-16 shrink-0">图层</span>
-                <Toggle checked={spec.psdKeepLayers} onChange={(v) => useExport.getState().patchSpec({ psdKeepLayers: v })} label="保留 PSD 图层" />
-              </div>
+              <>
+                <div className="flex items-center gap-3">
+                  <span className="text-2xs text-txt2 w-16 shrink-0">位深</span>
+                  <Segmented
+                    value={String(spec.psdDepth)}
+                    onChange={(v) => useExport.getState().patchSpec({ psdDepth: Number(v) as 8 | 16 })}
+                    options={[
+                      { value: '8', label: '8 bit' },
+                      { value: '16', label: '16 bit' },
+                    ]}
+                  />
+                  <span className="text-2xs text-txt3">16bit = 8bit 拓宽（引擎工作空间为 8bit 显示）</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-2xs text-txt2 w-16 shrink-0">图层</span>
+                  <Toggle checked={spec.psdKeepLayers} onChange={(v) => useExport.getState().patchSpec({ psdKeepLayers: v })} label="保留 PSD 图层" />
+                  <span className="text-2xs text-txt3">关闭则仅导出合成单层；节点&gt;20 自动降级单层</span>
+                </div>
+              </>
             )}
           </div>
 

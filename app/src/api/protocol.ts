@@ -487,6 +487,7 @@ export interface ExportSpec {
   colorSpace: 'sRGB' | 'AdobeRGB';
   quality: number;
   psdKeepLayers: boolean;
+  psdDepth: 8 | 16;
   watermark: { enabled: boolean; position: string; scale: number; opacity: number; text?: string; imagePath?: string };
   namingTemplate: string;
   outputDir: string;
