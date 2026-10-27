@@ -91,7 +91,7 @@ function defaultParams(): EditParams {
       grainFrequency: 50,
       grainSize: 25,
     },
-    geometry: { hasCrop: false, perspective: { vertical: 0, horizontal: 0, rotate: 0, scale: 100, aspect: 100, x: 0, y: 0 } },
+    geometry: { hasCrop: false, perspective: { vertical: 0, horizontal: 0, rotate: 0, scale: 1, aspect: 0, x: 0, y: 0 } },
     masks: [],
   };
 }
