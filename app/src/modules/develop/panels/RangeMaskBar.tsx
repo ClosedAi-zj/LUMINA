@@ -26,19 +26,36 @@ export default function RangeMaskBar() {
         范围蒙版 · RANGE MASK{selected ? ` · 目标：${maskName(selected.type)}` : ''}
       </span>
       <div className="flex items-center gap-1 shrink-0">
-        {RANGE_TYPES.map((t) => (
-          <button
-            key={t.type}
-            onClick={() => void useDevelop.getState().addMask(t.type)}
-            className={`h-5 px-2 rounded-sm border text-2xs transition-colors ${
-              selected?.type === t.type ? 'border-accent text-accent' : 'border-line text-txt3 hover:text-txt2 hover:bg-hover'
-            }`}
-            style={{ background: selected?.type === t.type ? 'var(--Lumina-Tokens-accentSoft)' : 'var(--Lumina-Tokens-card)' }}
-            title={`新建${t.label}范围蒙版（叠加到当前选中蒙版）`}
-          >
-            {t.label}
-          </button>
-        ))}
+        {RANGE_TYPES.map((t) => {
+          // T2.8：深度范围蒙版未实装（深度图数据源未接入）——置灰 + tooltip，零静默
+          if (t.type === 'depth') {
+            return (
+              <button
+                key={t.type}
+                disabled
+                aria-disabled
+                title="深度范围蒙版未实装（深度图数据源未接入），随后续里程碑交付"
+                className="h-5 px-2 rounded-sm border border-line text-2xs text-txt3 cursor-not-allowed select-none"
+                style={{ background: 'var(--Lumina-Tokens-card)' }}
+              >
+                {t.label}
+              </button>
+            );
+          }
+          return (
+            <button
+              key={t.type}
+              onClick={() => void useDevelop.getState().addMask(t.type)}
+              className={`h-5 px-2 rounded-sm border text-2xs transition-colors ${
+                selected?.type === t.type ? 'border-accent text-accent' : 'border-line text-txt3 hover:text-txt2 hover:bg-hover'
+              }`}
+              style={{ background: selected?.type === t.type ? 'var(--Lumina-Tokens-accentSoft)' : 'var(--Lumina-Tokens-card)' }}
+              title={`新建${t.label}范围蒙版（叠加到当前选中蒙版）`}
+            >
+              {t.label}
+            </button>
+          );
+        })}
       </div>
       {isRange && selected?.range && (
         <div className="flex items-center gap-3 min-w-0 flex-1">

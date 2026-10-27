@@ -12,6 +12,13 @@ const TOOLS: { type: MaskLayer['type']; label: string }[] = [
   { type: 'brush', label: '✎ 画笔' },
 ];
 
+/** T2.8：未实装蒙版叶 —— 置灰 + tooltip 说明（零静默：明确告知不可用与原因，不放假可用控件） */
+const PENDING_TOOLS: { type: MaskLayer['type']; label: string; tip: string }[] = [
+  { type: 'aiSky', label: '☁ 天空', tip: 'AI 天空蒙版未实装（引擎 AI 分割未接入），随后续里程碑交付' },
+  { type: 'aiSubject', label: '☗ 主体', tip: 'AI 主体蒙版未实装（引擎 AI 分割未接入），随后续里程碑交付' },
+  { type: 'aiBackground', label: '▦ 背景', tip: 'AI 背景蒙版未实装（引擎 AI 分割未接入），随后续里程碑交付' },
+];
+
 const LOCAL_SLIDERS: { key: keyof MaskLayer['local']; label: string; min: number; max: number }[] = [
   { key: 'exposure', label: '曝光', min: -5, max: 5, },
   { key: 'contrast', label: '对比', min: -100, max: 100 },
@@ -23,8 +30,15 @@ const LOCAL_SLIDERS: { key: keyof MaskLayer['local']; label: string; min: number
   { key: 'dehaze', label: '去雾', min: -100, max: 100 },
 ];
 
-/** 着色器只有 6 个蒙版槽位（GLSL ES 1.0 常量展开，见 shaders.ts） */
-const MASK_SLOTS = 6;
+/** T2.8：布尔组合标记（replace=独立区域 / intersect=交集 / subtract=减去），列表内可视化 */
+const COMBINE_MARK: Record<MaskLayer['combine'], { sym: string; label: string }> = {
+  replace: { sym: '+', label: '独立区域' },
+  intersect: { sym: '∩', label: '与上一条取交集' },
+  subtract: { sym: '−', label: '从上一条减去' },
+};
+
+/** T2.8：性能提示阈值——20+ 槽只提示不阻断（v1.1 六槽硬限已由 32 槽管线替代） */
+const PERF_HINT_SLOTS = 20;
 
 export default function MaskPanel() {
   const params = useDevelop((s) => s.params);
@@ -40,11 +54,22 @@ export default function MaskPanel() {
 
   return (
     <div>
-      <div className="flex items-center gap-1.5 mb-2">
+      <div className="flex items-center gap-1.5 mb-2 flex-wrap">
         {TOOLS.map((t) => (
           <Button key={t.type} size="sm" onClick={() => void addMask(t.type)} title={`新建${maskName(t.type)}蒙版`}>
             {t.label}
           </Button>
+        ))}
+        {PENDING_TOOLS.map((t) => (
+          <button
+            key={t.type}
+            disabled
+            title={t.tip}
+            aria-disabled
+            className="h-6 px-2 rounded-sm text-2xs text-txt3 border border-line cursor-not-allowed select-none"
+          >
+            {t.label}
+          </button>
         ))}
       </div>
 
@@ -52,12 +77,16 @@ export default function MaskPanel() {
         {params.masks.length === 0 && <div className="text-2xs text-txt3 py-1">无蒙版 · 点击上方工具新建</div>}
         {params.masks.map((m, i) => {
           const desc = m.type === 'linear' ? `渐变 ${(m.amount ?? 100) > 0 ? '+' : ''}${m.amount ?? 100}` : m.type === 'radial' ? `径向 ${(m.amount ?? 100) > 0 ? '+' : ''}${m.amount ?? 100}` : `画笔 ${m.strokes?.length ?? 0} 笔画`;
+          const combine = COMBINE_MARK[m.combine];
           return (
             <div
               key={m.id}
-              className={`flex items-center gap-1.5 h-7 px-2 rounded-sm cursor-pointer ${selectedMaskId === m.id ? 'bg-[var(--Lumina-Tokens-accentSoft)]' : 'hover:bg-hover'}`}
+              // T2.8：布尔关系缩进可读——首条顶格；后续条缩进 + 组合符标记（与上一条的组合方式）
+              className={`flex items-center gap-1.5 h-7 px-2 rounded-sm cursor-pointer ${i > 0 ? 'ml-4' : ''} ${selectedMaskId === m.id ? 'bg-[var(--Lumina-Tokens-accentSoft)]' : 'hover:bg-hover'}`}
               onClick={() => selectMask(m.id)}
+              title={i > 0 ? `组合方式：${combine.label}` : undefined}
             >
+              {i > 0 && <span className="text-2xs text-txt3 w-3 text-center shrink-0" aria-hidden>{combine.sym}</span>}
               <Toggle checked={m.enabled} onChange={(v) => void updateMask(m.id, { enabled: v })} />
               <span className={`flex-1 truncate text-2xs ${m.enabled ? 'text-txt2' : 'text-txt3 line-through'}`}>
                 {maskName(m.type)} · {desc}
@@ -71,15 +100,14 @@ export default function MaskPanel() {
         })}
       </div>
 
-      {/* 槽位上限必须可见：超过 6 个蒙版时，后面的蒙版不参与渲染（着色器槽位），
-          否则用户会以为"蒙版画了但没效果"——这正是冒烟里 brush-atlas 抓到的静默失效 */}
-      {params.masks.filter((m) => m.enabled).length > MASK_SLOTS && (
+      {/* T2.8：20+ 槽性能提示——只提示不阻断（v1.1 六槽硬限与「超 6 不参与渲染」警告
+          已随 32 槽 mask pass 管线作废，旧限位 UI 一并清除） */}
+      {params.masks.length > PERF_HINT_SLOTS && (
         <div
           className="text-2xs rounded-md px-2 py-1 mb-2"
-          style={{ background: 'rgba(185,138,46,0.14)', color: 'var(--Lumina-Tokens-accent)' }}
+          style={{ background: 'var(--Lumina-Tokens-accentSoft)', color: 'var(--Lumina-Tokens-accent)' }}
         >
-          渲染槽位上限 {MASK_SLOTS}：当前 {params.masks.filter((m) => m.enabled).length} 个启用蒙版，
-          超出部分（列表尾部）不参与预览渲染
+          当前 {params.masks.length} 个蒙版（超过 {PERF_HINT_SLOTS}）：预览性能可能逐渐下降，建议合并或清理多余蒙版（不阻断，可继续编辑）
         </div>
       )}
 
@@ -89,9 +117,20 @@ export default function MaskPanel() {
             <span>
               蒙版 · {maskName(selected.type)}
             </span>
-            <span className="num text-txt3">{selected.type}</span>
+            <span className="flex items-center gap-1.5">
+              {/* T2.8：蒙版反相未实装——置灰 + tooltip（零静默，不放假可用控件） */}
+              <button
+                disabled
+                aria-disabled
+                title="蒙版反相未实装（引擎 invert 未接入），随后续里程碑交付"
+                className="h-5 px-1.5 rounded-sm border border-line text-2xs text-txt3 cursor-not-allowed select-none"
+              >
+                反相
+              </button>
+              <span className="num text-txt3">{selected.type}</span>
+            </span>
           </div>
-          {(selected.type === 'linear' || selected.type === 'radial') && (
+          {(selected.type === 'linear' || selected.type === 'radial' || selected.type === 'brush') && (
             <Slider label="主强度" value={selected.amount ?? 100} min={-100} max={100} defaultValue={0} onChange={(v) => void updateMask(selected.id, { amount: v })} />
           )}
           {selected.type === 'brush' && (

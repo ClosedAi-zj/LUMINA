@@ -243,6 +243,20 @@ function createWindow(): void {
         process.stdout.write(`[smoke] parity-report write failed: ${String(err)}\n`);
       }
     }
+    // T2.7/T2.8：mask parity 报表落盘（渲染层单行 JSON → build/mask-parity-report.json，
+    // 与 parity93-report 同口径；此前只在 stdout，不便归档比对）
+    if (isSmoke && message.includes('[smoke-scenario] mask-parity-report: ')) {
+      try {
+        const json = message.slice(message.indexOf('mask-parity-report: ') + 'mask-parity-report: '.length).trim();
+        JSON.parse(json); // 完整性校验
+        const out = path.resolve(appRoot, 'build/mask-parity-report.json');
+        fs.mkdirSync(path.dirname(out), { recursive: true });
+        fs.writeFileSync(out, json, 'utf8');
+        process.stdout.write(`[smoke] mask-parity-report -> ${out}\n`);
+      } catch (err) {
+        process.stdout.write(`[smoke] mask-parity-report write failed: ${String(err)}\n`);
+      }
+    }
     // T1.5：导出=预览像素断言报表落盘（渲染层单行 JSON → build/export-parity-report.json）
     if (isSmoke && message.includes('[smoke-scenario] export-parity-report: ')) {
       try {
