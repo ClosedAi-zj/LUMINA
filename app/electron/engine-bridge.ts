@@ -11,7 +11,7 @@
  */
 
 import { spawn, ChildProcessWithoutNullStreams } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -24,6 +24,9 @@ const RESTART_BREAKER_COUNT = 3;
 const RESTART_BREAKER_WINDOW_MS = 20_000;
 /** 首次握手（system.initialize）超时：v1.1.1 由 15s 放宽到 60s，兜底大图库冷启动迁移/扫描耗时 */
 const ENGINE_HANDSHAKE_TIMEOUT_MS = 60_000;
+/** 启动期踩到单实例锁（上一实例引擎尚未退净）时的重试次数与间隔：8 次 × 1s ≈ 8s 观察窗 */
+const ENGINE_START_RETRIES = 8;
+const ENGINE_START_RETRY_MS = 1000;
 
 /** 引擎 → UI 的通知（无 id） */
 export interface EngineNotification {
@@ -34,6 +37,34 @@ export interface EngineNotification {
 
 /** 生命周期事件（桥接层自身发出，非协议事件） */
 export type BridgeLifecycle = 'starting' | 'ready' | 'crashed-restarting' | 'recovered' | 'stopped';
+
+/**
+ * 探测单实例锁当前的占用形态（只用于日志与诊断，不作为重试开关）。
+ * 锁 = {home}/engine.lock，引擎以 dwShareMode=0 独占打开 → 别的进程连读都读不到，
+ * 因此「读失败」本身就是有人的证据，只有 ENOENT 才代表确实没人：
+ *  - free  : 文件不存在（含上一实例已退净）
+ *  - live  : 文件存在但读不到（独占句柄 / delete-pending）→ 可能是活实例，也可能在收尾
+ *  - stale : 能读到内容但 pid 已不在
+ *  - held  : 能读到内容且 pid 存活（正常不会走到，独占模式下读不到）
+ */
+function probeEngineLock(homeDir: string): 'free' | 'live' | 'stale' | 'held' {
+  try {
+    const txt = readFileSync(path.join(homeDir, 'engine.lock'), 'utf8');
+    const m = /pid=(\d+)/.exec(txt);
+    if (!m) return 'stale';
+    const pid = Number(m[1]);
+    if (!Number.isFinite(pid) || pid <= 0) return 'stale';
+    try {
+      process.kill(pid, 0); // 仅探活
+      return 'held';
+    } catch {
+      return 'stale';
+    }
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return code === 'ENOENT' ? 'free' : 'live';
+  }
+}
 
 interface PendingRequest {
   id: number;
@@ -151,15 +182,38 @@ export class EngineBridge {
     if (this.breakerTripped) {
       process.stdout.write('[engine-bridge] 重启熔断生效，直接使用内置 Mock\n');
     } else if (existsSync(this.enginePath)) {
-      try {
-        await this.spawnEngine();
-        this.mode = 'engine';
-        this.emitLifecycle('ready');
-        return 'engine';
-      } catch (err) {
-        this.teardownProcess();
-        process.stderr.write(`[engine-bridge] 真引擎启动失败，降级 Mock：${(err as Error).message}\n`);
+      let lastErr: unknown = null;
+      // 上一实例的引擎进程在 Electron 被强杀后仍会存活到「stdin 关闭 → 退出」完成（实测数秒），
+      // 这段时间内新引擎会撞单实例锁并退出 code=3，旧逻辑直接降级 Mock。
+      // 但 Mock 与真实 RAW 参数不同源，进修图台会触发已知的 typed-array 崩溃 ——
+      // 所以撞锁时先等锁释放再试，只有真起不来才降级。
+      for (let attempt = 0; attempt < ENGINE_START_RETRIES; attempt += 1) {
+        try {
+          // 受控启动期间标记 restarting：抑制 close 处理器里的「崩溃看护 + 熔断计数」，
+          // 否则 3 次重试会把自己算成崩溃并触发熔断
+          this.restarting = true;
+          await this.spawnEngine();
+          this.mode = 'engine';
+          this.emitLifecycle('ready');
+          return 'engine';
+        } catch (err) {
+          lastErr = err;
+          this.teardownProcess();
+          const msg = err instanceof Error ? err.message : String(err);
+          const lockConflict = /code=3|another engine instance/i.test(msg);
+          const last = attempt === ENGINE_START_RETRIES - 1;
+          if (!lockConflict || last) break;
+          process.stdout.write(
+            `[engine-bridge] 引擎单实例锁未释放（probe=${probeEngineLock(this.homeDir)}），${ENGINE_START_RETRY_MS}ms 后重试（${attempt + 1}/${ENGINE_START_RETRIES - 1}）\n`,
+          );
+          await new Promise((r) => setTimeout(r, ENGINE_START_RETRY_MS));
+        } finally {
+          this.restarting = false;
+        }
       }
+      process.stderr.write(
+        `[engine-bridge] 真引擎启动失败，降级 Mock：${lastErr instanceof Error ? lastErr.message : String(lastErr)}\n`,
+      );
     } else {
       process.stdout.write(`[engine-bridge] 引擎 exe 不存在（${this.enginePath}），使用内置 Mock\n`);
     }
