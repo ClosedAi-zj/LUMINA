@@ -651,9 +651,8 @@ export async function runSmokeScenario(): Promise<void> {
         return [r / idxs.length, g / idxs.length, b / idxs.length];
       };
       const gridBefore = sampleGrid();
-      // 新蒙版工厂 amount 缺省 0（强度语义 = 引擎 w=f·opacity·amount）：不设强度
-      // 蒙版正确地不施加（T2.7 前旧 shader 忽略 amount 属语义错误）。先设 amount。
-      await useDevelop.getState().updateMask(brushMaskId, { amount: 100 });
+      // T2.8 裁决（lead 批准）：工厂 brush 缺省 amount=100（新建即全效），此处不再手动设值——
+      // 下方 dCovered 阈值断言即「新建 brush 蒙版 → 不调 amount 立即生效」。
       await sleep(400);
       await useDevelop.getState().updateMaskLocal(brushMaskId, 'exposure', 60, true);
       await sleep(600);
