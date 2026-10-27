@@ -10,12 +10,15 @@
 //  4) 版本化：schema_meta.db_version 记录已达版本；重复运行必须 0 变更。
 //  5) 003（develop_settings）/ 004（history）均为「绿地建表 + DAO + 迁移框架」；
 //     004 由 T2.4 实装：只建表（可丢弃派生日志），数据由 EditSessionManager 按需写入。
+//  6) 005（repair_sidecar_paths，T2.12）：存量 sidecar_path 失效行扫描与修复；
+//     触碰文件系统（fileExists/fileMtimeMs）是本迁移的职责所在（架构 §3.3.1 末小节明示）。
 #ifndef LUMINA_DB_MIGRATIONS_H_
 #define LUMINA_DB_MIGRATIONS_H_
 
 #include <atomic>
 #include <functional>
 #include <string>
+#include <vector>
 
 #include "db/database.h"
 
@@ -37,7 +40,8 @@ constexpr int kDbVersionBaseline = 1;        // M1 关账（schema.sql 全量建
 constexpr int kDbVersionFilesTable = 2;      // 002：四级表 files + photos.file_id（T2.2）
 constexpr int kDbVersionDevelopSettings = 3;  // 003：develop_settings 派生缓存（T2.3）
 constexpr int kDbVersionHistory = 4;          // 004：history_entries/state（T2.4）
-constexpr int kTargetDbVersion = kDbVersionHistory;
+constexpr int kDbVersionSidecarRepair = 5;    // 005：sidecar_path 失效行修复（T2.12）
+constexpr int kTargetDbVersion = kDbVersionSidecarRepair;
 
 // 迁移报告（供日志、job 进度文案与测试断言使用）
 struct MigrationReport {
@@ -77,6 +81,42 @@ bool applyMigration003DevelopSettings(Database* db, MigrationReport* report, int
 // 004：history 派生日志（T2.4；只建表 + 索引，幂等）。
 // 数据由 EditSessionManager 经 HistoryDao 按需写入（单 op 一事务，折叠为 checkpoint）。
 bool applyMigration004History(Database* db, MigrationReport* report, int* err);
+
+// 005：存量 sidecar_path 失效行扫描与修复（T2.12，架构 §3.3.1 末小节）。
+//
+// 判定：sidecar_path <> '' 且 !fileExists(sidecar_path)（空值 = 本来无 sidecar，跳过）。
+// 修复（对每条失效行二选一）：
+//   a) 重算命中：XmpService::sidecarPathFor(file_path) 同口径（replaceExtension(.xmp)）
+//      的重算路径存在 → UPDATE sidecar_path/ sidecar_mtime；
+//   b) 归零：重算路径不存在且 has_edits=0 → 该行从未有过 sidecar，sidecar_path 是
+//      导入时写下的虚构路径（无参数可丢），UPDATE sidecar_path=''（可随时由
+//      sidecarPathFor 重算，非「清空线索」）；
+//   c) 不可恢复：重算路径不存在且 has_edits=1（用户编辑过、sidecar 真丢失）→
+//      计入 unrecoverable[]（{photoId, filePath, triedSidecar}），写 warning，
+//      **不得静默丢弃、不得清空 sidecar_path**（保留线索给用户手工找回）。
+// 幂等：第二遍 scanned 相同、repaired/normalized=0、unrecoverable 逐条一致（不动点）。
+// 报告：reportJsonPath 非空时落盘 {scanned, stale, repaired, normalized,
+//      repairedByRecompute, unrecoverable[]}（{home}/reports/m2-sidecar-repair.json，
+//      由 Database::runMigrations 以 db 文件所在目录推导）。
+struct SidecarRepairUnrecoverable {
+  int64_t photoId = 0;
+  std::string filePath;      // 原片当前路径（用户手工找回的入口）
+  std::string triedSidecar;  // 重算过但不存在的 sidecar 路径
+};
+
+struct SidecarRepairReport {
+  int64_t scanned = 0;             // 扫描的 photos 总行数
+  int64_t stale = 0;               // 失效行（sidecar_path 非空且文件不存在）
+  int64_t repaired = 0;            // 成功修复总数 = repairedByRecompute + normalized
+  int64_t repairedByRecompute = 0; // 重算命中（a 类）
+  int64_t normalized = 0;          // has_edits=0 虚构路径归零（b 类）
+  std::vector<SidecarRepairUnrecoverable> unrecoverable;  // sidecar 真丢失（c 类）
+  int64_t durationMs = 0;
+  std::string detail;              // 可读说明（失败原因 / 不可恢复计数）
+};
+
+bool applyMigration005RepairSidecarPaths(Database* db, SidecarRepairReport* report, int* err,
+                                         const std::string& reportJsonPath = std::string());
 
 // PRAGMA table_info 守卫：table 是否已有 column（ALTER 不幂等，必须先问）
 bool tableHasColumn(Database* db, const std::string& table, const std::string& column);

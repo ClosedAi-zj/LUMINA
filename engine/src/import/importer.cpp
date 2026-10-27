@@ -196,7 +196,12 @@ PhotoRecord Importer::buildRecord(const ImportOptions& opts, const ScanItem& ite
   p.gpsLat = meta.gpsLat;
   p.gpsLng = meta.gpsLng;
   p.gpsAlt = meta.gpsAlt;
-  p.sidecarPath = replaceExtension(finalPath, "xmp");
+  // T2.12 修复（migration 005 成因）：此前对所有导入行无条件写虚构 sidecar_path
+  // （无论 .xmp 是否存在），存量库因此积累 13,842 行「路径非空且文件不存在」的假失效行。
+  // 只在 sidecar 真实存在时登记；未编辑照片保持空（=「本来无 sidecar」，读取路径
+  // 对空值有 sidecarPathFor 重算兜底），首次编辑时由 updateSidecar 写入真实路径。
+  const std::string sidecarCandidate = replaceExtension(finalPath, "xmp");
+  if (fileExists(sidecarCandidate)) p.sidecarPath = sidecarCandidate;
   return p;
 }
 

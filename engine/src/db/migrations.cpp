@@ -13,6 +13,7 @@
 
 #include "core/logger.h"
 #include "core/str_util.h"
+#include "json/json_value.h"
 
 namespace lumina {
 namespace db {
@@ -417,6 +418,172 @@ bool applyMigration004History(Database* db, MigrationReport* report, int* err) {
   return true;
 }
 
+// ---------------- 005：存量 sidecar_path 失效行扫描与修复（T2.12）----------------
+// 设计见 migrations.h 注释。要点：
+//   * db 层不 include xmp：sidecar 路径规则与 XmpService::sidecarPathFor 同一事实源
+//     （core/str_util.h 的 replaceExtension），逐字镜像其实现（xmp_service.cpp:176-178）；
+//   * 分层说明：本迁移必须触碰文件系统（fileExists/fileMtimeMs）——扫描与修复的判定
+//     对象就是磁盘上的 sidecar 文件（架构 §3.3.1 末小节明示，003 的「db 层不碰盘」
+//     约束针对的是派生缓存回填，不适用于本迁移）；
+//   * 幂等：失效行要么被修复（路径存在/归零）、要么进 unrecoverable 保留原状；
+//     第二遍扫描时前者不再失效、后者重复进入 unrecoverable（同一集合，无新增修复）；
+//   * 逐条列出：unrecoverable 进 report + logWarn，不清空、不静默。
+
+namespace {
+
+// PRAGMA database_list 读 main 库文件路径（Database 不存路径，避免改其接口）
+std::string dbFilePath(Database* db) {
+  auto stmt = db->prepareCached("pragma:dblist", "PRAGMA database_list;", nullptr);
+  if (!stmt || !stmt->valid()) return {};
+  std::string path;
+  while (stmt->step(nullptr)) {
+    // 列：seq(0) name(1) file(2)
+    if (stmt->columnText(1) == "main") path = stmt->columnText(2);
+  }
+  stmt->reset();
+  return path;
+}
+
+void writeSidecarRepairReportJson(const std::string& path, const SidecarRepairReport& rep) {
+  json::JsonValue unrecoverable = json::JsonValue::arrayValue();
+  for (const auto& u : rep.unrecoverable) {
+    json::JsonValue o = json::JsonValue::objectValue();
+    o.setItem("photoId", u.photoId);
+    o.setItem("filePath", u.filePath);
+    o.setItem("triedSidecar", u.triedSidecar);
+    unrecoverable.addItem(o);
+  }
+  json::JsonValue root = json::JsonValue::objectValue();
+  root.setItem("migration", "005-repair_sidecar_paths");
+  root.setItem("scanned", rep.scanned);
+  root.setItem("stale", rep.stale);
+  root.setItem("repaired", rep.repaired);
+  root.setItem("repairedByRecompute", rep.repairedByRecompute);
+  root.setItem("normalized", rep.normalized);
+  root.setItem("unrecoverableCount", static_cast<int64_t>(rep.unrecoverable.size()));
+  root.setItem("unrecoverable", unrecoverable);
+  root.setItem("durationMs", rep.durationMs);
+  std::string err;
+  if (!makeDirs(parentPath(path))) err = "makeDirs failed";
+  else if (!writeFileAtomic(path, root.serialize() + "\n", &err)) {
+    // 落盘失败不阻断迁移：数据修复已完成，报告写失败只降级为日志留痕
+  }
+  if (!err.empty()) {
+    logWarn("migrate", "005 report write failed: " + path + " (" + err + ")");
+  } else {
+    logInfo("migrate", "005 report -> " + path);
+  }
+}
+
+}  // namespace
+
+bool applyMigration005RepairSidecarPaths(Database* db, SidecarRepairReport* report, int* err,
+                                         const std::string& reportJsonPath) {
+  if (!db || !db->isOpen()) {
+    if (err) *err = kMigrationNotOpen;
+    return false;
+  }
+  SidecarRepairReport local;
+  SidecarRepairReport& rep = report ? *report : local;
+  const int64_t t0 = nowMs();
+  std::string e;
+
+  auto scan = db->prepareCached(
+      "m005Scan",
+      "SELECT id, file_path, sidecar_path, has_edits FROM photos "
+      "WHERE sidecar_path IS NOT NULL AND sidecar_path != '' ORDER BY id;",
+      &e);
+  auto upd = db->prepareCached(
+      "m005Update", "UPDATE photos SET sidecar_path=?, sidecar_mtime=? WHERE id=?;", &e);
+  auto clr =
+      db->prepareCached("m005Clear", "UPDATE photos SET sidecar_path='' WHERE id=?;", &e);
+  if (!scan || !scan->valid() || !upd || !upd->valid() || !clr || !clr->valid()) {
+    if (err) *err = kMigrationBackfillFailed;
+    rep.detail = "005 prepare failed: " + e;
+    logError("migrate", rep.detail);
+    return false;
+  }
+
+  struct Row {
+    int64_t id;
+    std::string filePath;
+    std::string sidecarPath;
+    bool hasEdits;
+  };
+  std::vector<Row> rows;
+  while (scan->step(nullptr)) {
+    rows.push_back({scan->columnInt64(0), scan->columnText(1), scan->columnText(2),
+                    scan->columnInt64(3) != 0});
+  }
+  scan->reset();
+  rep.scanned = static_cast<int64_t>(rows.size());
+
+  // 修复分块提交（与 002 同纪律：取消/失败时最多丢一块）
+  constexpr size_t kChunk = 500;
+  for (size_t start = 0; start < rows.size(); start += kChunk) {
+    const size_t end = std::min(rows.size(), start + kChunk);
+    if (!db->begin(&e)) {
+      if (err) *err = kMigrationBackfillFailed;
+      rep.detail = "005 begin failed: " + e;
+      logError("migrate", rep.detail);
+      return false;
+    }
+    for (size_t i = start; i < end; ++i) {
+      const Row& r = rows[i];
+      if (fileExists(r.sidecarPath)) continue;  // 有效行，跳过
+      ++rep.stale;
+      // 重算口径 = XmpService::sidecarPathFor(file_path)（同一事实源 replaceExtension）
+      const std::string recomputed = replaceExtension(r.filePath, "xmp");
+      if (recomputed != r.sidecarPath && fileExists(recomputed)) {
+        // a) 重算命中：移动过文件夹的行，sidecar 跟着原片在新位置
+        upd->bindText(1, recomputed);
+        upd->bindInt64(2, fileMtimeMs(recomputed));
+        upd->bindInt64(3, r.id);
+        upd->step(nullptr);
+        upd->reset();
+        ++rep.repaired;
+        ++rep.repairedByRecompute;
+        continue;
+      }
+      if (!r.hasEdits) {
+        // b) 归零：从未编辑 → 本来就无 sidecar，登记的路径是导入时写下的虚构值
+        //    （importer 对所有导入行写 replaceExtension(.xmp)，无论文件是否存在）。
+        //    清空可随时由 sidecarPathFor 重算，不属于「清空用户线索」。
+        clr->bindInt64(1, r.id);
+        clr->step(nullptr);
+        clr->reset();
+        ++rep.repaired;
+        ++rep.normalized;
+        continue;
+      }
+      // c) sidecar 真丢失：保留 sidecar_path（线索给用户手工找回），逐条列出
+      rep.unrecoverable.push_back({r.id, r.filePath, recomputed});
+    }
+    if (!db->commit(&e)) {
+      if (err) *err = kMigrationBackfillFailed;
+      rep.detail = "005 commit failed: " + e;
+      logError("migrate", rep.detail);
+      return false;
+    }
+  }
+
+  rep.durationMs = nowMs() - t0;
+  if (!rep.unrecoverable.empty()) {
+    rep.detail = std::to_string(rep.unrecoverable.size()) +
+                 " 行 sidecar 真丢失（has_edits=1 且重算不存在），已逐条进报告、保留原路径";
+    logWarn("migrate", "005: " + rep.detail);
+  }
+  logInfo("migrate", "005 repair_sidecar_paths: scanned=" + std::to_string(rep.scanned) +
+                         " stale=" + std::to_string(rep.stale) +
+                         " repaired=" + std::to_string(rep.repaired) + " (recompute " +
+                         std::to_string(rep.repairedByRecompute) + " + normalized " +
+                         std::to_string(rep.normalized) + ") unrecoverable=" +
+                         std::to_string(rep.unrecoverable.size()) + " in " +
+                         std::to_string(rep.durationMs) + " ms");
+  if (!reportJsonPath.empty()) writeSidecarRepairReportJson(reportJsonPath, rep);
+  return true;
+}
+
 // ---------------- 版本化调度 ----------------
 bool runVersionedMigrations(Database* db, int* err) {
   return runVersionedMigrations(db, err, nullptr, nullptr, nullptr);
@@ -481,6 +648,23 @@ bool runVersionedMigrations(Database* db, int* err, MigrationReport* report,
     logInfo("migrate", "migrated to db_version=" + std::to_string(rep.toVersion) +
                            " (history " +
                            std::string(rep.histTableCreated ? "created" : "present") + ")");
+  }
+  // 005：存量 sidecar_path 失效行修复（T2.12）。报告落 {db 所在目录}/reports/
+  // （真实应用 db = {home}/lumina.db → {home}/reports/m2-sidecar-repair.json，架构口径）。
+  if (rep.fromVersion < kDbVersionSidecarRepair) {
+    const std::string dbPath = normalizePath(dbFilePath(db));
+    std::string reportPath;
+    if (!dbPath.empty()) {
+      reportPath = parentPath(dbPath) + "/reports/m2-sidecar-repair.json";
+    }
+    SidecarRepairReport rep005;
+    if (!applyMigration005RepairSidecarPaths(db, &rep005, err, reportPath)) return false;
+    rep.toVersion = kDbVersionSidecarRepair;
+    if (!writeDbVersion(db, rep.toVersion, err)) return false;
+    logInfo("migrate", "migrated to db_version=" + std::to_string(rep.toVersion) +
+                           " (sidecar repair: stale " + std::to_string(rep005.stale) +
+                           ", repaired " + std::to_string(rep005.repaired) +
+                           ", unrecoverable " + std::to_string(rep005.unrecoverable.size()) + ")");
   }
   return true;
 }

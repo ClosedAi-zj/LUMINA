@@ -321,6 +321,13 @@ target_link_libraries(test_lens_profile PRIVATE lumina_core)
 set_target_properties(test_lens_profile PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
 add_test(NAME lens_profile COMMAND test_lens_profile)
 
+# M2 T2.12：migration 005 repair_sidecar_paths（S1 判定分流 / S2 幂等不动点 /
+# S3 无静默（unrecoverable 逐条列出）/ S4 报告产物 / S5 版本门控）
+add_executable(test_sidecar_repair tests/test_sidecar_repair.cpp)
+target_link_libraries(test_sidecar_repair PRIVATE lumina_core)
+set_target_properties(test_sidecar_repair PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME sidecar_repair COMMAND test_sidecar_repair)
+
 # M0 ΔE 基线工具（不入 ctest：依赖本机 RW2 样本；由 scripts/ci/deltae.py 编排）
 add_executable(deltae_baseline tests/color/delta_e_baseline.cpp)
 target_link_libraries(deltae_baseline PRIVATE lumina_core)
