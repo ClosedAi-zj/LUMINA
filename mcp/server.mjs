@@ -185,6 +185,31 @@ const TOOLS = [
     },
   },
   {
+    name: 'open_tabs',
+    description: '在修图台批量打开多个照片为「文档」（首张成为当前文档，其余进文档标签条；上限 10）。等价图库多选后按 Enter 的接力修图。',
+    inputSchema: {
+      type: 'object',
+      properties: { ids: { type: 'array', items: { type: 'number' }, description: '照片 id 数组（list_photos 返回的 id；第一个成为当前文档）' } },
+      required: ['ids'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'close_tab',
+    description: '关闭修图台的某个已打开文档；关掉当前文档时自动切到相邻文档。',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'number', description: '要关闭的照片 id（list_tabs 返回的 tabs 之一）' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'list_tabs',
+    description: '列出修图台已打开的文档（tabs）与当前文档（current）。',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
     name: 'get_develop_params',
     description: '读取当前照片的全部调整参数（白平衡/曝光/对比/曲线/HSL/蒙版栈等）。',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },

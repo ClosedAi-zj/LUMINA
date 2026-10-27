@@ -123,6 +123,33 @@ async function opOpenPhoto(params: Record<string, unknown>): Promise<Record<stri
   return { photoId: dev.photoId, sessionId: dev.sessionId, revision: dev.revision, view: 'develop' };
 }
 
+/** G9 文档 Tab：批量打开多个修图文档（首张成为当前，其余进 Tab 列表） */
+async function opOpenTabs(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const raw = params.ids;
+  if (!Array.isArray(raw) || raw.length === 0) throw new McpOpError('参数 ids 必须是非空数字数组');
+  const ids = raw.map((v) => Math.trunc(requireNumber(v, 'ids[]')));
+  useUi.getState().navigate('develop');
+  await useDevelop.getState().openTabs(ids);
+  const dev = useDevelop.getState();
+  return { tabs: dev.tabs, current: dev.photoId, count: dev.tabs.length };
+}
+
+/** G9 文档 Tab：关闭某个文档（关掉当前时自动切到相邻文档） */
+async function opCloseTab(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const id = Math.trunc(requireNumber(params.id, 'id'));
+  const before = useDevelop.getState().tabs;
+  if (!before.includes(id)) throw new McpOpError(`id=${id} 不在已打开文档里（当前: ${before.join(', ') || '空'}）`);
+  await useDevelop.getState().closeTab(id);
+  const dev = useDevelop.getState();
+  return { closed: id, tabs: dev.tabs, current: dev.photoId };
+}
+
+/** G9 文档 Tab：列出已打开文档（便于自检核对顺序与当前项） */
+async function opListTabs(): Promise<Record<string, unknown>> {
+  const dev = useDevelop.getState();
+  return { tabs: dev.tabs, current: dev.photoId, count: dev.tabs.length, sessionId: dev.sessionId };
+}
+
 async function opGetDevelopParams(): Promise<Record<string, unknown>> {
   const { photoId, sessionId, params } = requireDevelopSession();
   return {
@@ -306,6 +333,9 @@ const OPS: Record<string, (params: Record<string, unknown>) => Promise<Record<st
   lumina_status: () => opStatus(),
   list_photos: (p) => opListPhotos(p),
   open_photo: (p) => opOpenPhoto(p),
+  open_tabs: (p) => opOpenTabs(p),
+  close_tab: (p) => opCloseTab(p),
+  list_tabs: () => opListTabs(),
   get_develop_params: () => opGetDevelopParams(),
   set_develop_params: (p) => opSetDevelopParams(p),
   add_mask: (p) => opAddMask(p),
