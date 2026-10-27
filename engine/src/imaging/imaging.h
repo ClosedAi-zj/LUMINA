@@ -51,6 +51,8 @@ struct HslBands {
   }
   static int bandIndex(const std::string& name);  // 协议键名 → 下标；未知返回 -1
 };
+// 单位口径注意：本 imaging 模块的 HSL 色相为角度制 [0,360)（内部实现
+// rgbToHslDeg），与 plan/ops/opsmath.cpp 的 rgbToHsl（归一化 [0,1)）不同。
 void applyHslApprox(Image* image, const HslBands& bands);
 
 }  // namespace imaging

@@ -186,7 +186,9 @@ double hueDistance(double a, double b) {
   return d;
 }
 
-void rgbToHsl(double r, double g, double b, double* h, double* s, double* l) {
+// 单位口径：hue 输出为角度制 [0,360)，与 plan/ops/opsmath.cpp 的 rgbToHsl
+// （归一化 [0,1)）不同名同义陷阱——本文件版刻意命名 rgbToHslDeg 以示区别。
+void rgbToHslDeg(double r, double g, double b, double* h, double* s, double* l) {
   double mx = std::max(r, std::max(g, b));
   double mn = std::min(r, std::min(g, b));
   double dd = mx - mn;
@@ -241,7 +243,7 @@ void applyHslApprox(Image* image, const HslBands& bands) {
     double g = image->pixels[i + 1] / 255.0;
     double b = image->pixels[i + 2] / 255.0;
     double h = 0.0, s = 0.0, l = 0.0;
-    rgbToHsl(r, g, b, &h, &s, &l);
+    rgbToHslDeg(r, g, b, &h, &s, &l);
     if (s > 0.0) {
       double hueShift = 0.0;
       double satMul = 1.0;
