@@ -9,6 +9,9 @@
   --Lumina-Tokens-hover: #23272d;
   --Lumina-Tokens-viewer: #08090b;
   --Lumina-Tokens-browserBar: #181b1f;
+  /* G6 画布外框（R6 v2-B7）：观察区 #08090B **外围**的深灰 pasteboard（PS 画布外围），
+     双主题同值 —— 灰框衬底保证照片判断中性；观察区本身仍是恒色 #08090B（红线 R5 不动）。 */
+  --Lumina-Tokens-pasteboard: #17191d;
   /* UI 迭代 ③（对齐 LR）：分隔线略提亮一档，面板/卡片边界更清晰可辨 */
   --Lumina-Tokens-border: #2a2f36;
   --Lumina-Tokens-textPrimary: #f2f2f2;

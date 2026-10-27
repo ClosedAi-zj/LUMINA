@@ -1,5 +1,5 @@
 /**
- * 修图工作区右栏（v1.2.0 阶段 3 皮肤）：8 组折叠卡片 + 直方图。
+ * 修图工作区右栏（v1.2.0 阶段 3 皮肤；M2b-2 G5 dock 化）：8 参数组 dock 标签组 + 蒙版/直方图常驻卡片。
  *
  * 叶数归属（与架构文档 §4 的 93 叶表一致，逐组标注）：
  *   基础 14 ｜ 曲线 11 ｜ 色彩 32 ｜ 细节 7 ｜ 镜头 2 ｜ 几何 13 ｜ 效果 6 ｜ 校准 7 ｜ 蒙版 1（容器）
@@ -9,13 +9,12 @@
  * （CPU/GPU parity 全绿），此前的「未参与渲染」提示与 PendingDot 占位已整体移除。
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useDevelop, sliderLabel, temperatureToKelvin } from '../../../store/developStore';
 import CurveEditor from '../CurveEditor';
 import MaskPanel from './MaskPanel';
 import HistogramPanel, { type Histogram } from './HistogramPanel';
 import { PanelCard, GroupLabel, ParamSlider, ParamToggle, ParamSegmented } from './panelKit';
-import { PanelEntries } from './LeftRail';
 import type { CurvePoint, EditParams, HslBand } from '../../../api/protocol';
 
 const HSL_BANDS: { value: HslBand; label: string }[] = [
@@ -71,23 +70,75 @@ function Row(props: { params: EditParams; path: string; label?: string; min: num
   );
 }
 
+/**
+ * G5 dock 标签组（R6 v2-B5，PS 右侧 dock 同组切换形态）：
+ * 8 个参数组归入一个 dock，标签切换；**全部组保持挂载**（display:none 隐藏），
+ * 切 tab 不丢面板状态（展开态 / 组内选择态 / 未提交输入）；
+ * 列滚动位置在切换前后保存恢复（验收断言点）。
+ * 蒙版 / 直方图不进 dock：02-B3 设计约定「已建蒙版必须常驻可见」，维持常驻卡片。
+ */
+const DOCK_TABS: { id: string; label: string }[] = [
+  { id: 'basic', label: '基础' },
+  { id: 'curve', label: '曲线' },
+  { id: 'color', label: '色彩' },
+  { id: 'detail', label: '细节' },
+  { id: 'lens', label: '镜头' },
+  { id: 'geometry', label: '几何' },
+  { id: 'effects', label: '效果' },
+  { id: 'calibration', label: '校准' },
+];
+
 export default function ProPanel({ histogram }: { histogram?: Histogram | null }) {
   const params = useDevelop((s) => s.params);
+  const [activeTab, setActiveTab] = useState('basic');
+  const colRef = useRef<HTMLDivElement>(null);
+  const scrollTopRef = useRef(0);
+  const switchTab = (id: string) => {
+    scrollTopRef.current = colRef.current?.scrollTop ?? 0;
+    setActiveTab(id);
+  };
+  // 切 tab 恢复列滚动位置：面板状态不许因切换被甩走
+  useEffect(() => {
+    if (colRef.current) colRef.current.scrollTop = scrollTopRef.current;
+  }, [activeTab]);
+
   if (!params) return null;
 
   return (
-    <div className="h-full overflow-y-auto p-2 flex flex-col gap-1.5" style={{ background: 'var(--Lumina-Tokens-canvas)' }}>
-      {/* 右上入口（02-6）：快照 / 图层 */}
-      <PanelEntries />
-
-      <BasicGroup params={params} />
-      <CurveGroup params={params} />
-      <ColorGroup params={params} />
-      <DetailGroup params={params} />
-      <LensGroup params={params} />
-      <GeometryGroup params={params} />
-      <EffectsGroup params={params} />
-      <CalibrationGroup params={params} />
+    <div ref={colRef} className="h-full overflow-y-auto p-2 flex flex-col gap-1.5" style={{ background: 'var(--Lumina-Tokens-canvas)' }}>
+      {/* G5 dock：8 参数组标签组（PS dock 形态；组保持挂载，切 tab 不丢状态） */}
+      <div className="shrink-0 rounded-lgC bg-panel overflow-hidden" style={{ boxShadow: 'var(--Lumina-Tokens-shadow1)' }}>
+        <div className="flex items-center flex-wrap gap-0.5 px-1.5 pt-1.5 border-b border-line" role="tablist" aria-label="调整面板 dock">
+          {DOCK_TABS.map((t) => {
+            const active = activeTab === t.id;
+            return (
+              <button
+                key={t.id}
+                role="tab"
+                aria-selected={active}
+                onClick={() => switchTab(t.id)}
+                className={`h-7 px-1.5 rounded-t-mdC text-2xs transition-colors ${
+                  active ? 'text-txt bg-hover font-medium' : 'text-txt2 hover:text-txt hover:bg-hover'
+                }`}
+                style={active ? { boxShadow: 'inset 0 -2px 0 var(--Lumina-Tokens-accent)' } : undefined}
+              >
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
+        <div className="p-1.5 flex flex-col gap-1.5">
+          {/* inactive 组 display:none 但保持挂载：展开态/选择态/输入不丢 */}
+          <div style={{ display: activeTab === 'basic' ? undefined : 'none' }}><BasicGroup params={params} /></div>
+          <div style={{ display: activeTab === 'curve' ? undefined : 'none' }}><CurveGroup params={params} /></div>
+          <div style={{ display: activeTab === 'color' ? undefined : 'none' }}><ColorGroup params={params} /></div>
+          <div style={{ display: activeTab === 'detail' ? undefined : 'none' }}><DetailGroup params={params} /></div>
+          <div style={{ display: activeTab === 'lens' ? undefined : 'none' }}><LensGroup params={params} /></div>
+          <div style={{ display: activeTab === 'geometry' ? undefined : 'none' }}><GeometryGroup params={params} /></div>
+          <div style={{ display: activeTab === 'effects' ? undefined : 'none' }}><EffectsGroup params={params} /></div>
+          <div style={{ display: activeTab === 'calibration' ? undefined : 'none' }}><CalibrationGroup params={params} /></div>
+        </div>
+      </div>
 
       {/* 02-B3：已建蒙版必须常驻可见（设计依据 LR 蒙版面板常驻列出），默认展开 */}
       <PanelCard title="蒙版" icon="mask" defaultOpen hint="局部调整 · 已建列表常驻">

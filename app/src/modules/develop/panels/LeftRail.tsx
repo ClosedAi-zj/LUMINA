@@ -1,15 +1,16 @@
 /**
- * 修图工作区左栏（v1.2.0 阶段 3）：导航器 / 预设 两张卡片；另提供右上「快照 / 图层」入口。
- * 历史继续复用既有 HistoryPanel，用同样的卡片外壳承载。
+ * 修图工作区左栏（v1.2.0 阶段 3 皮肤；M2b-2 G4 常驻化）：
+ * 导航器 / 预设 / 快照 / 图层 四张常驻卡片 + 历史（DevelopPage 承载）。
+ * 左栏顺序 = 导航器 → 预设 → 快照 → 历史（R6 §3.2 LR 顺序）；
+ * 快照/图层不再以 Dialog 为唯一入口（原「右上 chip + 弹层」PanelEntries 已移除，功能全部迁入常驻卡片）。
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useDevelop, normalizeParams } from '../../../store/developStore';
 import { api } from '../../../api/engine';
 import { errText, fileUrl } from '../../../api/rpc-client';
 import { useJobStore } from '../../../store/jobStore';
 import { Button } from '../../../components/primitives';
-import { Dialog } from '../../../components/shell';
 import { PanelCard } from './panelKit';
 import LayersPanel from './LayersPanel';
 import type { PresetInfo, SnapshotInfo } from '../../../api/protocol';
@@ -107,22 +108,22 @@ export function PresetCard() {
 }
 
 /**
- * 右上入口（02-6）：快照 / 图层。
- * 设计稿把这两个入口放在右栏顶部；这里做成两个 chip 按钮 + 弹层，避免重排既有面板。
+ * G4 快照常驻卡片（原右上 Dialog 迁移，功能不丢：新建 / 恢复 / 时间戳 / 失败不静默）。
+ * photoId 变化自动刷新列表；保存后就地刷新。
  */
-export function PanelEntries() {
+export function SnapshotCard() {
   const photoId = useDevelop((s) => s.photoId);
-  const stack = useDevelop((s) => s.params?.adjustmentStack ?? []);
-  const [snapOpen, setSnapOpen] = useState(false);
-  const [layerOpen, setLayerOpen] = useState(false);
   const [snaps, setSnaps] = useState<SnapshotInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!snapOpen || photoId === null) return;
+  const refresh = useCallback(async () => {
+    if (photoId === null) {
+      setSnaps([]);
+      return;
+    }
     setLoading(true);
-    api.edit
+    await api.edit
       .getSnapshots(photoId)
       .then((list) => {
         setSnaps(list);
@@ -130,49 +131,39 @@ export function PanelEntries() {
       })
       .catch((e) => setErr(errText(e)))
       .finally(() => setLoading(false));
-  }, [snapOpen, photoId]);
+  }, [photoId]);
 
-  const chip = 'h-6 px-2 rounded-pill text-2xs border border-line text-txt2 hover:text-txt hover:bg-hover transition-colors';
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
 
   return (
-    <div className="flex items-center gap-1.5 px-1">
-      <button className={chip} onClick={() => setSnapOpen(true)} style={{ background: 'var(--Lumina-Tokens-card)' }}>
-        快照 {snaps.length > 0 ? snaps.length : ''}
-      </button>
-      <button className={chip} onClick={() => setLayerOpen(true)} style={{ background: 'var(--Lumina-Tokens-card)' }}>
-        图层 {stack.length}
-      </button>
-      <span className="flex-1" />
-
-      <Dialog open={snapOpen} title="快照" onClose={() => setSnapOpen(false)} width={420}>
-        <div className="flex items-center gap-2 mb-2">
-          <Button
-            size="sm"
-            variant="primary"
-            onClick={async () => {
-              await useDevelop.getState().saveSnapshot(`快照 ${new Date().toLocaleTimeString('zh-Hans-CN', { hour: '2-digit', minute: '2-digit' })}`);
-              if (photoId !== null) setSnaps(await api.edit.getSnapshots(photoId));
-            }}
-          >
-            新建快照
-          </Button>
-          <span className="text-2xs text-txt3">{loading ? '加载中…' : `${snaps.length} 条`}</span>
-        </div>
-        {err && <div className="text-2xs mb-2" style={{ color: 'var(--Lumina-Tokens-danger)' }}>{err}</div>}
-        {snaps.length === 0 && !err && <div className="text-2xs text-txt3 py-3">暂无快照</div>}
-        <div className="flex flex-col gap-1 max-h-64 overflow-y-auto">
+    <PanelCard title="快照" icon="clock" defaultOpen hint={err ? '加载失败' : loading ? '加载中…' : `${snaps.length} 条`}>
+      <div className="px-2 pb-1 flex flex-col gap-1">
+        <Button
+          size="sm"
+          variant="primary"
+          onClick={async () => {
+            await useDevelop.getState().saveSnapshot(`快照 ${new Date().toLocaleTimeString('zh-Hans-CN', { hour: '2-digit', minute: '2-digit' })}`);
+            await refresh();
+          }}
+        >
+          新建快照
+        </Button>
+        {err && <div className="text-2xs px-1" style={{ color: 'var(--Lumina-Tokens-danger)' }}>{err}</div>}
+        {snaps.length === 0 && !err && <div className="text-2xs text-txt3 py-1.5">暂无快照</div>}
+        <div className="flex flex-col gap-px max-h-52 overflow-y-auto">
           {snaps.map((s) => (
-            <div key={s.snapshotId} className="flex items-center gap-2 h-7 px-2 rounded-mdC hover:bg-hover">
+            <div key={s.snapshotId} className="flex items-center gap-2 h-7 px-2 rounded-mdC hover:bg-hover shrink-0">
               <span className="text-2xs text-txt2 flex-1 truncate">{s.name}</span>
               <span className="num text-2xs text-txt3">{new Date(s.createdAt).toLocaleString('zh-Hans-CN')}</span>
               <button
-                className="text-2xs text-accent hover:opacity-80"
+                className="text-2xs text-accent hover:opacity-80 shrink-0"
                 onClick={async () => {
                   if (photoId === null) return;
                   try {
                     const res = await api.edit.restoreSnapshot(photoId, s.snapshotId);
                     await useDevelop.getState().applyPatch(normalizeParams(res.params), true, `恢复快照 · ${s.name}`);
-                    setSnapOpen(false);
                   } catch (e) {
                     useJobStore.getState().toast(`恢复快照失败：${errText(e)}`, 'error', 6000);
                   }
@@ -183,11 +174,16 @@ export function PanelEntries() {
             </div>
           ))}
         </div>
-      </Dialog>
+      </div>
+    </PanelCard>
+  );
+}
 
-      <Dialog open={layerOpen} title="调整图层" onClose={() => setLayerOpen(false)} width={460}>
-        <LayersPanel />
-      </Dialog>
-    </div>
+/** G4 调整图层常驻卡片（原右上 Dialog 迁移；栈内容复用 LayersPanel） */
+export function LayersCard() {
+  return (
+    <PanelCard title="图层" icon="sliders" defaultOpen hint="调整图层栈">
+      <LayersPanel />
+    </PanelCard>
   );
 }

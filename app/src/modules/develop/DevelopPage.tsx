@@ -22,7 +22,7 @@ import RangeMaskBar from './panels/RangeMaskBar';
 import TransformBar from './panels/TransformBar';
 import Filmstrip from '../library/Filmstrip';
 import { PanelCard } from './panels/panelKit';
-import { NavigatorCard, PresetCard } from './panels/LeftRail';
+import { NavigatorCard, PresetCard, SnapshotCard, LayersCard } from './panels/LeftRail';
 import { fileUrl } from '../../api/rpc-client';
 import { useMemo } from 'react';
 import type { EditParams } from '../../api/protocol';
@@ -359,22 +359,28 @@ function DevelopLoaded({
           {visibleLeft && (
             /* R7 M1：左侧轨道栏 = 通透侧栏材质（玻璃底色/模糊走 .glass-m1 组合类，令牌供色） */
             <aside className="glass-m1 w-60 shrink-0 overflow-y-auto flex flex-col gap-1.5 rounded-lgC p-1">
+              {/* G4：左栏顺序 = 导航器 → 预设 → 快照 → 历史（R6 §3.2 LR 顺序）；图层常驻其后（原 Dialog 入口移除） */}
               <NavigatorCard />
               <PresetCard />
+              <SnapshotCard />
               <PanelCard title="历史" defaultOpen hint="撤销 / 重做 / 快照">
                 {/* 历史/快照条目可能上百条：卡片内限高滚动，避免把整个左栏顶长 */}
                 <div className="max-h-[420px] overflow-y-auto">
                   <HistoryPanel />
                 </div>
               </PanelCard>
+              <LayersCard />
             </aside>
           )}
           <section className="flex-1 min-w-0 flex flex-col rounded-lgC overflow-hidden border border-line" style={{ background: 'var(--Lumina-Tokens-panel)', boxShadow: 'var(--Lumina-Tokens-shadow1)' }}>
             <ViewerToolbar />
             <div className="relative flex-1 min-h-0 flex flex-col">
-              <div className="relative flex-1 min-h-0 flex">
-                <ViewerCanvas onHistogram={onHist} />
-                <GuidesOverlay />
+              {/* G6 画布外框：#17191D pasteboard 在观察区外围（观察区 #08090B 恒色不动，红线 R5） */}
+              <div className="relative flex-1 min-h-0 flex" style={{ background: 'var(--Lumina-Tokens-pasteboard)' }}>
+                <div className="relative flex-1 min-h-0 flex m-1.5">
+                  <ViewerCanvas onHistogram={onHist} />
+                  <GuidesOverlay />
+                </div>
               </div>
               <RangeMaskBar />
               <TransformBar />
@@ -403,7 +409,12 @@ function DevelopLoaded({
 
           <section className="flex-1 min-w-0 flex flex-col rounded-lgC overflow-hidden border border-line" style={{ background: 'var(--Lumina-Tokens-panel)', boxShadow: 'var(--Lumina-Tokens-shadow1)' }}>
             <ViewerToolbar />
-            <ViewerCanvas onHistogram={onHist} />
+            {/* G6 画布外框：#17191D pasteboard 在观察区外围（观察区 #08090B 恒色不动，红线 R5） */}
+            <div className="relative flex-1 min-h-0 flex" style={{ background: 'var(--Lumina-Tokens-pasteboard)' }}>
+              <div className="relative flex-1 min-h-0 flex m-1.5">
+                <ViewerCanvas onHistogram={onHist} />
+              </div>
+            </div>
           </section>
 
           {visibleRight && (

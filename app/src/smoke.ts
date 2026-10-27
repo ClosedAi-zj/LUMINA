@@ -99,12 +99,41 @@ export async function runSmokeScenario(): Promise<void> {
     const sync = await api.edit.syncToSelection(firstId, [firstId + 1, firstId + 2], true);
     log(`develop-preset: presets=${presets.length} applied=${presets[0].name} snapshot=ok sync=${sync.updated}`);
 
-    // T1.7 验收截图：切专业模式（确认「部分参数尚未参与渲染」提示条已消失 + 8 组面板全接线形态）
+    // T1.7 验收截图：切专业模式（确认「部分参数尚未参与渲染」提示条已消失 + dock/左栏形态）
     useDevelop.getState().setMode('pro');
     await sleep(600);
     const proHintGone = !document.body.innerText.includes('尚未参与渲染');
-    const proPanelCount = document.body.innerText.split('\n').filter((l) => ['基础', '曲线', '色彩', '细节', '镜头', '几何', '效果', '校准'].includes(l.trim())).length;
-    log(`t17-pro: hintGone=${proHintGone} panelCards=${proPanelCount}`);
+    // M2b-2 G4：左栏常驻顺序断言（导航器→预设→快照→历史，R6 §3.2 LR 顺序）+ 图层常驻可见
+    const railTitles = Array.from(document.querySelectorAll('.panel-section-title')).map((el) => (el.textContent ?? '').trim());
+    const idx = (t: string) => railTitles.indexOf(t);
+    const railOrderOk = idx('导航器') > -1 && idx('导航器') < idx('预设') && idx('预设') < idx('快照') && idx('快照') < idx('历史');
+    const layersResident = idx('图层') > -1;
+    // M2b-2 G5：dock 8 个 tab；切 tab 不丢组内状态 —— 色彩组点「橙」色带 → 切基础 → 切回，
+    // 「橙」选中态必须还在（证明组未被卸载；展开态/输入同理走同一挂载机制）
+    const dockTab = (label: string) =>
+      Array.from(document.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find((b) => b.textContent?.trim() === label);
+    const dockTabCount = document.querySelectorAll('[role="tab"]').length;
+    dockTab('色彩')?.click();
+    await sleep(300);
+    // 色彩卡默认折叠（defaultOpen=false，PanelCard 折叠态不渲染内容）：先展开——
+    // 这个「展开态」本身也是 G5「切 tab 不丢状态」的断言点之一
+    const cardHeader = (title: string) =>
+      Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find(
+        (b) => b.querySelector('.panel-section-title')?.textContent?.trim() === title,
+      );
+    cardHeader('色彩')?.click();
+    await sleep(300);
+    const anyBtn = (label: string) => Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((b) => b.textContent?.trim() === label);
+    anyBtn('橙')?.click();
+    await sleep(200);
+    const bandOn = (anyBtn('橙')?.getAttribute('style') ?? '').includes('accentSoft');
+    dockTab('基础')?.click();
+    await sleep(200);
+    dockTab('色彩')?.click();
+    await sleep(300);
+    const bandStillOn = (anyBtn('橙')?.getAttribute('style') ?? '').includes('accentSoft');
+    const cardStillOpen = cardHeader('色彩')?.getAttribute('aria-expanded') === 'true';
+    log(`t17-pro: hintGone=${proHintGone} dockTabs=${dockTabCount} railOrder=${railOrderOk} layersResident=${layersResident} dockStateKeep=${bandOn}/${bandStillOn} foldKeep=${cardStillOpen}`);
     log('pro-shot'); // 主进程据此拍专业模式 → build/review-t17-develop-pro.png
     await sleep(900);
     useDevelop.getState().setMode('fast');
