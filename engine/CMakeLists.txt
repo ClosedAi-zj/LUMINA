@@ -114,6 +114,8 @@ set(LUMINA_SOURCES
   src/core/jpeg_encoder.cpp
   src/export/exporter.cpp
   src/export/text_raster.cpp
+  src/export/psd_writer.cpp
+  src/export/psd_reader.cpp
   src/gallery/gallery_service.cpp
   src/specialty/hdr_service.cpp
   src/specialty/denoise_service.cpp
@@ -187,6 +189,24 @@ add_executable(test_op_table tests/test_op_table.cpp)
 target_link_libraries(test_op_table PRIVATE lumina_core)
 set_target_properties(test_op_table PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
 add_test(NAME op_table COMMAND test_op_table)
+
+# M3-01：PSD 写出 / 读取 / 未知块往返
+add_executable(test_psd tests/test_psd.cpp)
+target_link_libraries(test_psd PRIVATE lumina_core)
+set_target_properties(test_psd PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME psd COMMAND test_psd)
+
+# M3-01c：PSD 导出集成（plan→graph→writer→reader + 第三方独立解析）
+add_executable(test_psd_export tests/test_psd_export.cpp)
+target_link_libraries(test_psd_export PRIVATE lumina_core)
+set_target_properties(test_psd_export PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME psd_export COMMAND test_psd_export)
+
+# M3-02：PSD 合成图对比（引擎权威渲染 vs PSD 合并图 round-trip）
+add_executable(test_psd_composite tests/test_psd_composite.cpp)
+target_link_libraries(test_psd_composite PRIVATE lumina_core)
+set_target_properties(test_psd_composite PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME psd_composite COMMAND test_psd_composite)
 
 # T0.4：几何单应 + 一次重采样
 add_executable(test_geometry16 tests/test_geometry16.cpp)

@@ -1,8 +1,8 @@
 // 导出队列实现：预设持久化（SQLite export_presets）+ 异步导出 job（JPG / TIFF / PNG）
 // 红线 1：绝不改写原片，只读「原片 + sidecar」；目标文件落在 outputDir（缺省 {home}/exports）。
 // 红线 2：任何单张失败都进 result.failed 明细，不中断整批；不允许静默成功。
-// 降级（明确报错，不伪造）：psd（带图层）在 createJob 阶段返回 5001 codecUnavailable。
 // 文字水印：ASCII 走内置 3x5 点阵；非 ASCII（中文等）走系统字体光栅化（text_raster）。
+// psd（M3-01）：engine 自研 PSD 编码（version 1 / RGB），带图层或单层合成按 spec 决定；
 #include "export/exporter.h"
 
 #include <algorithm>
@@ -15,10 +15,13 @@
 #include "core/jpeg_encoder.h"
 #include "core/logger.h"
 #include "core/str_util.h"
+#include "export/psd_writer.h"
 #include "export/text_raster.h"
+#include "graph/node_graph.h"
 #include "imaging/imaging.h"
 #include "import/rename.h"
 #include "plan/render_exec.h"
+#include "xmp/xmp_mapper.h"
 
 namespace lumina {
 namespace exporter {
@@ -253,7 +256,7 @@ bool ExportSpec::fromJson(const json::JsonValue& v, ExportSpec* out, std::string
   if (format == "tif") format = "tiff";
   if (format != "jpg" && format != "tiff" && format != "png" && format != "psd") {
     if (err) {
-      *err = "不支持的导出格式: " + format + "（支持 jpg|tiff|png；psd 为 v1.0.0 降级项）";
+      *err = "不支持的导出格式: " + format + "（支持 jpg|tiff|png|psd）";
     }
     return false;
   }
@@ -279,6 +282,12 @@ bool ExportSpec::fromJson(const json::JsonValue& v, ExportSpec* out, std::string
 
   spec.quality = clampInt(static_cast<int>(v.get("quality").asInt(90)), 1, 100);
   spec.psdKeepLayers = v.get("psdKeepLayers").asBool(false);
+  const int psdDepth = static_cast<int>(v.get("psdDepth").asInt(8));
+  if (!ExportSpec::isPsdDepthValid(psdDepth)) {
+    if (err) *err = "psdDepth 非法: " + std::to_string(psdDepth) + "（仅支持 8 | 16）";
+    return false;
+  }
+  spec.psdDepth = psdDepth;
   spec.watermark = WatermarkSpec::fromJson(v.get("watermark"));
 
   const std::string tmpl = v.get("namingTemplate").asString("{date}-{name}");
@@ -303,6 +312,7 @@ json::JsonValue ExportSpec::toJson() const {
   out.setItem("colorSpace", colorSpace);
   out.setItem("quality", quality);
   out.setItem("psdKeepLayers", psdKeepLayers);
+  out.setItem("psdDepth", psdDepth);
   out.setItem("watermark", watermark.toJson());
   out.setItem("namingTemplate", namingTemplate);
   out.setItem("outputDir", outputDir);
@@ -470,23 +480,8 @@ json::JsonValue Exporter::createJob(const json::JsonValue& params, JobManager* j
     return json::JsonValue::nullValue();
   }
 
-  // 降级项：psd（带图层）没有可靠编码实现 → 明确报 5001，绝不"成功但文件是 jpg"
-  // （png 自 WP-C3 起由 stb_image_write 支持，见 imaging::encodePng）
-  if (spec.format == "psd") {
-    json::JsonValue data = json::JsonValue::objectValue();
-    data.setItem("format", spec.format);
-    json::JsonValue supported = json::JsonValue::arrayValue();
-    supported.addItem("jpg");
-    supported.addItem("tiff");
-    supported.addItem("png");
-    data.setItem("supported", supported);
-    data.setItem("alternative", "jpg");
-    if (err) {
-      *err = rpc::RpcError(rpc::kCodecUnavailable,
-                           "导出格式暂不可用: " + spec.format + "（v1.0.0 支持 jpg/tiff/png）", data);
-    }
-    return json::JsonValue::nullValue();
-  }
+  // psd 已在 exportOne 内实现（M3-01）：带图层或单层合成，按 spec.psdKeepLayers 决定。
+  // 不再返回 5001 codecUnavailable。
 
   const int64_t jobId = jobs->start("export.run", [this, photoIds, spec](JobContext& ctx) {
     runExport(photoIds, spec, ctx);
@@ -714,30 +709,40 @@ bool Exporter::exportOne(const PhotoRecord& record, const ExportSpec& spec,
     image = scaled;
   }
 
-  // ---- 3. 应用 sidecar 参数（T1.5：统一走 Plan —— compilePlan/executePlan，
-  //      与预览 GPU 管线/develop.render 同一实现；旧 applyToneApprox/applyHslApprox
-  //      近似公式已销毁，导出像素 = Plan 在导出分辨率下的求值） ----
+  // ---- 3. 载入 sidecar 编辑参数（此处不立即整图应用：psd 需逐节点分层渲染） ----
+  json::JsonValue editParams;
+  bool haveEditParams = false;
   if (xmp_) {
     const std::string sidecar = record.sidecarPath.empty()
                                     ? xmp_->sidecarPathFor(record.filePath)
                                     : record.sidecarPath;
-    json::JsonValue params;
     std::string paramErr;
-    if (xmp_->loadParamsFromPath(record.filePath, sidecar, &params, &paramErr)) {
-      imaging::ImageBuf buf = plan::displayToPlanBuf(image);
-      plan::RenderPlan renderPlan;
-      std::string planErr;
-      if (!plan::runEditPlan(params, &buf, &renderPlan, &planErr)) {
-        // Plan 求值失败 = 该张导出失败（零静默；不允许回退旧近似公式伪造成功）
-        if (error) *error = "Plan 求值失败: " + planErr;
-        return false;
-      }
-      if (!plan::planBufToDisplay(buf, &image, &planErr)) {
-        if (error) *error = "Plan 输出编码失败: " + planErr;
-        return false;
-      }
+    if (xmp_->loadParamsFromPath(record.filePath, sidecar, &editParams, &paramErr)) {
+      haveEditParams = true;
     } else {
       appendWarning(warning, "sidecar 参数读取失败，按原片导出: " + paramErr);
+    }
+  }
+
+  // ---- 3b. PSD 路径（M3-01：分层 / 单层合成） ----
+  if (spec.format == "psd") {
+    return exportOnePsd(record, spec, outDir, seqNo, seqTotal, image, editParams,
+                        haveEditParams, outPath, warning, error);
+  }
+
+  // ---- 3c. 常规格式：整图应用 Plan（pipeline 同源，杜绝"导出与预览不一致"） ----
+  if (haveEditParams) {
+    imaging::ImageBuf buf = plan::displayToPlanBuf(image);
+    plan::RenderPlan renderPlan;
+    std::string planErr;
+    if (!plan::runEditPlan(editParams, &buf, &renderPlan, &planErr)) {
+      // Plan 求值失败 = 该张导出失败（零静默；不允许回退旧近似公式伪造成功）
+      if (error) *error = "Plan 求值失败: " + planErr;
+      return false;
+    }
+    if (!plan::planBufToDisplay(buf, &image, &planErr)) {
+      if (error) *error = "Plan 输出编码失败: " + planErr;
+      return false;
     }
   }
 
@@ -795,6 +800,189 @@ bool Exporter::exportOne(const PhotoRecord& record, const ExportSpec& spec,
   const int64_t bytes = fileSize(target);
   if (bytes <= 0) {
     if (error) *error = "导出文件为空: " + target;
+    removeFile(target);
+    return false;
+  }
+
+  if (outPath) *outPath = target;
+  return true;
+}
+
+namespace {
+
+// 节点类型 → 中文层名（PSD 图层可见名，与界面 8 组一致）
+std::string psdNodeLayerName(graph::NodeType t) {
+  switch (t) {
+    case graph::NodeType::Basic:      return "基础 · Basic";
+    case graph::NodeType::Curve:      return "曲线 · Curve";
+    case graph::NodeType::Color:      return "颜色 · Color";
+    case graph::NodeType::Detail:     return "细节 · Detail";
+    case graph::NodeType::Lens:       return "镜头 · Lens";
+    case graph::NodeType::Geometry:   return "几何 · Geometry";
+    case graph::NodeType::Effects:    return "效果 · Effects";
+    case graph::NodeType::Calibration:return "校准 · Calibration";
+    default:                          return std::string("节点 · ") + graph::nodeTypeName(t);
+  }
+}
+
+}  // namespace
+
+bool Exporter::exportOnePsd(const PhotoRecord& record, const ExportSpec& spec,
+                            const std::string& outDir, int seqNo, int seqTotal,
+                            const imaging::Image& base, const json::JsonValue& editParams,
+                            bool haveEditParams, std::string* outPath, std::string* warning,
+                            std::string* error) {
+  const int depth = (spec.psdDepth == 16) ? 16 : 8;
+  const int bps = depth / 8;
+
+  // 渲染辅助：把一组编辑参数作用到 base 上，得到 8bit 显示图（base 不被修改）。
+  auto render = [&](const json::JsonValue& params, imaging::Image* out, std::string* rerr) -> bool {
+    if (!params.isObject() || params.objectItems().empty()) {
+      *out = base;  // 无参数 = 原片（逐值拷贝，保证后续不被污染）
+      return true;
+    }
+    imaging::ImageBuf buf = plan::displayToPlanBuf(base);
+    if (!plan::runEditPlan(params, &buf, nullptr, rerr)) return false;
+    return plan::planBufToDisplay(buf, out, rerr);
+  };
+  // 8/16bit 像素展开（16 = 8bit 拓宽 ×257 → 高字节=低字节=v；引擎工作空间为 8bit 显示，
+  // 真 16bit 需改 pipeline 工作精度，超 M3 范围，明确作为 v1.2.0 已知限制）。
+  auto toBytes = [&](const imaging::Image& img) -> std::vector<uint8_t> {
+    std::vector<uint8_t> b;
+    b.reserve(static_cast<size_t>(img.width) * img.height * 3 * bps);
+    for (size_t i = 0; i < img.pixels.size(); ++i) {
+      const uint8_t v = img.pixels[i];
+      if (depth == 16) {
+        b.push_back(v);
+        b.push_back(v);
+      } else {
+        b.push_back(v);
+      }
+    }
+    return b;
+  };
+  auto makeLayer = [&](const std::string& name, const imaging::Image& img) -> psd::Layer {
+    psd::Layer L;
+    L.name = name;
+    L.top = 0;
+    L.left = 0;
+    L.width = img.width;
+    L.height = img.height;
+    L.opacity = 255;       // 累积结果层：正常混合 100%，保证 flatten == 合成图
+    L.blendKey = "norm";
+    L.visible = true;
+    L.rgb = toBytes(img);
+    return L;
+  };
+
+  psd::Document doc;
+
+  // ---- 合成图（顶层）：完整参数（含蒙版）+ 色彩空间 + 水印 ----
+  imaging::Image composite = base;
+  if (haveEditParams) {
+    std::string rerr;
+    if (!render(editParams, &composite, &rerr)) {
+      if (error) *error = "PSD 合成渲染失败: " + rerr;
+      return false;
+    }
+  }
+  applyColorSpace(&composite, spec.colorSpace);
+  if (spec.watermark.enabled) {
+    std::string wmErr;
+    if (!applyWatermark(&composite, spec.watermark, warning, &wmErr)) {
+      if (error) *error = "PSD 水印合成失败: " + wmErr;
+      return false;
+    }
+  }
+  doc.composite = toBytes(composite);
+
+  // ---- 分层：背景原片 + 各节点累积前缀（正常混合 100%） ----
+  std::vector<psd::Layer> layers;
+  {
+    imaging::Image bg = base;
+    applyColorSpace(&bg, spec.colorSpace);
+    layers.push_back(makeLayer("背景 · 原片", bg));
+  }
+
+  bool layered = false;
+  if (spec.psdKeepLayers && haveEditParams) {
+    graph::NodeGraph g = xmp::XmpMapper::paramsToGraph(editParams);
+    if (static_cast<int>(g.nodes.size()) > 20) {
+      appendWarning(warning, "节点数 " + std::to_string(g.nodes.size()) +
+                        " > 20，PSD 降级为单层合成（超分层上限）");
+    } else {
+      json::JsonValue prefix = json::JsonValue::objectValue();
+      bool okAll = true;
+      for (const graph::GraphNode& node : g.nodes) {
+        if (node.params.isObject()) {
+          for (const auto& kv : node.params.objectItems()) {
+            prefix.setItem(kv.first, kv.second);
+          }
+        }
+        imaging::Image rendered;
+        std::string rerr;
+        if (!render(prefix, &rendered, &rerr)) {
+          appendWarning(warning, "节点前缀渲染失败（" + psdNodeLayerName(node.type) +
+                        "），PSD 降级为单层合成: " + rerr);
+          okAll = false;
+          break;
+        }
+        applyColorSpace(&rendered, spec.colorSpace);
+        psd::Layer L = makeLayer(psdNodeLayerName(node.type), rendered);
+        L.luminaSnapshot = node.params.serialize();
+        layers.push_back(L);
+      }
+      layered = okAll;
+    }
+  }
+
+  // 顶层：合成图（保证 flatten 结果 == 合成图，不依赖合并图字段）
+  layers.push_back(makeLayer("合成 · 最终", composite));
+
+  if (layered) {
+    doc.layers = std::move(layers);
+  } else {
+    // 单层合成 / 降级：只放合成图（PSD 至少 1 层）
+    doc.layers.clear();
+    doc.layers.push_back(makeLayer("合成 · 最终", composite));
+  }
+
+  // ---- 目录 + 命名 + 去重 ----
+  if (!dirExists(outDir) && !makeDirs(outDir)) {
+    if (error) *error = "创建导出目录失败: " + outDir;
+    return false;
+  }
+  const std::string extension = "psd";
+  std::string fileName =
+      expandTemplate(spec.namingTemplate, record, seqNo, seqTotal, extension) + "." + extension;
+  std::string target = joinPath(outDir, fileName);
+  if (fileExists(target)) {
+    const std::string stem = baseNameNoExt(fileName);
+    for (int n = 2; n < 10000; ++n) {
+      const std::string candidate =
+          joinPath(outDir, stem + "-" + std::to_string(n) + "." + extension);
+      if (!fileExists(candidate)) {
+        target = candidate;
+        break;
+      }
+    }
+  }
+
+  psd::WriteOptions opts;
+  opts.width = composite.width;
+  opts.height = composite.height;
+  opts.depth = depth;
+  opts.rle = true;
+  opts.writeComposite = true;
+  opts.dpi = 72;
+  std::string werr;
+  if (!psd::writePsd(target, doc, opts, &werr)) {
+    if (error) *error = "PSD 写出失败: " + werr;
+    return false;
+  }
+  const int64_t bytes = fileSize(target);
+  if (bytes <= 0) {
+    if (error) *error = "PSD 导出文件为空: " + target;
     removeFile(target);
     return false;
   }

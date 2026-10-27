@@ -40,10 +40,12 @@ struct ExportSpec {
   int longEdge = 2048;         // 长边像素（只缩不放过大图时按比例）
   std::string colorSpace = "sRGB";  // sRGB|AdobeRGB（AdobeRGB 为线性矩阵近似，非 ICC）
   int quality = 90;                 // 1..100（jpg 有效）
-  bool psdKeepLayers = false;
+  bool psdKeepLayers = false;       // psd：是否保留节点分层（false = 仅合成单层）
+  int psdDepth = 8;                 // psd：位深 8 | 16（16 = 8bit 拓宽，引擎工作空间为 8bit）
   WatermarkSpec watermark;
   std::string namingTemplate = "{date}-{name}";
-  std::string outputDir;  // 空 = {home}/exports
+  std::string outputDir;        // 空 = {home}/exports
+  static bool isPsdDepthValid(int depth) { return depth == 8 || depth == 16; }
 
   static bool fromJson(const json::JsonValue& v, ExportSpec* out, std::string* err);
   json::JsonValue toJson() const;
@@ -72,6 +74,12 @@ class Exporter {
   bool exportOne(const PhotoRecord& record, const ExportSpec& spec, const std::string& outDir,
                  int seqNo, int seqTotal, std::string* outPath, std::string* warning,
                  std::string* error);
+
+  // PSD 单张导出（M3-01）：分层（节点累积前缀）或单层合成，按 spec 决定
+  bool exportOnePsd(const PhotoRecord& record, const ExportSpec& spec, const std::string& outDir,
+                    int seqNo, int seqTotal, const imaging::Image& base,
+                    const json::JsonValue& editParams, bool haveEditParams, std::string* outPath,
+                    std::string* warning, std::string* error);
 
   // 命名模板：{date} 本地展开，其余占位符复用 import::RenameEngine（{seq}{name}{camera}…）
   static std::string expandTemplate(const std::string& tmpl, const PhotoRecord& record, int seqNo,
