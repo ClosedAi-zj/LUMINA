@@ -90,7 +90,7 @@
   --Lumina-Tokens-titlebar: rgba(246, 246, 248, 0.92);
   --Lumina-Tokens-toolrail: #e9e9ec;
   --Lumina-Tokens-sidebar: rgba(240, 240, 243, 0.82);
-  --Lumina-Tokens-viewer: #08090b; /* 观察区恒色，不随主题翻转 */
+  --Lumina-Tokens-viewer: #e8e8ec; /* 浅色下观察区取中性亮灰（LR 浅色同款），避免照片周围出现黑框 */
   --Lumina-Tokens-pasteboard: #d2d3d7; /* LR 浅色同款中性灰 */
   --Lumina-Tokens-border: rgba(0, 0, 0, 0.10);
   --Lumina-Tokens-borderStrong: rgba(0, 0, 0, 0.16);

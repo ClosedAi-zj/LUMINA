@@ -123,7 +123,7 @@ export default function ToolRail() {
     <div
       ref={railRef}
       data-testid="tool-rail"
-      className="shrink-0 w-11 flex flex-col items-center py-1.5 gap-1 border-r border-line relative z-20"
+      className="shrink-0 w-12 flex flex-col items-center py-2 gap-1.5 border-r border-line relative z-20"
       style={{ background: 'var(--Lumina-Tokens-toolrail)' }}
       role="toolbar"
       aria-label="工具轨"
@@ -191,7 +191,7 @@ export default function ToolRail() {
                     style={{ background: 'var(--Lumina-Tokens-accent)' }}
                   />
                 )}
-                <LuIcon name={current.icon} size={18} />
+                <LuIcon name={current.icon} size={20} />
                 {/* 子工具角标（PS 工具位右下三角） */}
                 {hasSubs && (
                   <span
