@@ -111,14 +111,14 @@ function MockBanner() {
 }
 
 /**
- * 顶栏 = 自定义标题栏 + 工具栏一体化（UI 改版 batch 1；UI 迭代 batch 2 升级 LR 七模块 tab）。
+ * 标题栏 = macOS 三段式（v1.4.0 UI 重构）
  *
- * 替代原先「原生标题栏 + TopBar + SubNav」三层结构，合并为一条 40px 深色 chrome：
- *   左：产品标识 + PS 式全局菜单占位 + LR 七大模块 tab（图库/修改照片/地图/书籍/幻灯片/打印/Web，
- *       选中态 = 亮底 + 2px accent 下缘线，LR 模块拾取器形态）
- *   中：当前模块上下文（模块内视图胶囊，风光带"特色"徽标）+ 引擎状态
- *   右：搜索 / 导出 / 主题 / 窗口三键（min·max·close）
- * 空白区域 `-webkit-app-region: drag` 可拖拽窗口，双击最大化/还原；交互子元素 app-no-drag。
+ *   左：产品标识 + PS 式自绘菜单（收成紧凑文字，功能与快捷键 100% 保留）
+ *   中：分段导航（macOS SegmentedControl 形态：模块整体收进一枚圆角胶囊，选中项白底浮起）
+ *   右：搜索 / 导出 / 主题 + Windows 风格窗口三键（贴最右缘）
+ *
+ * 模块内子视图（导入/精选/健康、风光/延时、交付/作品集/画廊）单列一条 32px 子导航，
+ * 避免把视图胶囊塞进标题栏挤占分段导航的居中位。
  */
 function TopBar({
   module,
@@ -136,137 +136,159 @@ function TopBar({
   const healthIssueCount = useJobStore((s) => s.healthIssueCount);
   const stats = useLibrary((s) => s.stats);
   const { theme } = useTheme();
+  const spec = MODULES.find((m) => m.key === module);
 
   return (
-    <header
-      className="app-drag flex items-center h-10 gap-2 border-b border-line shrink-0 select-none"
-      style={{ background: 'var(--Lumina-Tokens-browserBar)' }}
-      data-theme-surface={theme}
-      onDoubleClick={(e) => {
-        // 拖拽区双击 = 最大化/还原（LR/Windows 惯例）；点在交互元素上不触发
-        if ((e.target as HTMLElement).closest('.app-no-drag, button, input')) return;
-        void window.lumina.win.toggleMaximize();
-      }}
-    >
-      {/* 左：产品标识（LR 身份牌） */}
-      <div className="app-no-drag flex items-center gap-2 pl-3 shrink-0">
-        <span className="w-5 h-5 rounded-smC bg-accent flex items-center justify-center text-onaccent text-xs font-bold">L</span>
-        <span className="text-sm font-semibold tracking-wide">Lumina</span>
-      </div>
+    <>
+      <header
+        className="app-drag glass-titlebar relative flex items-center h-11 gap-2 border-b border-line shrink-0 select-none"
+        data-theme-surface={theme}
+        onDoubleClick={(e) => {
+          // 拖拽区双击 = 最大化/还原（Windows 惯例）；点在交互元素上不触发
+          if ((e.target as HTMLElement).closest('.app-no-drag, button, input')) return;
+          void window.lumina.win.toggleMaximize();
+        }}
+      >
+        {/* 左：产品标识 + 全局菜单 */}
+        <div className="app-no-drag flex items-center gap-2 pl-3 shrink-0">
+          <span className="w-5 h-5 rounded-smC bg-accent flex items-center justify-center text-onaccent text-xs font-bold">L</span>
+          <span className="text-sm font-semibold tracking-wide">Lumina</span>
+        </div>
+        <div className="app-no-drag shrink-0">
+          <MenuBar />
+        </div>
 
-      {/* 左：PS 式自绘全局菜单（G1/G11：真接线 + hover 整项填色；无边框窗口内自绘，不动原生菜单） */}
-      <MenuBar />
-
-      {/* 左：LR 七大模块 tab（UI 迭代 ④：模块拾取器形态 —— 相连 tab + 细分隔线，
-          选中态 = hover 底色 + 2px accent 下缘线，替代原四工作区切换器） */}
-      <nav className="app-no-drag flex items-center shrink-0" aria-label="模块切换">
-        {MODULES.map((m, i) => {
-          const active = module === m.key;
-          return (
-            <button
-              key={m.key}
-              onClick={() => onPickModule(m.key)}
-              className={`relative h-7 px-3 text-xs transition-colors ${i > 0 ? 'border-l border-line' : ''} ${
-                active ? 'text-txt font-semibold' : 'text-txt2 hover:text-txt'
-              }`}
-              style={
-                active
-                  ? { background: 'var(--Lumina-Tokens-hover)', boxShadow: 'inset 0 -2px 0 var(--Lumina-Tokens-accent)' }
-                  : undefined
-              }
-            >
-              {m.label}
-            </button>
-          );
-        })}
-      </nav>
-
-      {/* 中：当前模块上下文 = 模块内视图胶囊（风光带"特色"徽标）+ 引擎状态 */}
-      <div className="flex-1 min-w-0 flex items-center justify-center gap-3 px-2">
-        <nav className="app-no-drag flex items-center gap-1 min-w-0 overflow-hidden">
-          {(() => {
-            const spec = MODULES.find((m) => m.key === module);
-            if (!spec || spec.views.length === 0) {
+        {/* 中：分段导航（绝对居中，macOS SegmentedControl） */}
+        <div className="app-no-drag absolute left-1/2 -translate-x-1/2 flex items-center">
+          <div
+            className="flex items-center gap-0.5 p-0.5 rounded-mdC"
+            style={{
+              background: 'rgba(0, 0, 0, 0.28)',
+              border: '1px solid var(--Lumina-Tokens-border)',
+              boxShadow: 'inset 0 1px 2px rgba(0, 0, 0, 0.28)',
+            }}
+            role="tablist"
+            aria-label="模块切换"
+          >
+            {MODULES.map((m) => {
+              const active = module === m.key;
               return (
-                <span className="text-2xs text-txt3 truncate">
-                  {spec?.label ?? '该模块'}模块：后续里程碑交付，当前版本暂未开放
-                </span>
+                <button
+                  key={m.key}
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => onPickModule(m.key)}
+                  className={`mac-transition h-7 px-3 rounded-[6px] text-xs whitespace-nowrap ${
+                    active ? 'text-txt font-semibold' : 'text-txt2 hover:text-txt'
+                  }`}
+                  style={
+                    active
+                      ? {
+                          background: 'rgba(255, 255, 255, 0.14)',
+                          boxShadow: '0 1px 3px rgba(0, 0, 0, 0.4), inset 0 0.5px 0 rgba(255, 255, 255, 0.22)',
+                          color: 'var(--Lumina-Tokens-textStrong)',
+                        }
+                      : undefined
+                  }
+                >
+                  {m.label}
+                </button>
               );
-            }
-            return spec.views.map((v) => {
+            })}
+          </div>
+        </div>
+
+        {/* 右：引擎状态 + 搜索 + 导出 + 主题 */}
+        <div className="ml-auto app-no-drag flex items-center gap-1.5 shrink-0">
+          <span className="flex items-center gap-1.5 text-2xs text-txt3 shrink-0 px-1" title={engineStatus === 'mock' ? '演示模式' : `引擎 ${engineVersion || '1.1.1'}`}>
+            <span
+              className="w-1.5 h-1.5 rounded-full"
+              style={{
+                background:
+                  engineStatus === 'starting'
+                    ? 'var(--Lumina-Tokens-textMuted)'
+                    : engineStatus === 'mock'
+                      ? 'var(--Lumina-Tokens-warning)'
+                      : 'var(--Lumina-Tokens-success)',
+              }}
+            />
+            <span className="hidden xl:inline num">
+              {stats ? formatCount(stats.totalPhotos) : ''}
+            </span>
+          </span>
+          <div className="flex items-center h-7 gap-1.5 px-2.5 rounded-pill border border-line bg-card" style={{ width: 170 }}>
+            <Icon name="search" size={12} className="text-txt3 shrink-0" />
+            <input
+              ref={(el) => {
+                searchRef.current = el;
+              }}
+              placeholder="搜索照片、文件夹、关键词"
+              className="flex-1 min-w-0 bg-transparent text-2xs text-txt placeholder:text-txt3 focus:outline-none"
+            />
+          </div>
+          <Button variant="primary" size="sm" onClick={() => navigate('export')}>
+            导出
+          </Button>
+          <ThemeToggle />
+        </div>
+
+        {/* 右缘：Windows 风格窗口三键（满高热区，不参与拖拽） */}
+        <WindowControls />
+      </header>
+
+      {/* 模块内子视图（>1 个视图时才出现）；无视图的模块给显式提示，不留空白 */}
+      {spec && (
+        <div
+          className="app-no-drag flex items-center h-8 gap-1 px-3 shrink-0 border-b border-line"
+          style={{ background: 'var(--Lumina-Tokens-browserBar)' }}
+        >
+          {spec.views.length === 0 ? (
+            <span className="text-2xs text-txt3">
+              {spec.label}模块：后续里程碑交付，当前版本暂未开放
+            </span>
+          ) : (
+            spec.views.map((v) => {
               const active = view === v;
               const isLandscape = v === 'landscape';
               return (
                 <button
                   key={v}
                   onClick={() => navigate(v)}
-                  className={`relative h-6 px-2.5 rounded-pill text-2xs transition-colors shrink-0 inline-flex items-center gap-1 ${
-                    active ? 'bg-accent text-onaccent font-medium' : 'text-txt2 hover:text-txt hover:bg-hover'
+                  className={`mac-transition relative h-6 px-2.5 rounded-pill text-2xs shrink-0 inline-flex items-center gap-1 border ${
+                    active ? 'font-medium' : 'text-txt2 hover:text-txt hover:bg-hover border-transparent'
                   }`}
+                  style={
+                    active
+                      ? {
+                          background: 'var(--Lumina-Tokens-accentSoft)',
+                          borderColor: 'color-mix(in srgb, var(--Lumina-Tokens-accent) 42%, transparent)',
+                          color: 'var(--Lumina-Tokens-accent)',
+                        }
+                      : undefined
+                  }
                 >
                   {VIEW_LABEL[v]}
-                  {/* 定位迭代：风光 = 特色模块入口，显式高亮而非全站喊风光 */}
                   {isLandscape && (
                     <span
                       className="px-1 rounded-sm text-[9px] leading-[14px]"
                       style={{
-                        background: active ? 'rgba(0,0,0,0.18)' : 'var(--Lumina-Tokens-accentSoft)',
-                        color: active ? 'var(--Lumina-Tokens-onAccent)' : 'var(--Lumina-Tokens-accent)',
+                        background: 'var(--Lumina-Tokens-brandSoft)',
+                        color: 'var(--Lumina-Tokens-brand)',
                       }}
                     >
                       特色
                     </span>
                   )}
                   {v === 'health' && healthIssueCount > 0 && (
-                    <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full" style={{ background: 'var(--Lumina-Tokens-danger)' }} />
+                    <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--Lumina-Tokens-danger)' }} />
                   )}
                 </button>
               );
-            });
-          })()}
-        </nav>
-        <span className="flex items-center gap-1.5 text-2xs text-txt3 shrink-0">
-          <span
-            className="w-1.5 h-1.5 rounded-full"
-            style={{
-              background:
-                engineStatus === 'starting'
-                  ? 'var(--Lumina-Tokens-textMuted)'
-                  : engineStatus === 'mock'
-                    ? 'var(--Lumina-Tokens-accent)'
-                    : 'var(--Lumina-Tokens-success)',
-            }}
-          />
-          <span className="hidden xl:inline">
-            {engineStatus === 'starting' ? '引擎连接中…' : engineStatus === 'mock' ? `Mock · ${engineVersion || '1.1.1'}` : `引擎 · ${engineVersion || '1.1.1'}`}
-            {stats && <span className="num"> · {formatCount(stats.totalPhotos)} 张</span>}
-          </span>
-        </span>
-      </div>
-
-      {/* 右：搜索 / 导出 / 主题（交互元素一律 no-drag） */}
-      <div className="app-no-drag flex items-center gap-1.5 shrink-0">
-        <div className="flex items-center h-7 gap-1.5 px-2.5 rounded-pill border border-line bg-card" style={{ width: 180 }}>
-          <Icon name="search" size={12} className="text-txt3 shrink-0" />
-          <input
-            ref={(el) => {
-              searchRef.current = el;
-            }}
-            placeholder="搜索照片、文件夹、关键词"
-            className="flex-1 min-w-0 bg-transparent text-2xs text-txt placeholder:text-txt3 focus:outline-none"
-          />
-          <span className="text-[10px] text-txt3 shrink-0">⌘K</span>
+            })
+          )}
         </div>
-
-        <Button variant="primary" size="sm" onClick={() => navigate('export')}>
-          导出
-        </Button>
-        <ThemeToggle />
-      </div>
-
-      {/* 右缘：窗口三键（满高热区，不参与拖拽） */}
-      <WindowControls />
-    </header>
+      )}
+    </>
   );
 }
 

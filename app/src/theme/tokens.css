@@ -1,125 +1,158 @@
-/* LUMINA 设计令牌 v1.0.0 · 引自 lumina-dev-handoff/design-tokens.css（单一来源副本）。
+/* LUMINA 设计令牌 v1.4.0 · macOS 语义皮肤（深色为主 / 浅色完整保留）
    根元素默认 = Dark；切浅色时根元素加 data-theme="Light"。
-   照片观察区（查看器/地图/延时画面）固定 --Lumina-Tokens-viewer (#08090B)，不随主题翻转（红线 R5）。 */
+   照片观察区（查看器/地图/延时画面）固定 --Lumina-Tokens-viewer (#08090B)，不随主题翻转（红线 R5）。
+   v1.4.0 变更：色彩体系由「中性灰 + 金色强调」升级为 macOS 语义（#0A84FF 系统强调色 + 毛玻璃材质），
+   令牌名保持向后兼容，组件无需改名即可换肤。 */
 
 :root {
-  --Lumina-Tokens-canvas: #0c0d10;
-  --Lumina-Tokens-panel: #14161a;
-  --Lumina-Tokens-card: #1d2025;
-  --Lumina-Tokens-hover: #23272d;
-  --Lumina-Tokens-viewer: #08090b;
-  --Lumina-Tokens-browserBar: #181b1f;
-  /* G6 画布外框（R6 v2-B7）：观察区 #08090B **外围**的深灰 pasteboard（PS 画布外围），
-     双主题同值 —— 灰框衬底保证照片判断中性；观察区本身仍是恒色 #08090B（红线 R5 不动）。 */
-  --Lumina-Tokens-pasteboard: #17191d;
-  /* UI 迭代 ③（对齐 LR）：分隔线略提亮一档，面板/卡片边界更清晰可辨 */
-  --Lumina-Tokens-border: #2a2f36;
-  --Lumina-Tokens-textPrimary: #f2f2f2;
-  --Lumina-Tokens-textSecondary: #a8adb5;
-  --Lumina-Tokens-textMuted: #6b7078;
-  --Lumina-Tokens-accent: #e8c268;
-  --Lumina-Tokens-success: #7dd9a6;
-  --Lumina-Tokens-danger: #d9604f;
-  /* 强调色之上的前景（设计稿 09 帧：浅色下金色降饱和，其上文字翻白） */
-  --Lumina-Tokens-onAccent: #0c0d10;
-  /* 图表通道色（直方图/曲线共用，画布经 getComputedStyle 读取） */
-  --Lumina-Tokens-chartRed: rgba(217, 96, 79, 0.55);
-  --Lumina-Tokens-chartGreen: rgba(125, 217, 166, 0.5);
-  --Lumina-Tokens-chartBlue: rgba(91, 141, 217, 0.55);
-  --Lumina-Tokens-chartLuma: rgba(168, 173, 181, 0.8);
-  /* 照片色标（元数据标签，双主题同值；置于照片缩略图之上，恒定不翻转） */
-  --Lumina-Tokens-labelRed: #d9604f;
-  --Lumina-Tokens-labelYellow: #e8c268;
-  --Lumina-Tokens-labelGreen: #7dd9a6;
-  --Lumina-Tokens-labelBlue: #5b8dd9;
-  --Lumina-Tokens-labelPurple: #9b6bd9;
-  --Lumina-Tokens-labelPink: #d96bb0;
-  /* 观察区（#08090B 恒色面）上的强调文字与浮层底，双主题同值 */
+  /* —— 表面层级（macOS 深色：由深到浅的四级底） —— */
+  --Lumina-Tokens-canvas: #101216; /* 应用底 */
+  --Lumina-Tokens-panel: #1c1f25; /* 面板 */
+  --Lumina-Tokens-card: #22262c; /* 卡片/输入底 */
+  --Lumina-Tokens-hover: #2a2f36; /* hover 面 */
+  --Lumina-Tokens-browserBar: #1a1d22; /* 顶栏兜底底色（无毛玻璃时） */
+  --Lumina-Tokens-titlebar: rgba(32, 35, 41, 0.86); /* 标题栏毛玻璃底 */
+  --Lumina-Tokens-toolrail: rgba(24, 27, 32, 0.92); /* 工具轨 */
+  --Lumina-Tokens-sidebar: rgba(26, 29, 34, 0.72); /* 左/右栏半透明侧栏 */
+  --Lumina-Tokens-viewer: #08090b; /* 观察区恒色（红线 R5） */
+  --Lumina-Tokens-pasteboard: #0a0b0d; /* 画布外围 pasteboard */
+  /* —— 描边（macOS 1px 分隔线 + 内高光） —— */
+  --Lumina-Tokens-border: rgba(255, 255, 255, 0.09);
+  --Lumina-Tokens-borderStrong: rgba(255, 255, 255, 0.14);
+  --Lumina-Tokens-innerHighlight: rgba(255, 255, 255, 0.07);
+  /* —— 文字 —— */
+  --Lumina-Tokens-textPrimary: #e6e9ee;
+  --Lumina-Tokens-textSecondary: #a7adb7;
+  --Lumina-Tokens-textMuted: #8a9099;
+  --Lumina-Tokens-textStrong: #ffffff;
+  /* —— 强调（macOS system blue） —— */
+  --Lumina-Tokens-accent: #0a84ff;
+  --Lumina-Tokens-accentHover: #2e95ff;
+  --Lumina-Tokens-accentSoft: rgba(10, 132, 255, 0.16);
+  --Lumina-Tokens-onAccent: #ffffff;
+  --Lumina-Tokens-success: #30d158;
+  --Lumina-Tokens-warning: #ffd60a;
+  --Lumina-Tokens-danger: #ff453a;
+  /* —— 品牌金（保留给精选/星级/作品集等品牌语境，不再承担交互强调） —— */
+  --Lumina-Tokens-brand: #e8c268;
+  --Lumina-Tokens-brandSoft: rgba(232, 194, 104, 0.14);
+  /* 图表通道色 */
+  --Lumina-Tokens-chartRed: rgba(255, 69, 58, 0.55);
+  --Lumina-Tokens-chartGreen: rgba(48, 209, 88, 0.5);
+  --Lumina-Tokens-chartBlue: rgba(10, 132, 255, 0.55);
+  --Lumina-Tokens-chartLuma: rgba(167, 173, 183, 0.8);
+  /* 照片色标（双主题同值） */
+  --Lumina-Tokens-labelRed: #ff453a;
+  --Lumina-Tokens-labelYellow: #ffd60a;
+  --Lumina-Tokens-labelGreen: #30d158;
+  --Lumina-Tokens-labelBlue: #0a84ff;
+  --Lumina-Tokens-labelPurple: #bf5af2;
+  --Lumina-Tokens-labelPink: #ff375f;
+  /* 观察区浮层 */
   --Lumina-Tokens-viewerAccent: #e8c268;
   --Lumina-Tokens-viewerOverlay: rgba(8, 9, 11, 0.85);
+  /* —— 圆角（macOS 更圆） —— */
   --Lumina-Tokens-radiusSm: 4px;
   --Lumina-Tokens-radiusMd: 6px;
   --Lumina-Tokens-radiusLg: 8px;
   --Lumina-Tokens-radiusXl: 12px;
-  --Lumina-Tokens-fontSans: 'Inter';
-  --Lumina-Tokens-fontMono: 'JetBrains Mono';
-  --Lumina-Tokens-fontCjk: 'Noto Sans SC';
-  /* 派生令牌（淘汰态叠加 #0C0D10@50%，PRD §4-④） */
-  --Lumina-Tokens-rejectOverlay: rgba(12, 13, 16, 0.5);
-  --Lumina-Tokens-accentSoft: rgba(232, 194, 104, 0.14);
-  --Lumina-Tokens-shadow: rgba(0, 0, 0, 0.45);
-  /* ---- v1.2.0 控件级圆角/面层阴影/玻璃底（新增，不改动上面任何既有令牌） ---- */
   --Lumina-Tokens-radiusXs: 4px;
   --Lumina-Tokens-radiusSmC: 6px;
   --Lumina-Tokens-radiusMdC: 8px;
-  --Lumina-Tokens-radiusLgC: 12px;
-  --Lumina-Tokens-radiusXlC: 16px;
+  --Lumina-Tokens-radiusLgC: 10px;
+  --Lumina-Tokens-radiusXlC: 12px;
   --Lumina-Tokens-radiusPill: 999px;
-  --Lumina-Tokens-shadow1: 0 1px 2px rgba(0, 0, 0, 0.55);
-  --Lumina-Tokens-shadow2: 0 8px 24px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.5);
-  /* 顶栏玻璃底色（模糊由组件 backdrop-blur-[18px] 提供，令牌只存底色） */
-  --Lumina-Tokens-glass: rgba(21, 23, 28, 0.72);
-  /* UI 迭代 ③（对齐 LR 字重分层）：标题级文字最亮档（面板分组标题/模块标签用） */
-  --Lumina-Tokens-textStrong: #ffffff;
+  /* —— 字体（系统栈 = macOS SF Pro / Windows Segoe UI Variable） —— */
+  --Lumina-Tokens-fontSans: -apple-system, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --Lumina-Tokens-fontMono: 'SF Mono', 'JetBrains Mono', Consolas, monospace;
+  --Lumina-Tokens-fontCjk: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  /* —— 阴影（macOS 大而柔，靠描边分层） —— */
+  --Lumina-Tokens-shadow: rgba(0, 0, 0, 0.5);
+  --Lumina-Tokens-shadow1: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --Lumina-Tokens-shadow2: 0 10px 30px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.5);
+  --Lumina-Tokens-shadowWindow: 0 40px 90px rgba(0, 0, 0, 0.85);
+  /* —— 材质 —— */
+  --Lumina-Tokens-glass: rgba(38, 41, 47, 0.78);
+  --Lumina-Tokens-glassBlur: 30px;
+  --Lumina-Tokens-glassSaturate: 180%;
+  --Lumina-Tokens-rejectOverlay: rgba(12, 13, 16, 0.5);
+  /* —— 动效（macOS 曲线） —— */
+  --Lumina-Tokens-ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --Lumina-Tokens-dur: 200ms;
 }
 
 [data-theme='Light'] {
-  --Lumina-Tokens-canvas: #f4f3f0;
+  --Lumina-Tokens-canvas: #f4f4f6;
   --Lumina-Tokens-panel: #ffffff;
-  --Lumina-Tokens-card: #faf9f6;
-  --Lumina-Tokens-hover: #efeee9;
+  --Lumina-Tokens-card: #fafafc;
+  --Lumina-Tokens-hover: #ededf0;
+  --Lumina-Tokens-browserBar: #f2f2f5;
+  --Lumina-Tokens-titlebar: rgba(246, 246, 248, 0.92);
+  --Lumina-Tokens-toolrail: #e9e9ec;
+  --Lumina-Tokens-sidebar: rgba(240, 240, 243, 0.82);
   --Lumina-Tokens-viewer: #08090b; /* 观察区恒色，不随主题翻转 */
-  --Lumina-Tokens-browserBar: #ffffff;
-  --Lumina-Tokens-border: #e4e2dc;
-  --Lumina-Tokens-textPrimary: #191b1e;
-  --Lumina-Tokens-textSecondary: #5a5e66;
-  --Lumina-Tokens-textMuted: #90949b;
-  --Lumina-Tokens-accent: #b98a2e;
-  --Lumina-Tokens-success: #1f8a5b;
-  --Lumina-Tokens-danger: #c2483a;
+  --Lumina-Tokens-pasteboard: #d2d3d7; /* LR 浅色同款中性灰 */
+  --Lumina-Tokens-border: rgba(0, 0, 0, 0.10);
+  --Lumina-Tokens-borderStrong: rgba(0, 0, 0, 0.16);
+  --Lumina-Tokens-innerHighlight: rgba(255, 255, 255, 0.9);
+  --Lumina-Tokens-textPrimary: #1d1d1f;
+  --Lumina-Tokens-textSecondary: #5b5b60;
+  --Lumina-Tokens-textMuted: #8e8e93;
+  --Lumina-Tokens-textStrong: #000000;
+  --Lumina-Tokens-accent: #007aff;
+  --Lumina-Tokens-accentHover: #1a88ff;
+  --Lumina-Tokens-accentSoft: rgba(0, 122, 255, 0.12);
   --Lumina-Tokens-onAccent: #ffffff;
-  --Lumina-Tokens-chartRed: rgba(194, 72, 58, 0.5);
-  --Lumina-Tokens-chartGreen: rgba(31, 138, 91, 0.45);
-  --Lumina-Tokens-chartBlue: rgba(74, 116, 190, 0.5);
-  --Lumina-Tokens-chartLuma: rgba(90, 94, 102, 0.8);
-  --Lumina-Tokens-radiusSm: 4px;
-  --Lumina-Tokens-radiusMd: 6px;
-  --Lumina-Tokens-radiusLg: 8px;
-  --Lumina-Tokens-radiusXl: 12px;
-  --Lumina-Tokens-fontSans: 'Inter';
-  --Lumina-Tokens-fontMono: 'JetBrains Mono';
-  --Lumina-Tokens-fontCjk: 'Noto Sans SC';
-  --Lumina-Tokens-rejectOverlay: rgba(12, 13, 16, 0.5);
-  --Lumina-Tokens-accentSoft: rgba(185, 138, 46, 0.12);
-  --Lumina-Tokens-shadow: rgba(0, 0, 0, 0.18);
-  /* ---- v1.2.0（浅色）：圆角双主题同值；阴影改为暖调淡影，靠边框分层 ---- */
-  --Lumina-Tokens-radiusXs: 4px;
-  --Lumina-Tokens-radiusSmC: 6px;
-  --Lumina-Tokens-radiusMdC: 8px;
-  --Lumina-Tokens-radiusLgC: 12px;
-  --Lumina-Tokens-radiusXlC: 16px;
-  --Lumina-Tokens-radiusPill: 999px;
-  --Lumina-Tokens-shadow1: 0 1px 2px rgba(24, 20, 12, 0.06);
-  --Lumina-Tokens-shadow2: 0 10px 30px rgba(24, 20, 12, 0.1), 0 1px 2px rgba(24, 20, 12, 0.06);
-  --Lumina-Tokens-glass: rgba(255, 255, 255, 0.75);
-  --Lumina-Tokens-textStrong: #0c0d10;
+  --Lumina-Tokens-success: #28a745;
+  --Lumina-Tokens-warning: #b8860b;
+  --Lumina-Tokens-danger: #d70015;
+  --Lumina-Tokens-brand: #b98a2e;
+  --Lumina-Tokens-brandSoft: rgba(185, 138, 46, 0.12);
+  --Lumina-Tokens-chartRed: rgba(215, 0, 21, 0.5);
+  --Lumina-Tokens-chartGreen: rgba(40, 167, 69, 0.45);
+  --Lumina-Tokens-chartBlue: rgba(0, 122, 255, 0.5);
+  --Lumina-Tokens-chartLuma: rgba(91, 91, 96, 0.8);
+  --Lumina-Tokens-shadow: rgba(0, 0, 0, 0.16);
+  --Lumina-Tokens-shadow1: 0 1px 2px rgba(0, 0, 0, 0.08);
+  --Lumina-Tokens-shadow2: 0 10px 30px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.08);
+  --Lumina-Tokens-shadowWindow: 0 30px 70px rgba(0, 0, 0, 0.25);
+  --Lumina-Tokens-glass: rgba(255, 255, 255, 0.78);
 }
 
-/* ---- v1.2.0 R7 macOS 玻璃组合类（材质层，双主题底色走 --glass 令牌） ----
-   M1 通透侧栏：LeftRail / 二级导航 —— 半透明玻璃 + 模糊，不加阴影（贴文档流）。
-   M2 悬浮玻璃：顶栏 / 下拉菜单 / 模态 —— 同 M1 + shadow2（脱离文档流悬浮）。 */
+/* ---- macOS 材质组合类 ----
+   M1 通透侧栏：LeftRail / RightPanel —— 半透明 + 模糊，不加阴影（贴文档流）
+   M2 悬浮玻璃：标题栏 / 浮层 / 下拉菜单 / 模态 —— M1 + shadow2 */
 .glass-m1,
 .glass-m2 {
   background: var(--Lumina-Tokens-glass);
-  backdrop-filter: blur(20px) saturate(1.4);
-  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  backdrop-filter: blur(var(--Lumina-Tokens-glassBlur)) saturate(var(--Lumina-Tokens-glassSaturate));
+  -webkit-backdrop-filter: blur(var(--Lumina-Tokens-glassBlur)) saturate(var(--Lumina-Tokens-glassSaturate));
 }
 .glass-m2 {
   box-shadow: var(--Lumina-Tokens-shadow2);
 }
-/* R7 §3-3：顶栏工具按钮 hover = accent 8% + 8px 圆角（accent 占比仍 ≤2%） */
-.hover-accent8:hover {
-  background: color-mix(in srgb, var(--Lumina-Tokens-accent) 8%, transparent);
+/* 标题栏专用材质（比通用玻璃更暗一档，避免与内容抢视线） */
+.glass-titlebar {
+  background: var(--Lumina-Tokens-titlebar);
+  backdrop-filter: blur(var(--Lumina-Tokens-glassBlur)) saturate(var(--Lumina-Tokens-glassSaturate));
+  -webkit-backdrop-filter: blur(var(--Lumina-Tokens-glassBlur)) saturate(var(--Lumina-Tokens-glassSaturate));
+  box-shadow: inset 0 1px 0 var(--Lumina-Tokens-innerHighlight);
 }
-
-
+/* 侧栏材质 */
+.glass-sidebar {
+  background: var(--Lumina-Tokens-sidebar);
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+}
+/* 强调色 hover（兼容旧类名） */
+.hover-accent8:hover {
+  background: color-mix(in srgb, var(--Lumina-Tokens-accent) 10%, transparent);
+}
+/* macOS 缓动过渡（只用于 transform/opacity/background-color） */
+.mac-transition {
+  transition:
+    background-color var(--Lumina-Tokens-dur) var(--Lumina-Tokens-ease),
+    color var(--Lumina-Tokens-dur) var(--Lumina-Tokens-ease),
+    opacity var(--Lumina-Tokens-dur) var(--Lumina-Tokens-ease),
+    transform var(--Lumina-Tokens-dur) var(--Lumina-Tokens-ease);
+}
