@@ -133,7 +133,7 @@ export function ParamSlider({ label, value, min, max, step = 1, defaultValue = 0
   return (
     <div
       // v1.3.0-m3 密度：参数行 26px（原 24px 内嵌 15px 文本行 + 6px 轨道 → 紧凑后单行内联轨道）
-      className="h-[26px] mx-1 px-2 rounded-smC hover:bg-hover transition-colors select-none"
+      className="h-[28px] mx-1 px-2 rounded-smC hover:bg-hover transition-colors select-none"
       style={{ transitionTimingFunction: EASE }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
@@ -146,8 +146,22 @@ export function ParamSlider({ label, value, min, max, step = 1, defaultValue = 0
       <div className="flex items-center h-[15px] pt-1.5">
         <span className={`text-[11.5px] truncate ${isDefault ? 'text-txt2' : 'text-txt'}`}>{label}</span>
         <span className="flex-1" />
-        {/* 数值右对齐 · 等宽（.num = JetBrains Mono + tabular-nums，LR 数值栏口径） */}
-        <span className="num text-[11px] text-txt2 shrink-0">{text}</span>
+        {/* 数值胶囊 · 右对齐 · 等宽（v1.4.0 macOS 口径，与设计稿一致） */}
+        <span
+          className="num text-[11px] shrink-0"
+          style={{
+            minWidth: 44,
+            textAlign: 'right',
+            color: isDefault ? 'var(--Lumina-Tokens-textMuted)' : 'var(--Lumina-Tokens-textPrimary)',
+            background: 'rgba(0, 0, 0, 0.22)',
+            border: '0.5px solid var(--Lumina-Tokens-border)',
+            borderRadius: 5,
+            padding: '1px 6px',
+            fontVariantNumeric: 'tabular-nums',
+          }}
+        >
+          {text}
+        </span>
       </div>
       <div
         ref={trackRef}
@@ -179,18 +193,18 @@ export function ParamSlider({ label, value, min, max, step = 1, defaultValue = 0
           className="absolute left-0 top-0 h-1 rounded-pill"
           style={{ width: `${pct}%`, background: 'var(--Lumina-Tokens-accent)', transition: dragging ? 'none' : `width 120ms ${EASE}` }}
         />
-        {/* 白球 + 0.5px hairline 描边（收紧：常态 10px / hover 12px） */}
+        {/* 白球 + hairline 描边（v1.4.0 macOS：常态 13px / hover·拖动 16px） */}
         <div
           className="absolute rounded-full"
           style={{
-            width: hover || dragging ? 12 : 10,
-            height: hover || dragging ? 12 : 10,
-            top: hover || dragging ? -3 : -2,
+            width: hover || dragging ? 16 : 13,
+            height: hover || dragging ? 16 : 13,
+            top: hover || dragging ? -6 : -4.5,
             left: `calc(${pct}% )`,
-            marginLeft: hover || dragging ? -6 : -5,
-            background: 'var(--Lumina-Tokens-textPrimary)',
-            border: '0.5px solid var(--Lumina-Tokens-border)',
-            boxShadow: 'var(--Lumina-Tokens-shadow1)',
+            marginLeft: hover || dragging ? -8 : -6.5,
+            background: '#ffffff',
+            border: '0.5px solid rgba(0, 0, 0, 0.18)',
+            boxShadow: '0 1px 3px rgba(0, 0, 0, 0.45)',
             transition: `width 120ms ${EASE}, height 120ms ${EASE}, top 120ms ${EASE}, margin-left 120ms ${EASE}`,
           }}
         />
@@ -203,7 +217,7 @@ export function ParamSlider({ label, value, min, max, step = 1, defaultValue = 0
 
 export function ParamToggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
-    <div className="h-[26px] mx-1 px-2 rounded-smC hover:bg-hover transition-colors flex items-center gap-2" style={{ transitionTimingFunction: EASE }}>
+    <div className="h-[28px] mx-1 px-2 rounded-smC hover:bg-hover transition-colors flex items-center gap-2" style={{ transitionTimingFunction: EASE }}>
       <span className="text-[11.5px] text-txt2 flex-1 truncate">{label}</span>
       <button
         onClick={() => onChange(!checked)}
@@ -233,7 +247,7 @@ export function ParamToggle({ label, checked, onChange }: { label: string; check
 
 export function ParamCheckbox({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
-    <div className="h-[26px] mx-1 px-2 rounded-smC hover:bg-hover transition-colors flex items-center gap-2" style={{ transitionTimingFunction: EASE }}>
+    <div className="h-[28px] mx-1 px-2 rounded-smC hover:bg-hover transition-colors flex items-center gap-2" style={{ transitionTimingFunction: EASE }}>
       <button
         onClick={() => onChange(!checked)}
         className="shrink-0 flex items-center justify-center transition-colors"

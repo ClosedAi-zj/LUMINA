@@ -362,15 +362,18 @@ function DevelopLoaded({
       </div>
 
       {mode === 'pro' ? (
-        /* 专业模式（v1.2.0 阶段 3）：左栏 240px 卡片（导航器/预设/历史/图层）+ 中 直方图/画面 +
-           右栏 8 组折叠卡片（含直方图卡与诚实提示） */
-        <div className="flex-1 min-h-0 flex gap-1.5 p-2" style={{ background: 'var(--Lumina-Tokens-canvas)' }}>
-          {/* v1.3.0-m3：PS 工具轨 = 最左缘（左右栏折叠与否都不动它，工具常驻可达） */}
+        /* 专业模式（v1.4.0 · LR 极简布局）：工具轨 44 + 左栏 204(玻璃侧栏) + 画布 + 右栏 318，
+           面板齐边相接靠 1px 分隔线分层（macOS/LR 形态，不再留卡片间隙） */
+        <div className="flex-1 min-h-0 flex" style={{ background: 'var(--Lumina-Tokens-canvas)' }}>
+          {/* PS 式工具轨 = 最左缘（左右栏折叠与否都不动它，工具常驻可达） */}
           <ToolRail />
           {visibleLeft && (
-            /* R7 M1：左侧轨道栏 = 通透侧栏材质（玻璃底色/模糊走 .glass-m1 组合类，令牌供色） */
-            <aside className="glass-m1 w-60 shrink-0 overflow-y-auto flex flex-col gap-px rounded-smC p-1">
-              {/* G4：左栏顺序 = 导航器 → 预设 → 快照 → 历史（R6 §3.2 LR 顺序）；图层常驻其后（原 Dialog 入口移除） */}
+            /* macOS 通透侧栏材质：半透明 + 模糊，贴文档流不加阴影 */
+            <aside
+              className="glass-sidebar shrink-0 overflow-y-auto flex flex-col gap-px border-r border-line py-1"
+              style={{ width: 204 }}
+            >
+              {/* G4：左栏顺序 = 导航器 → 预设 → 快照 → 历史（R6 §3.2 LR 顺序）；图层常驻其后 */}
               <NavigatorCard />
               <PresetCard />
               <SnapshotCard />
@@ -383,13 +386,13 @@ function DevelopLoaded({
               <LayersCard />
             </aside>
           )}
-          <section className="flex-1 min-w-0 flex flex-col rounded-smC overflow-hidden border border-line" style={{ background: 'var(--Lumina-Tokens-panel)' }}>
-            {/* v1.3.0-m3：上下文选项栏（PS Option Bar）取代原入口工具条；缩放%为画布实测 */}
+          <section className="flex-1 min-w-0 flex flex-col overflow-hidden" style={{ background: 'var(--Lumina-Tokens-panel)' }}>
+            {/* 上下文选项栏（PS Option Bar 语义）；缩放%为画布实测 */}
             <OptionBar zoomPct={viewerMetrics ? viewerMetrics.zoom * 100 : null} />
             <div className="relative flex-1 min-h-0 flex flex-col">
-              {/* G6 画布外框：#17191D pasteboard 在观察区外围（观察区 #08090B 恒色不动，红线 R5） */}
+              {/* 画布外围 pasteboard（观察区 #08090B 恒色不动，红线 R5） */}
               <div className="relative flex-1 min-h-0 flex" style={{ background: 'var(--Lumina-Tokens-pasteboard)' }}>
-                <div className="relative flex-1 min-h-0 flex m-1.5">
+                <div className="relative flex-1 min-h-0 flex m-2.5">
                   <ViewerCanvas onHistogram={onHist} />
                   <GuidesOverlay />
                 </div>
@@ -399,7 +402,10 @@ function DevelopLoaded({
             </div>
           </section>
           {visibleRight && (
-            <aside className="w-[320px] shrink-0 overflow-y-auto">
+            <aside
+              className="glass-sidebar shrink-0 overflow-y-auto border-l border-line"
+              style={{ width: 318 }}
+            >
               <ProPanel histogram={histogram} />
             </aside>
           )}

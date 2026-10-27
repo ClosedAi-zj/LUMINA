@@ -107,7 +107,7 @@ export default function ProPanel({ histogram }: { histogram?: Histogram | null }
   if (!params) return null;
 
   return (
-    <div ref={colRef} className="h-full overflow-y-auto p-1.5 flex flex-col gap-px" style={{ background: 'var(--Lumina-Tokens-canvas)' }}>
+    <div ref={colRef} className="h-full overflow-y-auto px-1.5 py-1 flex flex-col gap-px" style={{ background: 'transparent' }}>
       {/* G5 dock：8 参数组标签组（图标化 dock 标签；组保持挂载，切 tab 不丢状态） */}
       <div className="shrink-0 rounded-[2px] border border-line bg-panel overflow-hidden">
         <div className="flex items-center flex-wrap gap-0.5 px-1 pt-1 border-b border-line" role="tablist" aria-label="调整面板 dock">
