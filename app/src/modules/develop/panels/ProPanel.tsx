@@ -15,6 +15,7 @@ import CurveEditor from '../CurveEditor';
 import MaskPanel from './MaskPanel';
 import HistogramPanel, { type Histogram } from './HistogramPanel';
 import { PanelCard, GroupLabel, ParamSlider, ParamToggle, ParamSegmented } from './panelKit';
+import { LuIcon } from '../../../components/icons';
 import type { CurvePoint, EditParams, HslBand } from '../../../api/protocol';
 
 const HSL_BANDS: { value: HslBand; label: string }[] = [
@@ -77,15 +78,16 @@ function Row(props: { params: EditParams; path: string; label?: string; min: num
  * 列滚动位置在切换前后保存恢复（验收断言点）。
  * 蒙版 / 直方图不进 dock：02-B3 设计约定「已建蒙版必须常驻可见」，维持常驻卡片。
  */
-const DOCK_TABS: { id: string; label: string }[] = [
-  { id: 'basic', label: '基础' },
-  { id: 'curve', label: '曲线' },
-  { id: 'color', label: '色彩' },
-  { id: 'detail', label: '细节' },
-  { id: 'lens', label: '镜头' },
-  { id: 'geometry', label: '几何' },
-  { id: 'effects', label: '效果' },
-  { id: 'calibration', label: '校准' },
+/** v1.3.0-m3 图标化：dock 标签 = 图标 + 短标题（PS dock 形态；图标经 icons.tsx 统一映射） */
+const DOCK_TABS: { id: string; label: string; icon: string }[] = [
+  { id: 'basic', label: '基础', icon: 'basic' },
+  { id: 'curve', label: '曲线', icon: 'curve' },
+  { id: 'color', label: '色彩', icon: 'color' },
+  { id: 'detail', label: '细节', icon: 'detail' },
+  { id: 'lens', label: '镜头', icon: 'lens' },
+  { id: 'geometry', label: '几何', icon: 'geometry' },
+  { id: 'effects', label: '效果', icon: 'effects' },
+  { id: 'calibration', label: '校准', icon: 'calibration' },
 ];
 
 export default function ProPanel({ histogram }: { histogram?: Histogram | null }) {
@@ -105,10 +107,10 @@ export default function ProPanel({ histogram }: { histogram?: Histogram | null }
   if (!params) return null;
 
   return (
-    <div ref={colRef} className="h-full overflow-y-auto p-2 flex flex-col gap-1.5" style={{ background: 'var(--Lumina-Tokens-canvas)' }}>
-      {/* G5 dock：8 参数组标签组（PS dock 形态；组保持挂载，切 tab 不丢状态） */}
-      <div className="shrink-0 rounded-lgC bg-panel overflow-hidden" style={{ boxShadow: 'var(--Lumina-Tokens-shadow1)' }}>
-        <div className="flex items-center flex-wrap gap-0.5 px-1.5 pt-1.5 border-b border-line" role="tablist" aria-label="调整面板 dock">
+    <div ref={colRef} className="h-full overflow-y-auto p-1.5 flex flex-col gap-px" style={{ background: 'var(--Lumina-Tokens-canvas)' }}>
+      {/* G5 dock：8 参数组标签组（图标化 dock 标签；组保持挂载，切 tab 不丢状态） */}
+      <div className="shrink-0 rounded-[2px] border border-line bg-panel overflow-hidden">
+        <div className="flex items-center flex-wrap gap-0.5 px-1 pt-1 border-b border-line" role="tablist" aria-label="调整面板 dock">
           {DOCK_TABS.map((t) => {
             const active = activeTab === t.id;
             return (
@@ -117,17 +119,19 @@ export default function ProPanel({ histogram }: { histogram?: Histogram | null }
                 role="tab"
                 aria-selected={active}
                 onClick={() => switchTab(t.id)}
-                className={`h-7 px-1.5 rounded-t-mdC text-2xs transition-colors ${
+                title={t.label}
+                className={`inline-flex items-center gap-1 h-7 px-1.5 rounded-t-smC text-2xs transition-colors ${
                   active ? 'text-txt bg-hover font-medium' : 'text-txt2 hover:text-txt hover:bg-hover'
                 }`}
                 style={active ? { boxShadow: 'inset 0 -2px 0 var(--Lumina-Tokens-accent)' } : undefined}
               >
+                <LuIcon name={t.icon} size={13} className="shrink-0" />
                 {t.label}
               </button>
             );
           })}
         </div>
-        <div className="p-1.5 flex flex-col gap-1.5">
+        <div className="p-1 flex flex-col gap-px">
           {/* inactive 组 display:none 但保持挂载：展开态/选择态/输入不丢 */}
           <div style={{ display: activeTab === 'basic' ? undefined : 'none' }}><BasicGroup params={params} /></div>
           <div style={{ display: activeTab === 'curve' ? undefined : 'none' }}><CurveGroup params={params} /></div>
@@ -158,7 +162,7 @@ export default function ProPanel({ histogram }: { histogram?: Histogram | null }
 function BasicGroup({ params }: { params: EditParams }) {
   const applyPatch = useDevelop((s) => s.applyPatch);
   return (
-    <PanelCard title="基础" icon="sliders" defaultOpen hint="14 项">
+    <PanelCard title="基础" icon="basic" defaultOpen hint="14 项">
       <div className="px-2 pb-1 flex items-center gap-2">
         <ParamSegmented
           value={params.whiteBalance}
@@ -289,7 +293,7 @@ function ColorGroup({ params }: { params: EditParams }) {
 
 function DetailGroup({ params }: { params: EditParams }) {
   return (
-    <PanelCard title="细节" icon="lens" defaultOpen={false} hint="7 项">
+    <PanelCard title="细节" icon="detail" defaultOpen={false} hint="7 项">
       <GroupLabel>锐化</GroupLabel>
       <Row params={params} path="detail.sharpness" label="数量" min={0} max={150} defaultValue={25} />
       <Row params={params} path="detail.sharpenRadius" label="半径" min={0.5} max={3} step={0.1} defaultValue={1} format={(v) => v.toFixed(1)} />
@@ -307,7 +311,7 @@ function DetailGroup({ params }: { params: EditParams }) {
 
 function LensGroup({ params }: { params: EditParams }) {
   return (
-    <PanelCard title="镜头" icon="target" defaultOpen={false} hint="3 项">
+    <PanelCard title="镜头" icon="lens" defaultOpen={false} hint="3 项">
       <ParamToggle
         label="启用镜头配置文件"
         checked={params.optics.lensProfileEnable}
@@ -326,7 +330,7 @@ function LensGroup({ params }: { params: EditParams }) {
 function GeometryGroup({ params }: { params: EditParams }) {
   const g = params.geometry;
   return (
-    <PanelCard title="几何" icon="transform" defaultOpen={false} hint="13 项">
+    <PanelCard title="几何" icon="geometry" defaultOpen={false} hint="13 项">
       <GroupLabel>裁剪</GroupLabel>
       <ParamToggle label="启用裁剪框" checked={g.hasCrop} onChange={(v) => void useDevelop.getState().setPath('geometry.hasCrop', v, true, v ? '开启裁剪' : '关闭裁剪')} />
       <Row params={params} path="geometry.cropTop" label="上边距" min={0} max={50} />
@@ -351,7 +355,7 @@ function GeometryGroup({ params }: { params: EditParams }) {
 
 function EffectsGroup({ params }: { params: EditParams }) {
   return (
-    <PanelCard title="效果" icon="auto" defaultOpen={false} hint="6 项">
+    <PanelCard title="效果" icon="effects" defaultOpen={false} hint="6 项">
       <GroupLabel>暗角</GroupLabel>
       <Row params={params} path="optics.vignetteAmount" label="数量" min={-100} max={100} />
       <Row params={params} path="optics.vignetteMidpoint" label="中点" min={0} max={100} defaultValue={50} />
@@ -368,7 +372,7 @@ function EffectsGroup({ params }: { params: EditParams }) {
 
 function CalibrationGroup({ params }: { params: EditParams }) {
   return (
-    <PanelCard title="校准" icon="grid" defaultOpen={false} hint="7 项">
+    <PanelCard title="校准" icon="calibration" defaultOpen={false} hint="7 项">
       <Row params={params} path="calibration.shadowTint" label="阴影色调" min={-100} max={100} />
       <GroupLabel>原色</GroupLabel>
       <Row params={params} path="calibration.redHue" label="红 色相" min={-100} max={100} />

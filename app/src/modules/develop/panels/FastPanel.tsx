@@ -37,7 +37,7 @@ export default function FastPanel({ histogram }: { histogram?: Histogram | null 
 
   return (
     <div className="h-full overflow-y-auto p-2 flex flex-col gap-1.5" style={{ background: 'var(--Lumina-Tokens-canvas)' }}>
-      <PanelCard title="基本调整" defaultOpen hint="6 项">
+      <PanelCard title="基本调整" icon="basic" defaultOpen hint="6 项">
         {BASIC_SLIDERS.map((s) => (
           <ParamSlider
             key={s.key as string}
@@ -55,7 +55,7 @@ export default function FastPanel({ histogram }: { histogram?: Histogram | null 
       </PanelCard>
 
       {/* temperature 单位契约：store 内为归一化值，UI 显示/输入口径为开尔文 */}
-      <PanelCard title="白平衡" defaultOpen hint={params.whiteBalance === 'custom' ? `${Math.round(temperatureToKelvin(params.temperature ?? 0))}K` : 'As Shot'}>
+      <PanelCard title="白平衡" icon="wb" defaultOpen hint={params.whiteBalance === 'custom' ? `${Math.round(temperatureToKelvin(params.temperature ?? 0))}K` : 'As Shot'}>
         <div className="px-2 pb-1">
           <ParamSegmented
             value={params.whiteBalance}
@@ -91,7 +91,7 @@ export default function FastPanel({ histogram }: { histogram?: Histogram | null 
         )}
       </PanelCard>
 
-      <PanelCard title="色调曲线" defaultOpen hint="复合曲线">
+      <PanelCard title="色调曲线" icon="curve" defaultOpen hint="复合曲线">
         <div className="px-2">
           <CurveEditor
             points={curvePoints.length >= 2 ? curvePoints : [{ x: 0, y: 0 }, { x: 255, y: 255 }]}
@@ -104,11 +104,11 @@ export default function FastPanel({ histogram }: { histogram?: Histogram | null 
         <div className="text-2xs text-txt3 px-3 pt-1">拖动调整 · 单击添加点 · 右键删除（松手写入 XMP）</div>
       </PanelCard>
 
-      <PanelCard title="局部蒙版" defaultOpen hint="L1 · 已建列表">
+      <PanelCard title="局部蒙版" icon="mask" defaultOpen hint="L1 · 已建列表">
         <MaskPanel />
       </PanelCard>
 
-      <PanelCard title="直方图" defaultOpen hint="RGB 叠加 + 亮度">
+      <PanelCard title="直方图" icon="histogram" defaultOpen hint="RGB 叠加 + 亮度">
         <HistogramPanel histogram={histogram ?? null} bare />
       </PanelCard>
 

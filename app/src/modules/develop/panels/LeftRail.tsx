@@ -27,7 +27,7 @@ export function NavigatorCard() {
     left: g?.hasCrop ? Math.min(40, Math.max(0, g.cropLeft ?? 0)) : 0,
   };
   return (
-    <PanelCard title="导航器" defaultOpen hint="取景">
+    <PanelCard title="导航器" icon="navigator" defaultOpen hint="取景">
       <div className="px-2 pb-1">
         <div className="relative rounded-mdC overflow-hidden" style={{ background: 'var(--Lumina-Tokens-viewer)', aspectRatio: '3 / 2' }}>
           {baseImageUrl ? (
@@ -80,7 +80,7 @@ export function PresetCard() {
   }, []);
 
   return (
-    <PanelCard title="预设" defaultOpen hint={err ? '加载失败' : `${presets.length} 组`}>
+    <PanelCard title="预设" icon="preset" defaultOpen hint={err ? '加载失败' : `${presets.length} 组`}>
       <div className="px-2 pb-1 flex flex-col gap-1">
         {err && <div className="text-2xs px-1" style={{ color: 'var(--Lumina-Tokens-danger)' }}>{err}</div>}
         {!err && presets.length === 0 && <div className="text-2xs text-txt3 px-1">无预设</div>}
@@ -138,7 +138,7 @@ export function SnapshotCard() {
   }, [refresh]);
 
   return (
-    <PanelCard title="快照" icon="clock" defaultOpen hint={err ? '加载失败' : loading ? '加载中…' : `${snaps.length} 条`}>
+    <PanelCard title="快照" icon="snapshot" defaultOpen hint={err ? '加载失败' : loading ? '加载中…' : `${snaps.length} 条`}>
       <div className="px-2 pb-1 flex flex-col gap-1">
         <Button
           size="sm"
@@ -182,7 +182,7 @@ export function SnapshotCard() {
 /** G4 调整图层常驻卡片（原右上 Dialog 迁移；栈内容复用 LayersPanel） */
 export function LayersCard() {
   return (
-    <PanelCard title="图层" icon="sliders" defaultOpen hint="调整图层栈">
+    <PanelCard title="图层" icon="layers" defaultOpen hint="调整图层栈">
       <LayersPanel />
     </PanelCard>
   );
