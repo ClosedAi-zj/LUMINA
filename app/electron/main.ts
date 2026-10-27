@@ -498,6 +498,8 @@ function registerWindowAccelerators(win: BrowserWindow): void {
 
 /** 画廊本地预览端口（引擎不感知该端口，URL 由主进程重写） */
 const GALLERY_PORT = 51866;
+/** 实际绑定的端口：51866 被占用（多开/上次未退出/被别的进程占）时顺延，null = 服务未起 */
+let galleryPort: number | null = null;
 
 /**
  * 引擎返回的 previewUrl 是 `lumina-gallery://{token}` —— 这是稳定标识，不是可点击地址。
@@ -506,7 +508,9 @@ const GALLERY_PORT = 51866;
  */
 function rewriteGalleryUrls<T>(value: T): T {
   const prefix = 'lumina-gallery://';
-  const toHttp = (u: string) => `http://127.0.0.1:${GALLERY_PORT}/gallery/${u.slice(prefix.length)}/`;
+  // 端口取实际绑定值：多开时首个实例占 51866，第二个实例顺延到 51867…
+  const port = galleryPort ?? GALLERY_PORT;
+  const toHttp = (u: string) => `http://127.0.0.1:${port}/gallery/${u.slice(prefix.length)}/`;
   const walk = (v: unknown): unknown => {
     if (typeof v === 'string') return v.startsWith(prefix) ? toHttp(v) : v;
     if (Array.isArray(v)) return v.map(walk);
@@ -524,7 +528,7 @@ function rewriteGalleryUrls<T>(value: T): T {
 async function startGalleryServer(): Promise<void> {
   const http = await import('node:http');
   const fs = await import('node:fs');
-  const server = http.createServer((req, res) => {
+  const handler: import('node:http').RequestListener = (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     // /gallery/{token}/... → {home}/gallery/{token}/...
     const rel = url.pathname.replace(/^\/gallery\//, '').replace(/\.\./g, '');
@@ -541,9 +545,38 @@ async function startGalleryServer(): Promise<void> {
       res.writeHead(200, { 'Content-Type': mime[ext] ?? 'application/octet-stream' });
       res.end(data);
     });
-  });
-  await new Promise<void>((resolve) => server.listen(GALLERY_PORT, '127.0.0.1', resolve));
-  galleryServer = server;
+  };
+  // 端口占用不许炸主进程（曾经：第二次启动亮红框 Uncaught Exception EADDRINUSE 直接崩溃）。
+  // 与 MCP 桥同款策略：从 GALLERY_PORT 起顺延试探，全占满则降级（预览链接不可用，其余功能不受影响）。
+  // 每次试探新建 server 实例：bind 失败后的 server 句柄状态不可靠，复用容易踩二次错误。
+  for (let i = 0; i < 12; i++) {
+    const port = GALLERY_PORT + i;
+    const server = http.createServer(handler);
+    const ok = await new Promise<boolean>((resolve) => {
+      const onError = () => {
+        server.removeListener('listening', onListening);
+        resolve(false);
+      };
+      const onListening = () => {
+        server.removeListener('error', onError);
+        resolve(true);
+      };
+      server.once('error', onError);
+      server.once('listening', onListening);
+      server.listen(port, '127.0.0.1');
+    });
+    if (ok) {
+      galleryPort = port;
+      galleryServer = server;
+      // 绑定成功后再挂一个常驻 error 监听：运行期 IO 错误只记日志，
+      // 不让 EventEmitter 的 'error' 无监听抛成 uncaughtException（那会弹红框崩主进程）
+      server.on('error', (e: Error) => boot(`gallery server error: ${e.message}`));
+      boot(`gallery server listening on 127.0.0.1:${port}`);
+      return;
+    }
+    boot(`gallery port ${port} 被占用，顺延`);
+  }
+  boot('gallery server 未能绑定任何端口：预览链接降级为不可用（其余功能不受影响）');
 }
 
 async function bootstrap(): Promise<void> {
