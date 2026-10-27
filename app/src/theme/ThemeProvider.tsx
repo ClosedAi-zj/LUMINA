@@ -39,6 +39,17 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     setTheme(theme === 'Dark' ? 'Light' : 'Dark');
   }, [theme, setTheme]);
 
+  // MCP 事件桥：外部（渲染层 MCP 执行器）无法访问 React 上下文，
+  // 统一经 lumina:theme-set 事件走同一个 setTheme，避免 DOM attribute 与上下文状态分叉。
+  useEffect(() => {
+    const onSet = (e: Event) => {
+      const t = (e as CustomEvent<{ theme?: ThemeName }>).detail?.theme;
+      if (t === 'Dark' || t === 'Light') setTheme(t);
+    };
+    window.addEventListener('lumina:theme-set', onSet);
+    return () => window.removeEventListener('lumina:theme-set', onSet);
+  }, [setTheme]);
+
   return <Ctx.Provider value={{ theme, setTheme, toggle }}>{children}</Ctx.Provider>;
 }
 

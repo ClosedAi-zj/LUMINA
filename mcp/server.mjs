@@ -283,6 +283,26 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'set_develop_mode',
+    description: '切换修图台界面模式：fast 快捷（单列面板，默认）/ pro 专业（PS·LR 形态：左侧工具轨 + 左右玻璃侧栏 + 画布内浮动选项栏）。只改控件呈现，同一次会话共享参数、不重新解码。',
+    inputSchema: {
+      type: 'object',
+      properties: { mode: { type: 'string', enum: ['fast', 'pro'], description: 'fast 快捷 | pro 专业' } },
+      required: ['mode'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'set_theme',
+    description: '切换界面主题：Dark 深色（默认）/ Light 浅色。照片观察区恒为中性深色，不随主题翻转（设计红线 R5）。',
+    inputSchema: {
+      type: 'object',
+      properties: { theme: { type: 'string', enum: ['Dark', 'Light'], description: 'Dark 深色 | Light 浅色' } },
+      required: ['theme'],
+      additionalProperties: false,
+    },
+  },
 ];
 
 // ---------- MCP 服务 ----------

@@ -33,6 +33,12 @@ const MASK_LOCAL_KEYS = new Set<string>([
 
 const MASK_TYPES = new Set<string>(['linear', 'radial', 'brush']);
 
+/** 修图台界面模式（store 的 DevelopMode 同款取值） */
+const DEVELOP_MODES = new Set<string>(['fast', 'pro']);
+
+/** 主题取值（ThemeProvider 的 ThemeName 同款取值） */
+const THEME_NAMES = new Set<string>(['Dark', 'Light']);
+
 const MODULE_VIEWS: AppView[] = [
   'library', 'develop', 'ingest', 'health', 'culling', 'map',
   'timelapse', 'landscape', 'export', 'portfolio', 'gallery',
@@ -266,8 +272,36 @@ async function opSwitchModule(rawParams: Record<string, unknown>): Promise<Recor
   return { view: useUi.getState().view };
 }
 
-// ---------- 分发与接线 ----------
+/**
+ * 修图台界面模式切换（fast 快捷 / pro 专业）。
+ * 与 Store 的 setMode 同一条路径：只改控件呈现，不调引擎、不重新解码。
+ */
+async function opSetDevelopMode(rawParams: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const mode = rawParams.mode;
+  if (typeof mode !== 'string' || !DEVELOP_MODES.has(mode)) {
+    throw new McpOpError(`mode 必须是 fast | pro（收到: ${String(mode)}）`);
+  }
+  useDevelop.getState().setMode(mode as 'fast' | 'pro');
+  return { mode: useDevelop.getState().mode };
+}
 
+/**
+ * 主题切换：主题真相源在 React 上下文（ThemeProvider），执行器不持有 React 树，
+ * 因此走事件桥（ThemeProvider 订阅后调用同一个 setTheme，DOM attribute 与持久化由它负责）。
+ * 返回 requested 与 observed 两值：attribute 尚未翻转时如实暴露，不假装成功。
+ */
+async function opSetTheme(rawParams: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const theme = rawParams.theme;
+  if (typeof theme !== 'string' || !THEME_NAMES.has(theme)) {
+    throw new McpOpError(`theme 必须是 Dark | Light（收到: ${String(theme)}）`);
+  }
+  window.dispatchEvent(new CustomEvent('lumina:theme-set', { detail: { theme } }));
+  // React 状态更新 → effect 写 attribute 是异步的，等一帧再读观测值
+  await new Promise((r) => setTimeout(r, 50));
+  return { requested: theme, observed: document.documentElement.getAttribute('data-theme') };
+}
+
+// ---------- 分发与接线 ----------
 const OPS: Record<string, (params: Record<string, unknown>) => Promise<Record<string, unknown>>> = {
   lumina_status: () => opStatus(),
   list_photos: (p) => opListPhotos(p),
@@ -279,6 +313,8 @@ const OPS: Record<string, (params: Record<string, unknown>) => Promise<Record<st
   restore_snapshot: (p) => opRestoreSnapshot(p),
   export_photo: (p) => opExportPhoto(p),
   switch_module: (p) => opSwitchModule(p),
+  set_develop_mode: (p) => opSetDevelopMode(p),
+  set_theme: (p) => opSetTheme(p),
 };
 
 async function dispatch(op: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
