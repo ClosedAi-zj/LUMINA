@@ -111,9 +111,15 @@ export async function runSmokeScenario(): Promise<void> {
     const layersResident = idx('图层') > -1;
     // M2b-2 G5：dock 8 个 tab；切 tab 不丢组内状态 —— 色彩组点「橙」色带 → 切基础 → 切回，
     // 「橙」选中态必须还在（证明组未被卸载；展开态/输入同理走同一挂载机制）
+    // v1.4.0：标题栏中央分段导航也是 role="tab"（7 个模块），这里必须限定在 dock 容器内计数，
+    // 否则会把模块导航误算进 dock（曾短暂出现 dockTabs=15 的假绿），并显式断言恰为 8。
+    const dockScope = '[aria-label="调整面板 dock"]';
     const dockTab = (label: string) =>
-      Array.from(document.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find((b) => b.textContent?.trim() === label);
-    const dockTabCount = document.querySelectorAll('[role="tab"]').length;
+      Array.from(document.querySelectorAll<HTMLButtonElement>(`${dockScope} [role="tab"]`)).find(
+        (b) => b.textContent?.trim() === label,
+      );
+    const dockTabCount = document.querySelectorAll(`${dockScope} [role="tab"]`).length;
+    if (dockTabCount !== 8) log(`t17-pro-dock: FAILED 期望 8 个 dock tab，实测 ${dockTabCount}`);
     dockTab('色彩')?.click();
     await sleep(300);
     // 色彩卡默认折叠（defaultOpen=false，PanelCard 折叠态不渲染内容）：先展开——
