@@ -273,8 +273,10 @@ function createWindow(): void {
     }
     // WP-B1：主题双截图。深色在 smoke 归位深色后拍（theme-pre 行，仍在修图台）；
     // 浅色在 theme 日志行后拍（smoke 已留 600ms 截图窗口）。
+    // 工装修复（M2b-2 收尾）：docs/ui-1.1/theme-*.png 是入库验收资产，smoke 不得改写——
+    // smoke 模式的主题截图改落 build/ 临时路径；正式基线截图只走 LUMINA_BASELINE=1 流程。
     if (isSmoke && message.includes('[smoke-scenario] theme-pre')) {
-      captureTo(path.resolve(appRoot, 'docs/ui-1.1/theme-dark.png'), 2);
+      captureTo(path.resolve(appRoot, 'build', 'smoke-theme-dark.png'), 2);
     }
     if (isSmoke && message.includes('[smoke-scenario] hsl-diag')) {
       captureTo(path.resolve(appRoot, 'build/hsl-diag.png'), 2);
@@ -305,7 +307,7 @@ function createWindow(): void {
       }
     }
     if (isSmoke && message.includes('[smoke-scenario] theme: dark=')) {
-      captureTo(path.resolve(appRoot, 'docs/ui-1.1/theme-light.png'), 1);
+      captureTo(path.resolve(appRoot, 'build', 'smoke-theme-light.png'), 1);
     }
     // WP-B7：快捷键端到端验证。sendInputEvent 把事件真正投进渲染层，走的是
     // 原生 keydown 链路（不是回读代码/直接调 store），所以能证明"键在 UI 生效"。
