@@ -3,14 +3,14 @@
  *
  * 与 ops/oracle93.ts 逐 pass 对应：
  *   geo（单应+畸变复合，单次采样）→ [blur+denoiseApply] → [blur+clarity] → [blur+texture]
- *   → tone（S2 逐像素 + S3 toneMap + S4 曲线/HSL/分级）→ [blur+sharpen]
- *   → effects（暗角/颗粒/sRGB 编码）→ composite（split + A 侧蒙版）。
+ *   → tone（S2 逐像素 + S3 toneMap + S4 曲线/HSL/分级）→ mask（T2.7 蒙版，tone 后 sharpen 前）
+ *   → [blur+sharpen] → effects（暗角/颗粒/sRGB 编码）→ composite（split）。
  *
  * 中间缓冲 = RGBA32F（t = log16 码 / 65535）；最终 sRGB 输出 = RGBA8。
- * 蒙版/画笔场沿用 WP-B5 既有纹理与 uniforms（T2.2 前近似口径不动）。
+ * 蒙版 = 独立 mask pass（32 槽数据纹理 + 4×8 画笔场图集，T2.7）。
  */
 
-import type { EditParams } from '../../../../api/protocol';
+import type { EditParams, MaskLayer } from '../../../../api/protocol';
 import {
   FRAG_BLUR_H,
   FRAG_BLUR_V,
@@ -19,6 +19,7 @@ import {
   FRAG_EFFECTS,
   FRAG_GEO,
   FRAG_LOCAL_CONTRAST,
+  FRAG_MASK,
   FRAG_SHARPEN,
   FRAG_TONE,
   FRAG_WB,
@@ -26,8 +27,37 @@ import {
 } from './glsl';
 import { buildGeomTransform, buildGrainNoise } from './oracle93';
 import { hashNoise } from './log16';
+import { buildMaskDataTex, maskNeedClarityBlur, MAX_MASK_SLOTS, MASK_DATA_ROWS } from '../maskField';
 
 const MAX_BLUR_RADIUS = 16;
+
+/** 管线 pass 链（代码级顺序断言的权威表；runSide 按此序执行） */
+export const PASS_CHAIN = [
+  'wb', 'geo', 'denoise', 'localContrast', 'tone', 'mask', 'sharpen', 'effects',
+] as const;
+
+/** mask pass 位置代码断言：必须位于 tone 之后、sharpen 之前（架构 §3.1.4 T2.7 验收） */
+export function assertMaskPassOrder(seq: readonly string[]): void {
+  const iSeq = (n: string): number => {
+    const i = seq.indexOf(n);
+    if (i < 0) throw new Error(`mask-pass-order: pass '${n}' 未在序列中登记`);
+    return i;
+  };
+  const iChainTone = PASS_CHAIN.indexOf('tone');
+  const iChainMask = PASS_CHAIN.indexOf('mask');
+  const iChainSharp = PASS_CHAIN.indexOf('sharpen');
+  if (!(iChainTone < iChainMask && iChainMask < iChainSharp)) {
+    throw new Error('mask-pass-order: PASS_CHAIN 常量表顺序错误');
+  }
+  const iTone = iSeq('tone');
+  const iMask = iSeq('mask');
+  const iSharp = seq.indexOf('sharpen');
+  if (!(iMask > iTone && (iSharp < 0 || iSharp > iMask))) {
+    throw new Error(
+      `mask-pass-order: 运行时序列违规 tone=${iTone} mask=${iMask} sharpen=${iSharp}`,
+    );
+  }
+}
 
 interface Fbo {
   tex: WebGLTexture;
@@ -57,6 +87,7 @@ export class PipelineGL {
   private curveTex: WebGLTexture | null = null;
   private noiseTex: WebGLTexture | null = null;
   private fieldTex: WebGLTexture | null = null;
+  private maskDataTex: WebGLTexture | null = null;
   private fbos = new Map<string, Fbo>();
   private quad = false;
   private srcW = 0;
@@ -67,6 +98,10 @@ export class PipelineGL {
   private lastToneFbo: Fbo | null = null;
   /** 四条曲线恒等跳过标志（x=RGB复合 y=R z=G w=B） */
   private curveSkip: number[] = [0, 0, 0, 0];
+  /** 当前 mask pass 蒙版数（setMaskData 写入；0 = mask pass 透传） */
+  private maskCount = 0;
+  /** 最近一次 runSide 实际执行的 pass 序列（mask 位置断言用） */
+  lastPassSeq: string[] = [];
 
   get warnings(): string {
     return this.shaderWarnings;
@@ -89,10 +124,13 @@ export class PipelineGL {
       denoiseApply: FRAG_DENOISE_APPLY,
       localContrast: FRAG_LOCAL_CONTRAST,
       tone: FRAG_TONE,
+      mask: FRAG_MASK,
       sharpen: FRAG_SHARPEN,
       effects: FRAG_EFFECTS,
       composite: FRAG_COMPOSITE,
     };
+    // 代码级断言（T2.7 验收）：mask pass 必须位于 tone 之后、sharpen 之前
+    assertMaskPassOrder(PASS_CHAIN);
     const vs = this.compile(gl.VERTEX_SHADER, PASS_VERT);
     if (!vs) return false;
     for (const [name, frag] of Object.entries(passFrags)) {
@@ -213,7 +251,7 @@ export class PipelineGL {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
   }
 
-  /** 画笔蒙版距离场图集（沿用 WP-B5 上传路径） */
+  /** 画笔蒙版距离场图集（4×8 = 32 槽；沿用 WP-B5 上传路径） */
   setFieldAtlas(bytes: Uint8Array, cols: number, rows: number): void {
     const gl = this.gl;
     if (!gl) return;
@@ -223,6 +261,26 @@ export class PipelineGL {
     gl.texImage2D(
       gl.TEXTURE_2D, 0, gl.LUMINANCE, cols * 256, rows * 256, 0, gl.LUMINANCE,
       gl.UNSIGNED_BYTE, bytes,
+    );
+  }
+
+  /** 蒙版数据纹理（T2.7）：32 槽 × 6 行 RGBA32F（buildMaskDataTex 打包）。
+   *  超容量显式失败（A4 容量断言：32 槽硬上限，无静默截断）。 */
+  setMaskData(masks: MaskLayer[]): void {
+    const gl = this.gl;
+    if (!gl) return;
+    if (masks.length > MAX_MASK_SLOTS) {
+      throw new Error(`mask 槽容量溢出：${masks.length} > ${MAX_MASK_SLOTS}`);
+    }
+    const { data, count } = buildMaskDataTex(masks);
+    this.maskCount = count;
+    if (count === 0) return;
+    if (!this.maskDataTex) this.maskDataTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.maskDataTex);
+    this.texParams();
+    gl.texImage2D(
+      gl.TEXTURE_2D, 0, gl.RGBA, MAX_MASK_SLOTS * MASK_DATA_ROWS, 1, 0, gl.RGBA,
+      gl.FLOAT, data,
     );
   }
 
@@ -302,6 +360,7 @@ export class PipelineGL {
     slotBase: number,
   ): { tex: WebGLTexture; w: number; h: number } {
     const gl = this.gl!;
+    this.lastPassSeq = [];
     const geom = buildGeomTransform(params, this.srcW, this.srcH);
     const gw = geom.inv ? geom.outW : this.srcW;
     const gh = geom.inv ? geom.outH : this.srcH;
@@ -409,6 +468,33 @@ export class PipelineGL {
       curTex = out.tex;
       if (slotBase === 0) this.lastToneFbo = out;
     }
+    this.lastPassSeq.push('tone');
+
+    // P3.5 mask（T2.7 蒙版阶段：tone 后 sharpen 前；uCount=0 时透传直拷保持序列恒定）
+    {
+      const needClarityBlur = this.maskCount > 0 &&
+        (params.masks ?? []).some(maskNeedClarityBlur);
+      if (needClarityBlur) {
+        // 共享盒式模糊平面（半径 10，进入蒙版阶段的码域快照；每次渲染只算 1 次）
+        this.blurPair(curTex, curW, curH, slotBase + 2, 10, 0);
+      }
+      const out = outTarget();
+      this.drawPass('mask', curTex, curW, curH, out, (p) => {
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, this.maskDataTex);
+        gl.uniform1i(p.u['uMaskData'] ?? null, 1);
+        gl.activeTexture(gl.TEXTURE2);
+        gl.bindTexture(gl.TEXTURE_2D, this.fieldTex);
+        gl.uniform1i(p.u['uMaskField'] ?? null, 2);
+        gl.activeTexture(gl.TEXTURE3);
+        gl.bindTexture(gl.TEXTURE_2D, needClarityBlur ? this.fbo(curW, curH, slotBase + 3, true).tex : this.srcTex);
+        gl.uniform1i(p.u['uBlur'] ?? null, 3);
+        gl.uniform1i(p.u['uMaskCount'] ?? null, this.maskCount);
+        gl.uniform1f(p.u['uHasBlur'] ?? null, needClarityBlur ? 1 : 0);
+      });
+      curTex = out.tex;
+    }
+    this.lastPassSeq.push('mask');
 
     // S5 锐化（unsharp + masking）
     const sharpAmt = params.detail?.sharpness ?? 0;
@@ -429,6 +515,7 @@ export class PipelineGL {
         );
       });
       curTex = out.tex;
+      this.lastPassSeq.push('sharpen');
     }
 
     // P5 effects（暗角 + 颗粒）+ S7 sRGB 编码
@@ -538,26 +625,20 @@ export class PipelineGL {
     return m;
   }
 
-  /** 完整渲染（A/B 双侧 + composite 到画布；蒙版沿用既有 UI 语义） */
+  /** 完整渲染（A/B 双侧 + composite 到画布；蒙版 = 各侧 params.masks 经 mask pass） */
   render(
     canvas: HTMLCanvasElement,
     params: EditParams,
     before: EditParams | null,
     split: number | null,
-    masks: {
-      count: number;
-      geoA: Float32Array;
-      geoB: Float32Array;
-      local0: Float32Array;
-      local1: Float32Array;
-      amount: Float32Array;
-      type: Float32Array;
-      opacity: Float32Array;
-    } | null,
   ): boolean {
     const gl = this.gl;
     if (!gl || !this.srcTex) return false;
+    this.setMaskData(params.masks ?? []);
     const sideA = this.runSide(params, 0);
+    if (before) {
+      this.setMaskData(before.masks ?? []);
+    }
     const sideB = before ? this.runSide(before, 8) : sideA;
     const outW = sideA.w;
     const outH = sideA.h;
@@ -576,21 +657,6 @@ export class PipelineGL {
     gl.bindTexture(gl.TEXTURE_2D, sideB.tex);
     gl.uniform1i(pc.u['uB'] ?? null, 1);
     gl.uniform1f(pc.u['uSplit'] ?? null, split === null ? -1 : split);
-    if (masks) {
-      gl.activeTexture(gl.TEXTURE2);
-      gl.bindTexture(gl.TEXTURE_2D, this.fieldTex);
-      gl.uniform1i(pc.u['uMaskField'] ?? null, 2);
-      gl.uniform1i(pc.u['uMaskCount'] ?? null, masks.count);
-      gl.uniform4fv(pc.u['uMaskGeoA[0]'] ?? null, masks.geoA);
-      gl.uniform4fv(pc.u['uMaskGeoB[0]'] ?? null, masks.geoB);
-      gl.uniform4fv(pc.u['uMaskLocal0[0]'] ?? null, masks.local0);
-      gl.uniform4fv(pc.u['uMaskLocal1[0]'] ?? null, masks.local1);
-      gl.uniform1fv(pc.u['uMaskAmount[0]'] ?? null, masks.amount);
-      gl.uniform1fv(pc.u['uMaskType[0]'] ?? null, masks.type);
-      gl.uniform1fv(pc.u['uMaskOpacity[0]'] ?? null, masks.opacity);
-    } else {
-      gl.uniform1i(pc.u['uMaskCount'] ?? null, 0);
-    }
     const loc = gl.getAttribLocation(pc.prog, 'aPos');
     gl.enableVertexAttribArray(loc);
     gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
@@ -622,6 +688,7 @@ export class PipelineGL {
     if (this.curveTex) gl.deleteTexture(this.curveTex);
     if (this.noiseTex) gl.deleteTexture(this.noiseTex);
     if (this.fieldTex) gl.deleteTexture(this.fieldTex);
-    this.srcTex = this.curveTex = this.noiseTex = this.fieldTex = null;
+    if (this.maskDataTex) gl.deleteTexture(this.maskDataTex);
+    this.srcTex = this.curveTex = this.noiseTex = this.fieldTex = this.maskDataTex = null;
   }
 }

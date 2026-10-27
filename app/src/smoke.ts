@@ -590,9 +590,9 @@ export async function runSmokeScenario(): Promise<void> {
     await useDevelop.getState().addMask('brush');
     const brushMaskId = useDevelop.getState().selectedMaskId;
     let brushLine = 'skipped';
-    // 测试前把蒙版列表收敛成「只有这个画笔蒙版」：着色器只有 6 个槽位，
-    // 历史冒烟在同一张照片上累积过 52 个蒙版（首槽之外全部不参与渲染），
-    // 画笔蒙版落在槽 7+ 时距离场根本不会上传，会出现"蒙版静默失效"的假象。
+    // 测试前把蒙版列表收敛成「只有这个画笔蒙版」：着色器 32 槽（T2.7 前仅 6 槽），
+    // 历史冒烟在同一张照片上累积过 52 个蒙版（超槽全部不参与渲染），
+    // 画笔蒙版落在槽 33+ 时距离场根本不会上传，会出现"蒙版静默失效"的假象。
     // 收敛同时也把这张测试照片的历史垃圾清掉。
     if (brushMaskId) {
       const only = (useDevelop.getState().params?.masks ?? []).filter((m) => m.id === brushMaskId);
@@ -651,6 +651,10 @@ export async function runSmokeScenario(): Promise<void> {
         return [r / idxs.length, g / idxs.length, b / idxs.length];
       };
       const gridBefore = sampleGrid();
+      // 新蒙版工厂 amount 缺省 0（强度语义 = 引擎 w=f·opacity·amount）：不设强度
+      // 蒙版正确地不施加（T2.7 前旧 shader 忽略 amount 属语义错误）。先设 amount。
+      await useDevelop.getState().updateMask(brushMaskId, { amount: 100 });
+      await sleep(400);
       await useDevelop.getState().updateMaskLocal(brushMaskId, 'exposure', 60, true);
       await sleep(600);
       const gridAfter = sampleGrid();
@@ -795,6 +799,65 @@ export async function runSmokeScenario(): Promise<void> {
       }
     } catch (perr) {
       log(`parity93: error ${(perr as Error).message} allPass=false`);
+    }
+
+    // ---------- ⑦d T2.7 蒙版 GPU 侧：27 组 parity + 范围蒙版 + 20 槽 + pass 位置 + 容量 + 零告警 ----------
+    try {
+      log('mask-parity-step: import-begin');
+      const mod = await import('./modules/develop/webgl/ops/parity93');
+      const { assertMaskPassOrder } = await import('./modules/develop/webgl/ops/pipeline');
+      log('mask-parity-step: import-ok');
+      const mCanvas = document.createElement('canvas');
+      const mRunner = new mod.Parity93Runner();
+      if (mRunner.init(mCanvas)) {
+        // pass 位置断言（运行时序列）：带锐化参数跑一帧，断言 tone < mask < sharpen
+        const posParams = mod.defaultParams();
+        posParams.detail.sharpness = 40;
+        mRunner.pipeline.render(mCanvas, posParams, null, null);
+        let orderOk = true;
+        let orderMsg = '';
+        try {
+          assertMaskPassOrder(mRunner.pipeline.lastPassSeq);
+          orderMsg = mRunner.pipeline.lastPassSeq.join('>');
+        } catch (eord) {
+          orderOk = false;
+          orderMsg = (eord as Error).message;
+        }
+        log(`mask-pass-order: ok=${orderOk} seq=${orderMsg}`);
+        // A3 27 组（3 类型 × 3 槽数 × 3 combine）+ 范围蒙版 2 组 + A4 20 槽
+        const mReport = mod.runMaskSuite(mRunner);
+        for (const c of mReport.cases) {
+          log(
+            `mask-parity-case: name=${c.leaf} mean=${c.mean.toFixed(4)} max=${c.max.toFixed(0)} pass=${c.pass}`,
+          );
+        }
+        log(`mask-parity-report: ${JSON.stringify(mReport)}`);
+        log(`mask-parity: allPass=${mReport.allPass} worstMean=${mReport.worstMean.toFixed(4)} worstMax=${mReport.worstMax.toFixed(0)} gpu=${mReport.gpuAvailable}`);
+        // A4 容量断言：33 个蒙版 → setMaskData 显式失败（32 槽硬上限）
+        let capOk = false;
+        try {
+          const many = Array.from({ length: 33 }, (_, i) => ({
+            id: `cap${i}`,
+            type: 'linear' as const,
+            enabled: true,
+            opacity: 50,
+            combine: 'replace' as const,
+            geometry: { x1: 0, y1: 0, x2: 1, y2: 1 },
+            local: { exposure: 1, contrast: 0, highlights: 0, shadows: 0, temperature: 0, tint: 0, saturation: 0, clarity: 0, dehaze: 0 },
+          }));
+          mRunner.pipeline.setMaskData(many);
+        } catch {
+          capOk = true;
+        }
+        log(`mask-capacity: slots=32 overflow33-rejected=${capOk}`);
+        // shader 零编译告警（T2.7 验收：FRAG_MASK 编译干净）
+        const mWarn = mRunner.pipeline.warnings;
+        log(`mask-shader-warnings: ${mWarn ? `FAIL ${mWarn}` : 'none'}`);
+      } else {
+        log('mask-parity: gpu-init-failed allPass=false');
+      }
+    } catch (merr) {
+      log(`mask-parity: error ${(merr as Error).message} allPass=false`);
     }
 
     // ---------- ⑦c T1.5 导出=预览像素断言（销毁三套实现后的验收，进 CI） ----------

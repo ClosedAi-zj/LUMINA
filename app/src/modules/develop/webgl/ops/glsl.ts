@@ -4,7 +4,7 @@
  * 域纪律（与引擎/T1.3 一致）：
  *  - 中间 pass 全部在 log16 码 t 域（float FBO，t = code/65535）；
  *  - S3 toneMap 是唯一域分界；S6 之后再做 sRGB 输出编码；
- *  - 蒙版沿用 app 既有 display 域近似（T2.2 前），只在 A 侧、编码后应用。
+ *  - 蒙版 = 独立 mask pass（T2.7，tone 后 sharpen 前；t 域与 engine codeAt/65535 同口径）。
  *
  * GLSL ES 1.0 红线（见 shaders.ts 头注）：uniform 数组只允许常量索引；
  * 循环用常量边界 + step 掩码（无 break/continue）；浮点纹理手动双线性
@@ -562,7 +562,8 @@ void main() {
 }
 `;
 
-/** P6：合成（split + A 侧蒙版局部调整，蒙版代码自旧 shaders.ts 原样移植） */
+/** P6：合成（split 对比；T2.7 起蒙版在独立 mask pass（tone 后 sharpen 前），
+ *  本 shader 不再含蒙版数学） */
 export const FRAG_COMPOSITE = `
 precision highp float;
 varying vec2 vUv;
@@ -570,128 +571,12 @@ uniform sampler2D uA;
 uniform sampler2D uB;
 uniform float uSplit;
 
-// ---- 蒙版（WP-B4/B5 既有实现原样移植；T2.2 前为 display 域近似） ----
-uniform int uMaskCount;
-uniform sampler2D uMaskField;
-uniform vec4 uMaskGeoA[6];
-uniform vec4 uMaskGeoB[6];
-uniform vec4 uMaskLocal0[6];
-uniform vec4 uMaskLocal1[6];
-uniform float uMaskAmount[6];
-uniform float uMaskType[6];
-uniform float uMaskOpacity[6];
-
-const vec3 LUM = vec3(0.2126, 0.7152, 0.0722);
-
-float smoothstep5(float edge0, float edge1, float x) {
-  float t = clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0);
-  return t * t * (3.0 - 2.0 * t);
-}
-
-vec3 rgb2hslM(vec3 c) {
-  float mx = max(c.r, max(c.g, c.b));
-  float mn = min(c.r, min(c.g, c.b));
-  float l = (mx + mn) * 0.5;
-  float h = 0.0;
-  float s = 0.0;
-  float d = mx - mn;
-  if (d > 1e-5) {
-    s = l > 0.5 ? d / (2.0 - mx - mn) : d / (mx + mn);
-    if (mx == c.r) h = (c.g - c.b) / d + (c.g < c.b ? 6.0 : 0.0);
-    else if (mx == c.g) h = (c.b - c.r) / d + 2.0;
-    else h = (c.r - c.g) / d + 4.0;
-    h /= 6.0;
-  }
-  return vec3(h, s, l);
-}
-
-float hue2rgbM(float p, float q, float t) {
-  if (t < 0.0) t += 1.0;
-  if (t > 1.0) t -= 1.0;
-  if (t < 1.0 / 6.0) return p + (q - p) * 6.0 * t;
-  if (t < 0.5) return q;
-  if (t < 2.0 / 3.0) return p + (q - p) * (2.0 / 3.0 - t) * 6.0;
-  return p;
-}
-
-vec3 hsl2rgbM(vec3 hsl) {
-  if (hsl.y <= 1e-5) return vec3(hsl.z);
-  float q = hsl.z < 0.5 ? hsl.z * (1.0 + hsl.y) : hsl.z + hsl.y - hsl.z * hsl.y;
-  float p = 2.0 * hsl.z - q;
-  return vec3(hue2rgbM(p, q, hsl.x + 1.0 / 3.0), hue2rgbM(p, q, hsl.x), hue2rgbM(p, q, hsl.x - 1.0 / 3.0));
-}
-
-vec3 applyMaskCore(vec3 c, vec2 uv, float active,
-                   float type, vec4 ga, vec4 gb, vec4 l0, vec4 l1,
-                   float amountRaw, float opacityRaw, vec2 cell) {
-  if (active < 0.5) return c;
-  float factor = 0.0;
-  if (type < 0.5) {
-    vec2 d = gb.xy - ga.xy;
-    float len2 = max(dot(d, d), 1e-5);
-    float t = dot(uv - ga.xy, d) / len2;
-    factor = clamp(t, 0.0, 1.0);
-  } else if (type < 1.5) {
-    vec2 d = uv - ga.xy;
-    d.y /= max(gb.w, 0.1);
-    factor = 1.0 - smoothstep5(gb.z * 0.55, gb.z, length(d));
-  } else {
-    vec2 fuv = vec2((cell.x + uv.x) / 3.0, (cell.y + 1.0 - uv.y) / 2.0);
-    factor = texture2D(uMaskField, fuv).r;
-  }
-  factor *= opacityRaw / 100.0;
-  if (factor <= 0.001) return c;
-  float amount = amountRaw / 100.0;
-  float lum = dot(c, LUM);
-  c *= pow(2.0, (l0.x + amount * 0.5) * factor * 0.8);
-  float hw = smoothstep5(0.45, 1.0, lum);
-  float sw = 1.0 - smoothstep5(0.0, 0.55, lum);
-  c += (l0.z / 100.0) * 0.4 * hw * factor * (1.0 - c);
-  c += (l0.w / 100.0) * 0.4 * sw * factor * (1.0 - c);
-  c = (c - 0.5) * (1.0 + (l0.y / 100.0) * 0.5 * factor) + 0.5;
-  c.r += (l1.x / 100.0) * 0.1 * factor;
-  c.b -= (l1.x / 100.0) * 0.1 * factor;
-  vec3 hsl = rgb2hslM(clamp(c, 0.0, 1.0));
-  hsl.y *= 1.0 + (l1.z / 100.0) * 0.6 * factor;
-  c = hsl2rgbM(clamp(hsl, 0.0, 1.0));
-  float mid = 1.0 - abs(lum - 0.5) * 2.0;
-  c = (c - 0.5) * (1.0 + (l1.w / 100.0) * 0.3 * mid * factor) + 0.5;
-  return clamp(c, 0.0, 1.0);
-}
-
-vec3 applyMask0(vec3 c, vec2 uv, float a) {
-  return applyMaskCore(c, uv, a, uMaskType[0], uMaskGeoA[0], uMaskGeoB[0], uMaskLocal0[0], uMaskLocal1[0], uMaskAmount[0], uMaskOpacity[0], vec2(0.0, 0.0));
-}
-vec3 applyMask1(vec3 c, vec2 uv, float a) {
-  return applyMaskCore(c, uv, a, uMaskType[1], uMaskGeoA[1], uMaskGeoB[1], uMaskLocal0[1], uMaskLocal1[1], uMaskAmount[1], uMaskOpacity[1], vec2(1.0, 0.0));
-}
-vec3 applyMask2(vec3 c, vec2 uv, float a) {
-  return applyMaskCore(c, uv, a, uMaskType[2], uMaskGeoA[2], uMaskGeoB[2], uMaskLocal0[2], uMaskLocal1[2], uMaskAmount[2], uMaskOpacity[2], vec2(2.0, 0.0));
-}
-vec3 applyMask3(vec3 c, vec2 uv, float a) {
-  return applyMaskCore(c, uv, a, uMaskType[3], uMaskGeoA[3], uMaskGeoB[3], uMaskLocal0[3], uMaskLocal1[3], uMaskAmount[3], uMaskOpacity[3], vec2(0.0, 1.0));
-}
-vec3 applyMask4(vec3 c, vec2 uv, float a) {
-  return applyMaskCore(c, uv, a, uMaskType[4], uMaskGeoA[4], uMaskGeoB[4], uMaskLocal0[4], uMaskLocal1[4], uMaskAmount[4], uMaskOpacity[4], vec2(1.0, 1.0));
-}
-vec3 applyMask5(vec3 c, vec2 uv, float a) {
-  return applyMaskCore(c, uv, a, uMaskType[5], uMaskGeoA[5], uMaskGeoB[5], uMaskLocal0[5], uMaskLocal1[5], uMaskAmount[5], uMaskOpacity[5], vec2(2.0, 1.0));
-}
-
 void main() {
   // 图像采样翻转：GL 帧缓冲行 0 = 显示底部，而源纹理数据行 0 = 图像顶部（imageToCodes
   // 顶行在前），不翻转则画布呈现为上下镜像（合成图是渐变长期未被发现；parity93 的
-  // readPixels 对比恰好同为 GL 行序而互相抵消）。只翻 uA/uB——蒙版 uv 保持 vUv，
-  // 与红色浮层（display 域）的对齐关系不变。
+  // readPixels 对比恰好同为 GL 行序而互相抵消）。
   vec2 iUv = vec2(vUv.x, 1.0 - vUv.y);
   vec3 cA = texture2D(uA, iUv).rgb;
-  float mc = float(uMaskCount);
-  cA = applyMask0(cA, vUv, step(0.5, mc));
-  cA = applyMask1(cA, vUv, step(1.5, mc));
-  cA = applyMask2(cA, vUv, step(2.5, mc));
-  cA = applyMask3(cA, vUv, step(3.5, mc));
-  cA = applyMask4(cA, vUv, step(4.5, mc));
-  cA = applyMask5(cA, vUv, step(5.5, mc));
   vec3 c;
   if (uSplit < 0.0) {
     c = cA;
@@ -700,5 +585,170 @@ void main() {
     c = vUv.x < uSplit ? cB : cA;
   }
   gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+}
+`;
+
+/** P3.5 独立蒙版 pass（T2.7，架构 §3.1.3/§3.1.4；engine mask_field.cpp + mask.cpp 逐式镜像）。
+ *  位置 = tone 之后、sharpen 之前（S4 末蒙版阶段）；输入/输出均为 t 域（u = t = code/65535，
+ *  与 engine codeAt/65535 同口径）。5 类因子 + 布尔 fold + 9 局部叶 + clarity 共享模糊。 */
+export const FRAG_MASK = `
+${COMMON}
+uniform sampler2D uMaskData;   // 192x1 RGBA32F：32 槽 × 6 行参数（maskField.ts buildMaskDataTex）
+uniform sampler2D uMaskField;  // 1024x2048 LUMINANCE：画笔距离场图集（4 列 × 8 行）
+uniform sampler2D uBlur;       // 共享盒式模糊平面（r10，t 域；仅 clarity 消费）
+uniform int uMaskCount;
+uniform float uHasBlur;        // 1 = uBlur 有效（存在 enabled 且 clarity≠0 的蒙版）
+
+const vec3 LUM3 = vec3(0.2126, 0.7152, 0.0722);
+const float kRowsPer = 6.0;
+const float kDataW = 32.0 * kRowsPer;   // 192
+
+vec4 fetchRow(float r) {
+  return texture2D(uMaskData, vec2((r + 0.5) / kDataW, 0.5));
+}
+
+// 画笔图集采样（NEAREST texel fetch + 手动双线性；镜像 maskField.ts sampleAtlas /
+// engine sampleBrushField256：fx/fy 截 [0, CELL-1]，4 texel lerp）
+float sampleBrushAtlas(float slot, float u, float v) {
+  float cell = 256.0;
+  float cols = 4.0;
+  float rows = 8.0;
+  float fx = clamp(u * cell - 0.5, 0.0, cell - 1.0);
+  float fy = clamp(v * cell - 0.5, 0.0, cell - 1.0);
+  float x0 = floor(fx);
+  float y0 = floor(fy);
+  float tx = fx - x0;
+  float ty = fy - y0;
+  float x1 = min(x0 + 1.0, cell - 1.0);
+  float y1 = min(y0 + 1.0, cell - 1.0);
+  float col = mod(slot, cols);
+  float row = floor(slot / cols);
+  float ax = (col * cell + x0 + 0.5) / (cols * cell);
+  float bx = (col * cell + x1 + 0.5) / (cols * cell);
+  float ay = (row * cell + y0 + 0.5) / (rows * cell);
+  float by = (row * cell + y1 + 0.5) / (rows * cell);
+  float a = texture2D(uMaskField, vec2(ax, ay)).r;
+  float b = texture2D(uMaskField, vec2(bx, ay)).r;
+  float c = texture2D(uMaskField, vec2(ax, by)).r;
+  float d = texture2D(uMaskField, vec2(bx, by)).r;
+  return (a * (1.0 - tx) + b * tx) * (1.0 - ty) + (c * (1.0 - tx) + d * tx) * ty;
+}
+
+void main() {
+  vec3 u3 = texture2D(uTex, vUv).rgb;
+  if (uMaskCount <= 0) { gl_FragColor = vec4(u3, 1.0); return; }
+  vec2 px = floor(vUv * uTexSize);
+  float mu = (px.x + 0.5) / uTexSize.x;
+  float mv = (px.y + 0.5) / uTexSize.y;   // FBO 数据行 0 = 图像顶行（v 向下，engine uvV 同口径）
+  float fold = 0.0;
+  float havePrev = 0.0;
+  for (int i = 0; i < 32; i++) {
+    float fi = float(i);
+    if (fi < float(uMaskCount)) {
+      float base = fi * kRowsPer;
+      vec4 r0 = fetchRow(base + 0.0);
+      vec4 r1 = fetchRow(base + 1.0);
+      vec4 r2 = fetchRow(base + 2.0);
+      vec4 r3 = fetchRow(base + 3.0);
+      vec4 r4 = fetchRow(base + 4.0);
+      vec4 r5 = fetchRow(base + 5.0);
+      float type = r0.x;
+      float combine = r0.y;
+      float opa = r0.w;
+      float amt = r1.x;
+      // ---- raw 因子（5 类；mask_field.cpp 同式）----
+      float raw = 0.0;
+      if (type < 0.5) {
+        // linear：r1.yzw = x1,y1,x2；r2.x = y2。梯度投影 clamp01；零长度梯度 = 0
+        vec2 pa = r1.yz;
+        vec2 pb = vec2(r1.w, r2.x);
+        vec2 d = pb - pa;
+        float len2 = dot(d, d);
+        raw = len2 <= 1e-12 ? 0.0
+          : clamp(dot(vec2(mu, mv) - pa, d) / len2, 0.0, 1.0);
+      } else if (type < 1.5) {
+        // radial：r1.yzw = cx,cy,radius；r2.x = ratio；r2.y = feather
+        float ratio = r2.x;
+        if (ratio <= 1e-9) ratio = 1.0;
+        float feather = clamp(r2.y, 0.0, 1.0);
+        vec2 d = vec2(mu, mv) - r1.yz;
+        d.y /= ratio;
+        raw = 1.0 - smooth01(length(d), r1.w * (1.0 - feather), r1.w);
+      } else if (type < 2.5) {
+        raw = sampleBrushAtlas(fi, mu, mv);
+      } else if (type < 3.5) {
+        // luminanceRange：r1.yzw = low,high,smooth（基于 tone 输出像素 L）
+        float L = dot(u3, LUM3);
+        raw = smooth01(L, r1.y - r1.w, r1.y) * (1.0 - smooth01(L, r1.z, r1.z + r1.w));
+      } else {
+        // colorRange：r1.yzw = hueCenter,hueWidth,satLow；r2.xy = satHigh,smooth
+        vec3 hsl = rgb2hsl(clamp(u3, 0.0, 1.0));
+        float dh = hsl.x - r1.y;
+        dh -= floor(dh + 0.5);
+        float halfW = max(0.0, r1.z) * 0.5;
+        float fHue = 1.0 - smooth01(abs(dh), halfW * (1.0 - r2.y), halfW);
+        float fSat = smooth01(hsl.y, r1.w, r1.w + r2.y) *
+                     (1.0 - smooth01(hsl.y, r2.x, r2.x + r2.y));
+        raw = fHue * fSat;
+      }
+      // ---- fold（§3.1.3：首条有效按 replace；disabled 项在数据纹理里 enabled=0 跳过）----
+      float f = raw;
+      if (havePrev > 0.5) {
+        if (combine < 0.5) { f = raw; }
+        else if (combine < 1.5) { f = fold * raw; }
+        else { f = fold * (1.0 - raw); }
+      }
+      fold = f;
+      havePrev = 1.0;
+      // ---- 施加（subtract 只减面积不施加 local；全零 local 与 w==0 跳过）----
+      float appliesLocal = combine < 1.5 ? 1.0 : 0.0;
+      float w = clamp(f * opa * amt, -1.0, 1.0);
+      float zeroLocal = step(abs(r3.x) + abs(r3.y) + abs(r3.z) + abs(r3.w) +
+                             abs(r4.x) + abs(r4.y) + abs(r4.z) + abs(r4.w) +
+                             abs(r5.x), 1e-9);
+      if (appliesLocal > 0.5 && w != 0.0 && zeroLocal < 0.5) {
+        // 1 exposure：u *= 2^(E*w)
+        if (r3.x != 0.0) { u3 *= exp2(r3.x * w); }
+        // 2 contrast：0.5 为轴
+        if (r3.y != 0.0) { u3 = (u3 - 0.5) * (1.0 + r3.y / 100.0 * 0.5 * w) + 0.5; }
+        // 3 highlights：hw = smooth01(L, 0.45, 1)（L 按当时像素状态现算）
+        if (r3.z != 0.0) {
+          float L = dot(u3, LUM3);
+          u3 += (r3.z / 100.0) * 0.4 * w * smooth01(L, 0.45, 1.0) * (1.0 - u3);
+        }
+        // 4 shadows：sw = 1 - smooth01(L, 0, 0.55)
+        if (r3.w != 0.0) {
+          float L = dot(u3, LUM3);
+          u3 += (r3.w / 100.0) * 0.4 * w * (1.0 - smooth01(L, 0.0, 0.55)) * (1.0 - u3);
+        }
+        // 5 temperature
+        if (r4.x != 0.0) {
+          float g = r4.x / 100.0 * 0.1 * w;
+          u3.r *= exp2(g);
+          u3.b *= exp2(-g);
+        }
+        // 6 tint
+        if (r4.y != 0.0) { u3.g *= exp2(r4.y / 100.0 * 0.05 * w); }
+        // 7 saturation：HSL 往返（前截断与 CPU 同口径）
+        if (r4.z != 0.0) {
+          vec3 hsl = rgb2hsl(clamp(u3, 0.0, 1.0));
+          hsl.y *= 1.0 + r4.z / 100.0 * 0.6 * w;
+          hsl.y = clamp(hsl.y, 0.0, 1.0);
+          u3 = hsl2rgb(hsl);
+        }
+        // 8 clarity：u += Cl/100*0.6*w*(u - B)；B = 共享盒式模糊平面（半径 10）
+        if (r4.w != 0.0 && uHasBlur > 0.5) {
+          u3 += (r4.w / 100.0) * 0.6 * w * (u3 - texture2D(uBlur, vUv).r);
+        }
+        // 9 dehaze：d≥0 黑场下压；d<0 加雾
+        if (r5.x != 0.0) {
+          float d = r5.x / 100.0 * w;
+          u3 = d >= 0.0 ? (u3 - 0.15 * d) / (1.0 - 0.15 * d)
+                        : u3 * (1.0 + 0.3 * d) + 0.10 * (-d);
+        }
+      }
+    }
+  }
+  gl_FragColor = vec4(u3, 1.0);
 }
 `;

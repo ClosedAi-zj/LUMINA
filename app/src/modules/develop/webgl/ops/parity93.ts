@@ -19,6 +19,7 @@ import {
   type PlaneBuf,
 } from './oracle93';
 import { PipelineGL } from './pipeline';
+import { buildFieldAtlas, FIELD_COLS, FIELD_ROWS } from '../maskField';
 
 const W = 64;
 const H = 48;
@@ -224,11 +225,17 @@ export function buildCurveTexture(p: EditParams): {
 
 /** parity 执行器：复用一个 WebGL 上下文跑全部 case */
 export class Parity93Runner {
-  private pipeline = new PipelineGL();
+  pipeline = new PipelineGL();
   private gl: WebGLRenderingContext | null = null;
-  private src: PlaneBuf = makeTestImage();
+  src: PlaneBuf = makeTestImage();
   /** 调试开关：失败用例追加 tone FBO t 值 */
   dbgTone = true;
+  /** 最近一次 runOne 的 CPU 8bit 输出（runMaskSuite 伪绿防御用） */
+  lastCpu8: Uint8Array | null = null;
+
+  get gpu(): boolean {
+    return this.gl !== null;
+  }
 
   init(canvas: HTMLCanvasElement): boolean {
     const gl = canvas.getContext('webgl', {
@@ -250,101 +257,14 @@ export class Parity93Runner {
     if (!this.gl) {
       return { gpuAvailable: false, thresholds: { meanLsb: 0.5, maxLsb: 3 }, cases, allPass: false, worstMean: 0, worstMax: 0 };
     }
-    const canvas = this.gl.canvas as HTMLCanvasElement;
     for (const { leaf, mut } of buildLeafCases()) {
       const params = defaultParams();
       mut(params);
-      const t0 = performance.now();
-      // CPU
-      const cpu = oracle93(params, this.src);
-      const t1 = performance.now();
-      // GPU
-      const curve = buildCurveTexture(params);
-      this.pipeline.setCurves(curve.data, curve.skip);
-      const masks = {
-        count: 0,
-        geoA: new Float32Array(24),
-        geoB: new Float32Array(24),
-        local0: new Float32Array(24),
-        local1: new Float32Array(24),
-        amount: new Float32Array(6),
-        type: new Float32Array(6),
-        opacity: new Float32Array(6),
-      };
-      const ok = this.pipeline.render(canvas, params, null, null, masks);
-      const t2 = performance.now();
-      const w = canvas.width;
-      const h = canvas.height;
-      let mean = -1;
-      let max = -1;
-      let dbg = '';
-      if (ok && w === cpu.w && h === cpu.h) {
-        const px = new Uint8Array(w * h * 4);
-        this.gl.readPixels(0, 0, w, h, this.gl.RGBA, this.gl.UNSIGNED_BYTE, px);
-        let sum = 0;
-        let mx = 0;
-        let count = 0;
-        let sumGpu = 0;
-        let sumCpu = 0;
-        for (let y = 0; y < h; ++y) {
-          for (let x = 0; x < w; ++x) {
-            // composite 已翻 uA/uB 采样（画布呈现方向 = 源图方向），readPixels 行 0 =
-            // GL 帧缓冲底行 = 图像底行 → 对 CPU 行序做 y 翻转后再比
-            const gy = h - 1 - y;
-            const gIdx = (gy * w + x) * 4;
-            const cIdx = (y * w + x) * 3;
-            for (let c = 0; c < 3; ++c) {
-              const d = Math.abs(px[gIdx + c] - cpu.out8[cIdx + c]);
-              sum += d;
-              if (d > mx) mx = d;
-              sumGpu += px[gIdx + c];
-              sumCpu += cpu.out8[cIdx + c];
-              ++count;
-            }
-          }
-        }
-        mean = sum / count;
-        max = mx;
-        // 诊断：取差异最大的前 5 像素
-        const worst: { x: number; y: number; g: number; c: number }[] = [];
-        for (let y = 0; y < h; ++y) {
-          for (let x = 0; x < w; ++x) {
-            const gy = h - 1 - y;  // 与上方主对比同口径（composite 翻转后的行序对齐）
-            const gIdx = (gy * w + x) * 4;
-            const cIdx = (y * w + x) * 3;
-            for (let c = 0; c < 3; ++c) {
-              const d = Math.abs(px[gIdx + c] - cpu.out8[cIdx + c]);
-              if (d > 3) {
-                worst.push({ x, y, g: px[gIdx + c], c: cpu.out8[cIdx + c] });
-                if (worst.length > 40) worst.shift();
-              }
-            }
-          }
-        }
-        dbg =
-          `gpuSum=${sumGpu} cpuSum=${sumCpu} worst=` +
-          worst.slice(0, 5).map((p) => `(${p.x},${p.y}):${p.g}/${p.c}`).join(' ');
-        // 诊断：tone FBO 的 t（GPU）与 8bit 对比域之外的真值
-        if (worst.length > 0 && this.dbgTone) {
-          const tone = this.pipeline.debugReadTone();
-          if (tone && tone.w === w && tone.h === h) {
-            const p0 = worst[0];
-            const ti = (p0.y * w + p0.x) * 4;
-            dbg += ` toneT(${p0.x},${p0.y})=[${[0, 1, 2].map((k) => tone.data[ti + k].toFixed(6)).join(',')}];srcT=[${[0, 1, 2].map((k) => this.src.t[(p0.y * this.src.w + p0.x) * 3 + k].toFixed(6)).join(',')}]`;
-          }
-        }
-      }
-      const pass = mean >= 0 && mean < 0.5 && max <= 3;
-      allPass = allPass && pass;
-      if (mean > worstMean) worstMean = mean;
-      if (max > worstMax) worstMax = max;
-      cases.push({ leaf, mean, max, pixels: w * h, pass, dbg: dbg || undefined });
-      if (window.lumina?.isSmoke) {
-        console.log(
-          `[smoke-scenario] parity93-run: ${leaf} mean=${mean.toFixed(4)} max=${max.toFixed(0)} pass=${pass} ` +
-            `cpuMs=${(t1 - t0).toFixed(0)} gpuMs=${(t2 - t1).toFixed(0)} cmpMs=${(performance.now() - t2).toFixed(0)}`,
-        );
-      }
+      const c = this.runOne(leaf, params);
+      cases.push(c);
+      allPass = allPass && c.pass;
+      if (c.mean > worstMean) worstMean = c.mean;
+      if (c.max > worstMax) worstMax = c.max;
     }
     return {
       gpuAvailable: true,
@@ -355,4 +275,237 @@ export class Parity93Runner {
       worstMax,
     };
   }
+
+  /** 单 case 执行：CPU oracle vs GPU 管线，8bit 输出逐像素对比 */
+  runOne(leaf: string, params: EditParams): ParityCase {
+    const gl = this.gl!;
+    const canvas = gl.canvas as HTMLCanvasElement;
+    const t0 = performance.now();
+    // CPU
+    const cpu = oracle93(params, this.src);
+    this.lastCpu8 = cpu.out8;
+    const t1 = performance.now();
+    // GPU
+    const curve = buildCurveTexture(params);
+    this.pipeline.setCurves(curve.data, curve.skip);
+    const ok = this.pipeline.render(canvas, params, null, null);
+    const t2 = performance.now();
+    const w = canvas.width;
+    const h = canvas.height;
+    let mean = -1;
+    let max = -1;
+    let dbg = '';
+    if (ok && w === cpu.w && h === cpu.h) {
+      const px = new Uint8Array(w * h * 4);
+      gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      let sum = 0;
+      let mx = 0;
+      let count = 0;
+      let sumGpu = 0;
+      let sumCpu = 0;
+      for (let y = 0; y < h; ++y) {
+        for (let x = 0; x < w; ++x) {
+          // composite 已翻 uA/uB 采样（画布呈现方向 = 源图方向），readPixels 行 0 =
+          // GL 帧缓冲底行 = 图像底行 → 对 CPU 行序做 y 翻转后再比
+          const gy = h - 1 - y;
+          const gIdx = (gy * w + x) * 4;
+          const cIdx = (y * w + x) * 3;
+          for (let c = 0; c < 3; ++c) {
+            const d = Math.abs(px[gIdx + c] - cpu.out8[cIdx + c]);
+            sum += d;
+            if (d > mx) mx = d;
+            sumGpu += px[gIdx + c];
+            sumCpu += cpu.out8[cIdx + c];
+            ++count;
+          }
+        }
+      }
+      mean = sum / count;
+      max = mx;
+      // 诊断：取差异最大的前 5 像素
+      const worst: { x: number; y: number; g: number; c: number }[] = [];
+      for (let y = 0; y < h; ++y) {
+        for (let x = 0; x < w; ++x) {
+          const gy = h - 1 - y;  // 与上方主对比同口径（composite 翻转后的行序对齐）
+          const gIdx = (gy * w + x) * 4;
+          const cIdx = (y * w + x) * 3;
+          for (let c = 0; c < 3; ++c) {
+            const d = Math.abs(px[gIdx + c] - cpu.out8[cIdx + c]);
+            if (d > 3) {
+              worst.push({ x, y, g: px[gIdx + c], c: cpu.out8[cIdx + c] });
+              if (worst.length > 40) worst.shift();
+            }
+          }
+        }
+      }
+      dbg =
+        `gpuSum=${sumGpu} cpuSum=${sumCpu} worst=` +
+        worst.slice(0, 5).map((p) => `(${p.x},${p.y}):${p.g}/${p.c}`).join(' ');
+      // 诊断：tone FBO 的 t（GPU）与 8bit 对比域之外的真值
+      if (worst.length > 0 && this.dbgTone) {
+        const tone = this.pipeline.debugReadTone();
+        if (tone && tone.w === w && tone.h === h) {
+          const p0 = worst[0];
+          const ti = (p0.y * w + p0.x) * 4;
+          dbg += ` toneT(${p0.x},${p0.y})=[${[0, 1, 2].map((k) => tone.data[ti + k].toFixed(6)).join(',')}];srcT=[${[0, 1, 2].map((k) => this.src.t[(p0.y * this.src.w + p0.x) * 3 + k].toFixed(6)).join(',')}]`;
+        }
+      }
+    }
+    const pass = mean >= 0 && mean < 0.5 && max <= 3;
+    if (window.lumina?.isSmoke) {
+      console.log(
+        `[smoke-scenario] parity93-run: ${leaf} mean=${mean.toFixed(4)} max=${max.toFixed(0)} pass=${pass} ` +
+          `cpuMs=${(t1 - t0).toFixed(0)} gpuMs=${(t2 - t1).toFixed(0)} cmpMs=${(performance.now() - t2).toFixed(0)}`,
+      );
+    }
+    return { leaf, mean, max, pixels: w * h, pass, dbg: dbg || undefined };
+  }
+}
+
+// ---- T2.7 蒙版 parity（A3/A4 验收；CPU = oracle applyMasksOracle vs GPU = mask pass）----
+
+export interface MaskParityReport {
+  gpuAvailable: boolean;
+  thresholds: { meanLsb: number; maxLsb: number };
+  cases: ParityCase[];
+  allPass: boolean;
+  worstMean: number;
+  worstMax: number;
+  /** 伪绿防御：各 case CPU 侧相对无蒙版基线的变化像素数（蒙版必须实际作用） */
+  changed: number[];
+}
+
+const LOCAL_FULL = {
+  exposure: 25,
+  contrast: 20,
+  highlights: 30,
+  shadows: -25,
+  temperature: 15,
+  tint: -10,
+  saturation: 20,
+  clarity: 30,
+  dehaze: 10,
+};
+
+/** 画笔测试笔画：两笔交叉 + 一笔擦除（覆盖 buildBrushField 的 max/乘法衰减两分支） */
+const BRUSH_STROKES = [
+  { x: 0.25, y: 0.35, radius: 0.13, flow: 90, density: 100, erase: false },
+  { x: 0.45, y: 0.45, radius: 0.13, flow: 90, density: 100, erase: false },
+  { x: 0.65, y: 0.55, radius: 0.13, flow: 90, density: 100, erase: false },
+  { x: 0.55, y: 0.5, radius: 0.1, flow: 60, density: 100, erase: true },
+];
+
+/** A3 用例矩阵：3 蒙版类型 × 3 槽数 × 3 combine = 27 组；外加 range 2 组 + 20 槽 1 组 */
+export function buildMaskCases(): { name: string; masks: EditParams['masks'] }[] {
+  const types = ['linear', 'radial', 'brush'] as const;
+  const combines = ['replace', 'intersect', 'subtract'] as const;
+  const slotCounts = [1, 2, 3];
+  const cases: { name: string; masks: EditParams['masks'] }[] = [];
+  const mkMask = (
+    type: (typeof types)[number],
+    i: number,
+    combine: (typeof combines)[number],
+  ): EditParams['masks'][number] => ({
+    id: `m${i}`,
+    type,
+    enabled: true,
+    opacity: 80,
+    amount: 100,
+    combine,
+    geometry: type === 'linear'
+      ? { x1: 0.05 + i * 0.1, y1: 0.1, x2: 0.75 + i * 0.08, y2: 0.9 }
+      : { cx: 0.3 + i * 0.18, cy: 0.4 + i * 0.1, radius: 0.34 + i * 0.05, ratio: 1 },
+    strokes: type === 'brush' ? BRUSH_STROKES : undefined,
+    local: { ...LOCAL_FULL },
+  });
+  for (const type of types) {
+    for (const n of slotCounts) {
+      for (const combine of combines) {
+        const masks = [];
+        for (let i = 0; i < n; ++i) {
+          // 首条固定 replace（fold 语义：combine 对首条无意义）；后续用组 combine
+          masks.push(mkMask(type, i, i === 0 ? 'replace' : combine));
+        }
+        cases.push({ name: `mask.${type}.n${n}.${combine}`, masks });
+      }
+    }
+  }
+  // 范围蒙版（T2.7 新增类型的 parity 覆盖；不占 27 组名额）
+  cases.push({
+    name: 'mask.luminanceRange',
+    masks: [{
+      id: 'lr', type: 'luminanceRange', enabled: true, opacity: 100, amount: 100,
+      combine: 'replace',
+      range: { low: 0.35, high: 0.75, samples: [], smooth: 0.12 },
+      local: { ...LOCAL_FULL },
+    } as EditParams['masks'][number]],
+  });
+  cases.push({
+    name: 'mask.colorRange',
+    masks: [{
+      id: 'cr', type: 'colorRange', enabled: true, opacity: 100, amount: 100,
+      combine: 'replace',
+      range: { hueCenter: 0.45, hueWidth: 0.5, satLow: 0.05, satHigh: 1.0, smooth: 0.15 } as unknown as EditParams['masks'][number]['range'],
+      local: { ...LOCAL_FULL },
+    } as EditParams['masks'][number]],
+  });
+  // A4：20 槽（GPU 32 槽容量内全链路 fold）
+  {
+    const masks = [];
+    for (let i = 0; i < 20; ++i) {
+      masks.push({
+        id: `s${i}`,
+        type: 'linear',
+        enabled: true,
+        opacity: 70,
+        amount: 100,
+        combine: i % 3 === 1 ? 'intersect' : i % 3 === 2 ? 'subtract' : 'replace',
+        geometry: { x1: i * 0.024, y1: 0.05, x2: 0.35 + i * 0.03, y2: 0.95 },
+        local: { ...LOCAL_FULL, exposure: 8 + i * 1.5 },
+      } as EditParams['masks'][number]);
+    }
+    cases.push({ name: 'mask.slots20', masks });
+  }
+  return cases;
+}
+
+/** 蒙版 parity 执行器（复用 Parity93Runner 的上下文；runMaskSuite 前须 init 成功） */
+export function runMaskSuite(runner: Parity93Runner): MaskParityReport {
+  const cases: ParityCase[] = [];
+  const changed: number[] = [];
+  let allPass = true;
+  let worstMean = 0;
+  let worstMax = 0;
+  if (!runner.gpu) {
+    return { gpuAvailable: false, thresholds: { meanLsb: 0.5, maxLsb: 3 }, cases, allPass: false, worstMean: 0, worstMax: 0, changed };
+  }
+  // 无蒙版基线（伪绿防御参照：蒙版必须相对基线产生实际变化）
+  const base = oracle93(defaultParams(), runner.src);
+  for (const { name, masks } of buildMaskCases()) {
+    const params = defaultParams();
+    params.masks = masks;
+    // 画笔图集（GPU brush 因子数据；与 renderer 同一 builder）
+    const atlas = buildFieldAtlas(masks);
+    runner.pipeline.setFieldAtlas(atlas.bytes, FIELD_COLS, FIELD_ROWS);
+    const c = runner.runOne(name, params);
+    // CPU 侧实际作用断言：相对无蒙版基线的变化像素数（8bit 域）
+    let ch = 0;
+    const cpu8 = runner.lastCpu8;
+    if (cpu8) {
+      for (let i = 0; i < cpu8.length; ++i) {
+        if (cpu8[i] !== base.out8[i]) ++ch;
+      }
+    }
+    changed.push(ch);
+    const pass = c.pass && ch >= 300;  // 蒙版未生效（changed≈0）= 假绿，判失败
+    c.pass = pass;
+    cases.push(c);
+    allPass = allPass && pass;
+    if (c.mean > worstMean) worstMean = c.mean;
+    if (c.max > worstMax) worstMax = c.max;
+    if (window.lumina?.isSmoke) {
+      console.log(`[smoke-scenario] mask-parity-run: ${name} changed=${ch} pass=${pass}`);
+    }
+  }
+  return { gpuAvailable: true, thresholds: { meanLsb: 0.5, maxLsb: 3 }, cases, allPass, worstMean, worstMax, changed };
 }

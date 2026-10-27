@@ -14,8 +14,8 @@
 import { PipelineGL } from './ops/pipeline';
 import { buildCurveLutData } from './ops/oracle93';
 import { log16Encode, srgbToLinear } from './ops/log16';
-import { buildFieldAtlas, FIELD_COLS, FIELD_ROWS } from './maskField';
-import type { CurvePoint, EditParams, MaskLayer } from '../../../api/protocol';
+import { buildFieldAtlas, FIELD_COLS, FIELD_ROWS, MAX_MASK_SLOTS } from './maskField';
+import type { CurvePoint, EditParams } from '../../../api/protocol';
 
 export interface RenderOptions {
   params: EditParams;
@@ -24,28 +24,11 @@ export interface RenderOptions {
   beforeParams?: EditParams | null;
 }
 
-const MAX_MASKS = 6;
+/** GPU 蒙版槽容量（T2.7：6→32；超出由 pipeline.setMaskData 显式失败） */
+const MAX_MASKS = MAX_MASK_SLOTS;
 
 /** 预览底图最长边（性能预算：1600px，与 CPU 保底路径一致） */
 const MAX_PREVIEW = 1600;
-
-function maskGeo(m: MaskLayer): { a: [number, number, number, number]; b: [number, number, number, number] } {
-  if (m.type === 'linear' && m.geometry && 'x1' in m.geometry) {
-    return { a: [m.geometry.x1, 1 - m.geometry.y1, 0, 0], b: [m.geometry.x2, 1 - m.geometry.y2, 0, 0] };
-  }
-  if (m.type === 'radial' && m.geometry && 'cx' in m.geometry) {
-    return { a: [m.geometry.cx, 1 - m.geometry.cy, 0, 0], b: [0, 0, m.geometry.radius, m.geometry.ratio] };
-  }
-  // brush：以笔画质心 + 平均半径近似
-  const strokes = m.strokes ?? [];
-  if (strokes.length > 0) {
-    const cx = strokes.reduce((s, k) => s + k.x, 0) / strokes.length;
-    const cy = strokes.reduce((s, k) => s + k.y, 0) / strokes.length;
-    const r = strokes.reduce((s, k) => s + k.radius, 0) / strokes.length;
-    return { a: [cx, 1 - cy, 0, 0], b: [0, 0, r * 2, 1] };
-  }
-  return { a: [0.5, 0.5, 0, 0], b: [0.5, 0.5, 0.001, 1] };
-}
 
 /** sRGB 画布像素 → log16 码 t 域（预览底图统一进管线输入域）。
  *  T1.5：导出=预览断言（smoke）复用同一函数，保证两端进域口径单一来源。 */
@@ -143,7 +126,7 @@ export class DevelopRenderer {
     const curve = buildCurveLut(params);
     this.pipeline.setCurves(curve.data, curve.skip);
 
-    // 画笔蒙版距离场图集（WP-B5）：仅笔画变化时重建上传
+    // 画笔蒙版距离场图集（WP-B5 / T2.7 4×8=32 槽）：仅笔画变化时重建上传
     const fieldKey = params.masks
       .filter((m) => m.type === 'brush')
       .map((m) => `${m.id}:${m.enabled ? 1 : 0}:${JSON.stringify(m.strokes ?? [])}`)
@@ -154,36 +137,12 @@ export class DevelopRenderer {
       this.pipeline.setFieldAtlas(bytes, FIELD_COLS, FIELD_ROWS);
     }
 
-    // 蒙版 uniforms（最多 6 个，超出截断；蒙版语义 T2.2 前为既有近似）
-    const masks = params.masks.filter((m) => m.enabled).slice(0, MAX_MASKS);
-    const geoA = new Float32Array(MAX_MASKS * 4);
-    const geoB = new Float32Array(MAX_MASKS * 4);
-    const local0 = new Float32Array(MAX_MASKS * 4);
-    const local1 = new Float32Array(MAX_MASKS * 4);
-    const amount = new Float32Array(MAX_MASKS);
-    const type = new Float32Array(MAX_MASKS);
-    const opacity = new Float32Array(MAX_MASKS);
-    masks.forEach((m, i) => {
-      const g = maskGeo(m);
-      geoA.set(g.a, i * 4);
-      geoB.set(g.b, i * 4);
-      local0.set([m.local.exposure, m.local.contrast, m.local.highlights, m.local.shadows], i * 4);
-      local1.set([m.local.temperature, m.local.tint, m.local.saturation, m.local.clarity], i * 4);
-      amount[i] = m.amount ?? 100;
-      type[i] = m.type === 'linear' ? 0 : m.type === 'radial' ? 1 : 2;
-      opacity[i] = m.opacity;
-    });
+    // 蒙版数据（T2.7）：由 pipeline.render 内部从 params.masks 打包上传（独立 mask pass）
+    if (params.masks.length > MAX_MASKS) {
+      throw new Error(`蒙版数量超出 GPU 槽容量：${params.masks.length} > ${MAX_MASKS}`);
+    }
 
-    return this.pipeline.render(canvas, params, beforeParams, split, {
-      count: masks.length,
-      geoA,
-      geoB,
-      local0,
-      local1,
-      amount,
-      type,
-      opacity,
-    });
+    return this.pipeline.render(canvas, params, beforeParams, split);
   }
 
   /** 直方图采样（150ms 防抖由调用方控制）：从渲染结果低分辨率采样 64×64 */

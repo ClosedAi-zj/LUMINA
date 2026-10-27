@@ -10,6 +10,7 @@
  */
 
 import type { EditParams, CurvePoint } from '../../../../api/protocol';
+import { buildBrushField } from '../maskField';
 import {
   boxBlurPlane,
   clamp01,
@@ -674,6 +675,297 @@ function applyEffects(
   }
 }
 
+// ---- T2.7 蒙版数学 oracle（engine plan/ops/mask_field.cpp + mask.cpp 逐式镜像）----
+// 蒙版阶段 = S4 末（tone 输出之后、S5 锐化之前），u = t = code/65535（display 域）。
+// fold 语义（§3.1.3）：首条有效按 replace；intersect = prev*raw；subtract = prev*(1-raw)
+// 且不施加 local；disabled 透传。施加循环按数组序逐蒙版就地更新像素。
+
+type MaskItem = EditParams['masks'][number];
+type NumMap = Record<string, number | undefined>;
+
+const geoN = (o: NumMap | undefined, key: string, def: number): number =>
+  typeof o?.[key] === 'number' && Number.isFinite(o[key] as number) ? (o[key] as number) : def;
+
+/** linear 因子（mask_field.cpp linearFactorRaw 镜像：梯度投影 clamp01） */
+function linearFactorRaw(g: NumMap, u: number, v: number): number {
+  const x1 = geoN(g, 'x1', 0);
+  const y1 = geoN(g, 'y1', 0);
+  const x2 = geoN(g, 'x2', 1);
+  const y2 = geoN(g, 'y2', 1);
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len2 = dx * dx + dy * dy;
+  if (len2 <= 1e-12) return 0;
+  return clamp01(((u - x1) * dx + (v - y1) * dy) / len2);
+}
+
+/** radial 因子（radialFactorRaw 镜像：椭圆距离 + feather 平滑；feather 缺省 0.45） */
+function radialFactorRaw(g: NumMap, u: number, v: number): number {
+  const cx = geoN(g, 'cx', 0.5);
+  const cy = geoN(g, 'cy', 0.5);
+  const r = geoN(g, 'radius', 0.4);
+  let ratio = geoN(g, 'ratio', 1);
+  if (ratio <= 1e-9) ratio = 1;
+  let feather = geoN(g, 'feather', 0.45);
+  if (feather < 0) feather = 0;
+  if (feather > 1) feather = 1;
+  const dx = u - cx;
+  const dy = (v - cy) / ratio;
+  const d = Math.sqrt(dx * dx + dy * dy);
+  return 1 - smooth01(d, r * (1 - feather), r);
+}
+
+/** luminanceRange 因子（lumRangeFactorRaw 镜像；L = display 域亮度） */
+function lumRangeFactorRaw(rg: NumMap, L: number): number {
+  const low = geoN(rg, 'low', 0);
+  const high = geoN(rg, 'high', 1);
+  const s = clamp01(geoN(rg, 'smooth', 0.1));
+  return smooth01(L, low - s, low) * (1 - smooth01(L, high, high + s));
+}
+
+/** colorRange 因子（colorRangeFactorRaw 镜像：色相最短弧窗口 × 饱和度窗口） */
+function colorRangeFactorRaw(rg: NumMap, r: number, g: number, b: number): number {
+  const hueCenter = geoN(rg, 'hueCenter', 0);
+  const hueWidth = geoN(rg, 'hueWidth', 0.1);
+  const satLow = geoN(rg, 'satLow', 0);
+  const satHigh = geoN(rg, 'satHigh', 1);
+  const s = clamp01(geoN(rg, 'smooth', 0.1));
+  const [h, sat] = rgbToHsl(clamp01(r), clamp01(g), clamp01(b));
+  let dh = h - hueCenter;
+  dh -= Math.floor(dh + 0.5);
+  const half = Math.max(0, hueWidth) * 0.5;
+  const fHue = 1 - smooth01(Math.abs(dh), half * (1 - s), half);
+  const fSat = smooth01(sat, satLow, satLow + s) * (1 - smooth01(sat, satHigh, satHigh + s));
+  return fHue * fSat;
+}
+
+/** 画笔场双线性采样（sampleBrushField256 镜像；field 必须已 8bit 量化） */
+function sampleBrushFieldQ(field: Float32Array, u: number, v: number): number {
+  const C = 256;
+  let fx = u * C - 0.5;
+  let fy = v * C - 0.5;
+  if (fx < 0) fx = 0;
+  if (fx > C - 1) fx = C - 1;
+  if (fy < 0) fy = 0;
+  if (fy > C - 1) fy = C - 1;
+  const x0 = Math.floor(fx);
+  const y0 = Math.floor(fy);
+  const tx = fx - x0;
+  const ty = fy - y0;
+  const x1 = Math.min(C - 1, x0 + 1);
+  const y1 = Math.min(C - 1, y0 + 1);
+  const a = field[y0 * C + x0];
+  const b = field[y0 * C + x1];
+  const c = field[y1 * C + x0];
+  const d = field[y1 * C + x1];
+  return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
+}
+
+/** 9 局部叶单像素施加（mask.cpp applyLocalPixel 镜像；u ∈ [0,1] display 域，就地改写） */
+function applyLocalPixelOracle(
+  u: [number, number, number],
+  w: number,
+  local: MaskItem['local'],
+  blur: Float32Array | null,
+  x: number,
+  y: number,
+  W: number,
+  H: number,
+): void {
+  if (local.exposure !== 0) {
+    const g = Math.pow(2, local.exposure * w);
+    u[0] *= g;
+    u[1] *= g;
+    u[2] *= g;
+  }
+  if (local.contrast !== 0) {
+    const k = 1 + (local.contrast / 100) * 0.5 * w;
+    for (let c = 0; c < 3; ++c) u[c] = (u[c] - 0.5) * k + 0.5;
+  }
+  if (local.highlights !== 0) {
+    const L = 0.2126 * u[0] + 0.7152 * u[1] + 0.0722 * u[2];
+    const hw = smooth01(L, 0.45, 1);
+    const k = (local.highlights / 100) * 0.4 * w * hw;
+    for (let c = 0; c < 3; ++c) u[c] += k * (1 - u[c]);
+  }
+  if (local.shadows !== 0) {
+    const L = 0.2126 * u[0] + 0.7152 * u[1] + 0.0722 * u[2];
+    const sw = 1 - smooth01(L, 0, 0.55);
+    const k = (local.shadows / 100) * 0.4 * w * sw;
+    for (let c = 0; c < 3; ++c) u[c] += k * (1 - u[c]);
+  }
+  if (local.temperature !== 0) {
+    const g = (local.temperature / 100) * 0.1 * w;
+    u[0] *= Math.pow(2, g);
+    u[2] *= Math.pow(2, -g);
+  }
+  if (local.tint !== 0) {
+    u[1] *= Math.pow(2, (local.tint / 100) * 0.05 * w);
+  }
+  if (local.saturation !== 0) {
+    for (let c = 0; c < 3; ++c) u[c] = clamp01(u[c]);
+    const [h, s0, l] = rgbToHsl(u[0], u[1], u[2]);
+    let s = s0 * (1 + (local.saturation / 100) * 0.6 * w);
+    if (s < 0) s = 0;
+    if (s > 1) s = 1;
+    const rgb = hslToRgb(h, s, l);
+    u[0] = rgb[0];
+    u[1] = rgb[1];
+    u[2] = rgb[2];
+  }
+  if (local.clarity !== 0 && blur !== null) {
+    const k = (local.clarity / 100) * 0.6 * w;
+    const plane = W * H;
+    for (let c = 0; c < 3; ++c) {
+      const B = blur[c * plane + y * W + x] / 65535;
+      u[c] += k * (u[c] - B);
+    }
+  }
+  if (local.dehaze !== 0) {
+    const d = (local.dehaze / 100) * w;
+    for (let c = 0; c < 3; ++c) {
+      u[c] = d >= 0 ? (u[c] - 0.15 * d) / (1 - 0.15 * d)
+                    : u[c] * (1 + 0.3 * d) + 0.1 * -d;
+    }
+  }
+}
+
+/** 蒙版阶段（mask.cpp MaskApplyOp 镜像）：无蒙版 = identity；就地改写 buf（t 域） */
+export function applyMasksOracle(p: EditParams, buf: PlaneBuf): void {
+  const masks = p.masks ?? [];
+  if (!masks.length) return;
+  const { w: W, h: H, t } = buf;
+  const planeSz = W * H;
+
+  // 解析 + 因子平面（disabled 透传：平面 = prev 或全 0，appliesLocal=false）
+  const planes: Float32Array[] = [];
+  const appliesLocal: boolean[] = [];
+  const locals: (MaskItem['local'] | null)[] = [];
+  const opacities: number[] = [];
+  const amounts: number[] = [];
+  let prev: Float32Array | null = null;
+  for (const m of masks) {
+    const opacity = Math.max(0, Math.min(100, m.opacity ?? 100)) / 100;
+    const amount = Math.max(-100, Math.min(100, m.amount ?? 100)) / 100;
+    if (!m.enabled) {
+      planes.push(prev ?? new Float32Array(planeSz));
+      appliesLocal.push(false);
+      locals.push(null);
+      opacities.push(0);
+      amounts.push(0);
+      continue;
+    }
+    const raw = new Float32Array(planeSz);
+    const g = (m.geometry ?? {}) as NumMap;
+    const rg = (m.range ?? {}) as NumMap;
+    if (m.type === 'linear' || m.type === 'radial') {
+      for (let y = 0; y < H; ++y) {
+        const v = (y + 0.5) / H;
+        for (let x = 0; x < W; ++x) {
+          const u = (x + 0.5) / W;
+          raw[y * W + x] = m.type === 'linear' ? linearFactorRaw(g, u, v) : radialFactorRaw(g, u, v);
+        }
+      }
+    } else if (m.type === 'brush') {
+      // buildBrushField256 镜像：256² 场（8bit 量化）+ 逐像素双线性
+      const rawField = buildBrushField(m.strokes ?? []);
+      const field = new Float32Array(256 * 256);
+      for (let i = 0; i < field.length; ++i) {
+        field[i] = Math.floor(rawField[i] * 255 + 0.5) / 255;
+      }
+      for (let y = 0; y < H; ++y) {
+        const v = (y + 0.5) / H;
+        for (let x = 0; x < W; ++x) {
+          raw[y * W + x] = sampleBrushFieldQ(field, (x + 0.5) / W, v);
+        }
+      }
+    } else if (m.type === 'luminanceRange') {
+      for (let i = 0, q = 0; i < planeSz; ++i, q += 3) {
+        const L = 0.2126 * t[q] + 0.7152 * t[q + 1] + 0.0722 * t[q + 2];
+        raw[i] = lumRangeFactorRaw(rg, L);
+      }
+    } else if (m.type === 'colorRange') {
+      for (let i = 0, q = 0; i < planeSz; ++i, q += 3) {
+        raw[i] = colorRangeFactorRaw(rg, t[q], t[q + 1], t[q + 2]);
+      }
+    } else {
+      throw new Error(`mask '${m.id}': 类型 '${m.type}' 本版不支持（v1.3）`);
+    }
+    // fold（首条有效按 replace）
+    const folded = new Float32Array(planeSz);
+    if (prev === null) {
+      folded.set(raw);
+    } else {
+      const combine = m.combine ?? 'replace';
+      for (let i = 0; i < planeSz; ++i) {
+        const r = raw[i];
+        folded[i] = combine === 'intersect' ? prev[i] * r
+          : combine === 'subtract' ? prev[i] * (1 - r)
+          : r;
+      }
+    }
+    planes.push(folded);
+    appliesLocal.push((m.combine ?? 'replace') !== 'subtract');
+    locals.push(m.local);
+    opacities.push(opacity);
+    amounts.push(amount);
+    prev = folded;
+  }
+  if (prev === null) return;  // 全 disabled = 无蒙版
+
+  // 共享盒式模糊平面 B（半径 10，码域快照；仅 clarity 消费）
+  let blur: Float32Array | null = null;
+  if (masks.some((m, i) => appliesLocal[i] && locals[i] && (locals[i]!.clarity ?? 0) !== 0)) {
+    blur = new Float32Array(planeSz * 3);
+    const plane = new Float32Array(planeSz);
+    const blurred = new Float32Array(planeSz);
+    for (let c = 0; c < 3; ++c) {
+      for (let j = 0; j < planeSz; ++j) plane[j] = t[j * 3 + c] * 65535;
+      boxBlurPlane(plane, blurred, W, H, 10);
+      blur.set(blurred, c * planeSz);
+    }
+  }
+
+  // 施加循环（按数组序逐蒙版就地更新）
+  for (let i = 0; i < masks.length; ++i) {
+    if (!appliesLocal[i]) continue;
+    const local = locals[i]!;
+    if ((local.exposure ?? 0) === 0 && (local.contrast ?? 0) === 0 &&
+        (local.highlights ?? 0) === 0 && (local.shadows ?? 0) === 0 &&
+        (local.temperature ?? 0) === 0 && (local.tint ?? 0) === 0 &&
+        (local.saturation ?? 0) === 0 && (local.clarity ?? 0) === 0 &&
+        (local.dehaze ?? 0) === 0) continue;
+    const pl = planes[i];
+    const opa = opacities[i];
+    const amt = amounts[i];
+    const norm = {
+      exposure: local.exposure ?? 0,
+      contrast: local.contrast ?? 0,
+      highlights: local.highlights ?? 0,
+      shadows: local.shadows ?? 0,
+      temperature: local.temperature ?? 0,
+      tint: local.tint ?? 0,
+      saturation: local.saturation ?? 0,
+      clarity: local.clarity ?? 0,
+      dehaze: local.dehaze ?? 0,
+    };
+    for (let y = 0; y < H; ++y) {
+      for (let x = 0; x < W; ++x) {
+        let w = pl[y * W + x] * opa * amt;
+        if (w < -1) w = -1;
+        if (w > 1) w = 1;
+        if (w === 0) continue;
+        const q = (y * W + x) * 3;
+        const u: [number, number, number] = [t[q], t[q + 1], t[q + 2]];
+        applyLocalPixelOracle(u, w, norm, blur, x, y, W, H);
+        t[q] = u[0];
+        t[q + 1] = u[1];
+        t[q + 2] = u[2];
+      }
+    }
+  }
+}
+
 /** S7 输出编码：sRGB + 确定性 TPDF（与 GPU 同噪源；引擎 rand() 偏差见回报） */
 export function encode8(buf: PlaneBuf): Uint8Array {
   const out = new Uint8Array(buf.t.length);
@@ -784,6 +1076,8 @@ export function oracle93(
   // S2 逐像素 + S3 + S4
   applyToneColor(p, s1);
   if (dbg) dbg.afterToneColor = snap(s1.t);
+  // S4 末蒙版（T2.7：tone 后 sharpen 前；engine mask.apply @ S4Color 同位）
+  applyMasksOracle(p, s1);
   // S5
   applySharpen(p, s1);
   // S6
