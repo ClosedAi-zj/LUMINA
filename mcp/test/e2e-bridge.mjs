@@ -94,7 +94,8 @@ async function main() {
   const list = await rpc('tools/list', {});
   const tools = list.result?.tools ?? [];
   console.log(`# tools/list -> ${tools.length} tools: ${tools.map((t) => t.name).join(', ')}`);
-  if (tools.length !== 11) failures.push(`tools/list 期望 11 个工具，实际 ${tools.length}`);
+  // v1.4.1：新增 set_develop_mode / set_theme 两个 op（AI 自检切模式与主题），11 → 13
+  if (tools.length !== 13) failures.push(`tools/list 期望 13 个工具，实际 ${tools.length}`);
 
   await callTool('lumina_status');
   await callTool('list_photos', { offset: 0, limit: 5 });
