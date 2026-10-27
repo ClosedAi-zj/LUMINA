@@ -1,14 +1,14 @@
 {
   "name": "lumina-app",
   "productName": "LUMINA",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "private": true,
   "description": "LUMINA · 综合图像处理软件（风光摄影为特色模块）· Electron UI",
   "main": "../build/app/electron/main.cjs",
   "scripts": {
     "dev:vite": "vite",
     "build:renderer": "vite build",
-    "build:electron": "esbuild electron/main.ts electron/preload.ts --bundle --platform=node --external:electron --outdir=../build/app/electron --format=cjs --out-extension:.js=.cjs",
+    "build:electron": "esbuild electron/main.ts electron/preload.ts electron/print-smoke.ts --bundle --platform=node --external:electron --outdir=../build/app/electron --format=cjs --out-extension:.js=.cjs",
     "build": "npm run build:renderer && npm run build:electron",
     "typecheck": "tsc --noEmit",
     "start": "electron .",

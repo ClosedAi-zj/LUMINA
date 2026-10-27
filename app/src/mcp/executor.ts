@@ -10,7 +10,7 @@
  */
 
 import { api } from '../api/engine';
-import { errText } from '../api/rpc-client';
+import { errText, rpc } from '../api/rpc-client';
 import { useDevelop, normalizeParams, temperatureToKelvin } from '../store/developStore';
 import { useLibrary } from '../store/libraryStore';
 import { useUi, type AppView } from '../store/uiStore';
@@ -263,6 +263,7 @@ async function opExportPhoto(rawParams: Record<string, unknown>): Promise<Record
     colorSpace: 'sRGB' as const,
     quality,
     psdKeepLayers: false,
+    psdDepth: 8 as const,
     watermark: { enabled: false, position: 'bottom-right', scale: 0.88, opacity: 60 },
     namingTemplate,
     outputDir,
@@ -345,7 +346,49 @@ const OPS: Record<string, (params: Record<string, unknown>) => Promise<Record<st
   switch_module: (p) => opSwitchModule(p),
   set_develop_mode: (p) => opSetDevelopMode(p),
   set_theme: (p) => opSetTheme(p),
+  psd_inspect: (p) => opPsdInspect(p),
+  softproof_preview: (p) => opSoftProofPreview(p),
 };
+
+/**
+ * M4-03：软打样预览。引擎用 lcms2 按目标 profile 打样一次并回传 ΔE00 统计。
+ * targetProfile 为空 = 内置演示目标（AdobeRGB）；真实印刷需传打印机 ICC 路径。
+ */
+async function opSoftProofPreview(
+  rawParams: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const photoId = typeof rawParams.photoId === 'number' ? rawParams.photoId : undefined;
+  const inputPath = typeof rawParams.inputPath === 'string' ? rawParams.inputPath : undefined;
+  if (!photoId && !inputPath) {
+    throw new McpOpError('softproof_preview 需要 photoId 或 inputPath 之一');
+  }
+  const req: Record<string, unknown> = {
+    photoId,
+    inputPath,
+    intent: typeof rawParams.intent === 'number' ? rawParams.intent : 1,
+    simulatePaper: typeof rawParams.simulatePaper === 'boolean' ? rawParams.simulatePaper : true,
+    longEdge: typeof rawParams.longEdge === 'number' ? rawParams.longEdge : 1200,
+  };
+  if (typeof rawParams.targetProfile === 'string' && rawParams.targetProfile.trim() !== '') {
+    req.targetProfile = rawParams.targetProfile;
+  }
+  const res = await rpc.request('softproof.preview', req);
+  return res as Record<string, unknown>;
+}
+
+/**
+ * M3-03：PSD 自检 / 外来判定。
+ * 直接走引擎 psd.inspect（与导出同一 PSD 解析口径），返回画幅/位深/层数/是否本方导出(foreign)。
+ * 不依赖任何 UI 态，AI 或用户可在导出前后校验任意 PSD 的来源与结构。
+ */
+async function opPsdInspect(rawParams: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const p = rawParams.path;
+  if (typeof p !== 'string' || p.trim() === '') {
+    throw new McpOpError('psd_inspect 需要 path（PSD 文件绝对路径）');
+  }
+  const res = await rpc.request('psd.inspect', { path: p });
+  return res as Record<string, unknown>;
+}
 
 async function dispatch(op: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
   const handler = OPS[op];

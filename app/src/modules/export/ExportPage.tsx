@@ -12,6 +12,8 @@ import { Icon } from '../../components/shell';
 import PresetList from './PresetList';
 import WatermarkForm from './WatermarkForm';
 import ExportQueue from './ExportQueue';
+import SoftProofCard from './SoftProofCard';
+import PrintCard from './PrintCard';
 
 const LONG_EDGE_OPTIONS = [1920, 2560, 4096, 7680] as const;
 
@@ -191,6 +193,11 @@ export default function ExportPage() {
               <span className="text-2xs text-txt3">任务进入右侧队列，可随时取消；失败可重试。</span>
             </div>
           </div>
+
+          {/* M4-03：软打样预览（引擎 lcms2 实测 ΔE，不是占位） */}
+          <SoftProofCard />
+          {/* M4-04：打印 / PDF 输出通道（无打印机环境的交付路径） */}
+          <PrintCard />
         </div>
       </section>
 

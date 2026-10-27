@@ -40,7 +40,8 @@ function PlannedCard({ icon, title, desc, meta }: { icon: string; title: string;
 }
 
 const ROADMAP: { version: string; label: string; current?: boolean }[] = [
-  { version: 'v1.1.1', label: '核心闭环（本批）', current: true },
+  { version: 'v1.2.0', label: 'LR 闭环 + PSD 分层导出（本批）', current: true },
+  { version: 'v1.1.1', label: '核心闭环' },
   { version: 'v1.1', label: '全景 / 堆栈 / AI 降噪' },
   { version: 'v1.2', label: '星空 / 打印 / 移动端' },
   { version: 'v2.0', label: '插件市场 / 协作新闻' },

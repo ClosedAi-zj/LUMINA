@@ -83,6 +83,15 @@ export function MenuBar() {
       entries: [
         { kind: 'item', label: '导入照片…', action: () => navigate('ingest') },
         { kind: 'item', label: '导出…', action: () => navigate('export') },
+        { kind: 'sep' },
+        {
+          kind: 'item',
+          label: '打开 PSD…',
+          action: async () => {
+            const p = await window.lumina.pickFile();
+            if (p) void useDevelop.getState().openPath(p);
+          },
+        },
       ],
     },
     {

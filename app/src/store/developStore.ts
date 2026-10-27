@@ -9,6 +9,7 @@ import { api } from '../api/engine';
 import { errText } from '../api/rpc-client';
 import type { AdjustmentLayer, EditParams, HslBand, MaskLayer } from '../api/protocol';
 import type { Hsl } from '../api/protocol';
+import { DEFAULT_EDIT_PARAMS } from '../api/protocol';
 
 export type DevelopMode = 'fast' | 'pro';
 export type XmpStatus = 'idle' | 'debouncing' | 'written';
@@ -131,6 +132,8 @@ interface DevelopStore {
 
   openPhoto: (id: number) => Promise<void>;
   closePhoto: () => Promise<void>;
+  /** M3-03：显式打开一个 PSD（或图像）文件作为「合并像素层」预览（只读，不入图库会话）。 */
+  openPath: (path: string) => Promise<void>;
   /** G9：批量打开（首张成为当前文档，其余进 Tab 列表）——图库多选「接力修图」入口 */
   openTabs: (ids: number[]) => Promise<void>;
   /** G9：关闭某个文档 Tab；关掉当前时切到相邻 Tab，Tab 清空则结束会话 */
@@ -237,6 +240,59 @@ export const useDevelop = create<DevelopStore>((set, get) => ({
       const { useJobStore } = await import('./jobStore');
       useJobStore.getState().toast(`无法打开照片：${errText(err)}`, 'error', 8000);
     }
+  },
+
+  // M3-03：显式打开 PSD/图像文件作为「合并像素层」只读预览（不入图库会话、无 sidecar 参数）。
+  // develop.render 按 inputPath 解码（PSD 走 decodePsdComposite；图像走通用解码），故无需 photoId。
+  openPath: async (path) => {
+    const prev = get();
+    if (prev.sessionId !== null) {
+      try {
+        const end = await api.edit.endSession(prev.sessionId, true);
+        if (end.flushed && end.sidecarMtime !== null) set({ xmpStatus: 'written', lastFlushMtime: end.sidecarMtime });
+      } catch {
+        const { useJobStore } = await import('./jobStore');
+        useJobStore.getState().toast('切换文件：上一张的会话清理失败，其参数可能未写入 XMP', 'warn', 6000);
+      }
+    }
+    set({
+      photoId: null,
+      sessionId: null,
+      params: structuredClone(DEFAULT_EDIT_PARAMS),
+      revision: 0,
+      baseImageUrl: path,
+      baseImageReady: true,
+      loading: false,
+      beforeParams: null,
+      selectedMaskId: null,
+      historyLabels: ['合并预览'],
+      historySnapshots: [],
+      tabs: [],
+      xmpStatus: 'idle',
+    });
+    // 判来源 → 显式告知（外来 = 非 LUMINA 导出，调整历史不可编辑）
+    try {
+      const info = await api.psd.inspect(path);
+      const foreign = info.foreign === true;
+      const { useJobStore } = await import('./jobStore');
+      if (foreign) {
+        useJobStore.getState().toast(
+          '此 PSD 非 LUMINA 导出，已按合并像素图层打开（调整历史不可编辑）',
+          'info',
+          6000,
+        );
+      } else {
+        useJobStore.getState().toast(
+          '已打开 LUMINA 导出的 PSD（v1.2.0 为合并预览，节点编辑还原将在 v2 提供）',
+          'info',
+          6000,
+        );
+      }
+    } catch {
+      /* inspect 失败（文件非 PSD 等）→ 静默，预览由 develop.render 兜底 */
+    }
+    const { useUi } = await import('./uiStore');
+    useUi.getState().navigate('develop');
   },
 
   closePhoto: async () => {

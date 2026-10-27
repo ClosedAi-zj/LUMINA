@@ -91,8 +91,31 @@ export const api = {
   },
   // T1.5：develop.render —— Plan CPU 后端（与导出同一实现；WebGL 降级 / 导出=预览断言）
   develop: {
-    render: (req: { photoId?: number; inputPath?: string; params: EditParams; longEdge?: number }) =>
+    // params 省略时引擎读 sidecar（photoId 路径），因此这里可选
+    render: (req: { photoId?: number; inputPath?: string; params?: EditParams; longEdge?: number }) =>
       rpc.request<{ path: string; width: number; height: number }>('develop.render', req),
+    /**
+     * M4-03 软打样预览：返回打样后 PNG 路径 + ΔE00 统计（打样后 vs 打样前）。
+     * targetProfile 为空 = 内置演示目标；真实印刷需传入打印机 ICC 文件路径。
+     */
+    softProofPreview: (req: {
+      photoId?: number;
+      inputPath?: string;
+      params?: EditParams;
+      longEdge?: number;
+      targetProfile?: string;
+      intent?: number;
+      simulatePaper?: boolean;
+    }) =>
+      rpc.request<{
+        path: string;
+        width: number;
+        height: number;
+        target: string;
+        simulatePaper: boolean;
+        deltaE: { mean: number; median: number; p95: number; max: number };
+        samples: number;
+      }>('softproof.preview', req),
   },
   cache: {
     clear: (scope: 'thumbs' | 'previews' | 'renders') => rpc.request<{ freedBytes: number }>('cache.clear', { scope }),
@@ -170,6 +193,10 @@ export const api = {
     generate: () => rpc.request<{ jobId: number }>('mock.generate'),
     simulateExternalEdit: (id: number) => rpc.request<{ ok: boolean }>('mock.debug.simulateExternalEdit', { id }),
     simulateCorruption: (id: number) => rpc.request<{ issueId: number }>('mock.debug.simulateCorruption', { id }),
+  },
+  // M3-03：PSD 自检 / 外来判定（与导出同一解析口径）
+  psd: {
+    inspect: (path: string) => rpc.request<Record<string, unknown>>('psd.inspect', { path }),
   },
   map: {
     getLocations: (zoom: number, viewport?: { minLat: number; maxLat: number; minLng: number; maxLng: number }) =>

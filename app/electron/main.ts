@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import { EngineBridge, RpcCallError, resolveEnginePath, resolveHomeDir, legacyHomeDir, type BridgeLifecycle, type EngineNotification } from './engine-bridge';
 import { registerFileProtocol, registerFileScheme } from './file-protocol';
 import { startMcpBridge, stopMcpBridge } from './mcp-bridge';
+import { renderImageToPdf, type PrintPdfRequest } from './print-pdf';
 
 const isDev = process.env.LUMINA_DEV === '1';
 const isSmoke = process.env.LUMINA_SMOKE === '1';
@@ -629,10 +630,32 @@ async function bootstrap(): Promise<void> {
     await shell.openPath(p);
     return true;
   });
+  // M3-03：打开 PSD 文件的系统对话框（仅选文件，不自动导入图库）
+  ipcMain.handle(
+    'lumina:pickFile',
+    async (_e, opts?: { title?: string; extensions?: string[] }) => {
+      if (!mainWindow) return null;
+      const exts = opts?.extensions && opts.extensions.length > 0
+        ? opts.extensions
+        : ['psd', 'png', 'jpg', 'jpeg', 'tif', 'tiff'];
+      const r = await dialog.showOpenDialog(mainWindow, {
+        title: opts?.title ?? '打开文件',
+        properties: ['openFile'],
+        filters: [{ name: '文件', extensions: exts }],
+      });
+      if (r.canceled || r.filePaths.length === 0) return null;
+      return r.filePaths[0];
+    },
+  );
   ipcMain.handle('lumina:showInFolder', async (_e, p: string) => {
     shell.showItemInFolder(p);
     return true;
   });
+  /**
+   * M4-04 打印通道（无打印机环境的 PDF 分支）：
+   * 实现体在 print-pdf.ts（与冒烟探针共用同一份排版逻辑），原片只读。
+   */
+  ipcMain.handle('lumina:printPdf', async (_e, req: PrintPdfRequest) => renderImageToPdf(req));
   ipcMain.handle('lumina:confirm', async (_e, opts: { title: string; message: string; confirmLabel?: string }) => {
     if (!mainWindow) return false;
     const r = await dialog.showMessageBox(mainWindow, {

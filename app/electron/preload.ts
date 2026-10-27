@@ -20,6 +20,17 @@ export interface LuminaPreload {
   /** 在系统资源管理器中打开/定位 */
   openPath(path: string): Promise<boolean>;
   showInFolder(path: string): Promise<boolean>;
+  /** M3-03：打开文件对话框（PSD / 图像），返回选中路径或 null */
+  pickFile(opts?: { title?: string; extensions?: string[] }): Promise<string | null>;
+  /** M4-04 打印通道：按纸张尺寸出 PDF（无打印机环境的交付路径） */
+  printPdf(req: {
+    imagePath: string;
+    pageSize?: 'A4' | 'A3' | 'Letter';
+    landscape?: boolean;
+    marginMm?: number;
+    dpi?: number;
+    outputPath?: string;
+  }): Promise<{ path: string; bytes: number; pageSize: string; landscape: boolean; dpi: number; marginMm: number }>;
   /** 破坏性操作二次确认（原生对话框） */
   confirm(opts: { title: string; message: string; confirmLabel?: string }): Promise<boolean>;
   /** 自定义标题栏窗口控制（frame:false 无边框窗口） */
@@ -58,6 +69,8 @@ contextBridge.exposeInMainWorld('lumina', {
   engineRetry: () => ipcRenderer.invoke('lumina:engineRetry'),
   openPath: (p: string) => ipcRenderer.invoke('lumina:openPath', p),
   showInFolder: (p: string) => ipcRenderer.invoke('lumina:showInFolder', p),
+  pickFile: (opts?: { title?: string; extensions?: string[] }) => ipcRenderer.invoke('lumina:pickFile', opts),
+  printPdf: (req: { imagePath: string; pageSize?: 'A4' | 'A3' | 'Letter'; landscape?: boolean; marginMm?: number; dpi?: number; outputPath?: string }) => ipcRenderer.invoke('lumina:printPdf', req),
   confirm: (opts: { title: string; message: string; confirmLabel?: string }) => ipcRenderer.invoke('lumina:confirm', opts),
   win: {
     minimize: () => ipcRenderer.invoke('lumina:win:minimize'),

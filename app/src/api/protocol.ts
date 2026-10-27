@@ -257,6 +257,47 @@ export interface EditParams {
   adjustmentStack?: AdjustmentLayer[];
 }
 
+/**
+ * 中性默认参数（所有调整归零、曲线拉平、无蒙版）——用于「打开 PSD」等无 sidecar 的只读预览，
+ * 让 develop.render 在 PSD 合并图上施加近似 identity（曝光/对比/色调不动，细节/光学全中性），
+ * 从而忠实显示合并像素层；同时也作为任何需要「空参数」场景的统一真相源。
+ */
+export const DEFAULT_EDIT_PARAMS: EditParams = {
+  processVersion: '15.4',
+  whiteBalance: 'asShot',
+  exposure: 0,
+  contrast: 0,
+  highlights: 0,
+  shadows: 0,
+  whites: 0,
+  blacks: 0,
+  clarity: 0,
+  texture: 0,
+  dehaze: 0,
+  vibrance: 0,
+  saturation: 0,
+  toneCurveRGB: [
+    { x: 0, y: 0 },
+    { x: 255, y: 255 },
+  ],
+  hsl: {
+    red: { hue: 0, sat: 0, lum: 0 },
+    orange: { hue: 0, sat:0, lum: 0 },
+    yellow: { hue: 0, sat: 0, lum: 0 },
+    green: { hue: 0, sat: 0, lum: 0 },
+    aqua: { hue: 0, sat: 0, lum: 0 },
+    blue: { hue: 0, sat: 0, lum: 0 },
+    purple: { hue: 0, sat: 0, lum: 0 },
+    magenta: { hue: 0, sat: 0, lum: 0 },
+  },
+  colorGrade: { shadowHue: 0, shadowSat: 0, midtoneHue: 0, midtoneSat: 0, highlightHue: 0, highlightSat: 0, blend: 50, balance: 0 },
+  calibration: { shadowTint: 0, redHue: 0, redSat: 0, greenHue: 0, greenSat: 0, blueHue: 0, blueSat: 0 },
+  detail: { sharpness: 0, sharpenRadius: 1, sharpenDetail: 25, sharpenMasking: 0, luminanceSmoothing: 0, colorNR: 0, colorNRDetail: 50 },
+  optics: { lensProfileEnable: false, manualDistortion: 0, chromaticAberration: 0, vignetteAmount: 0, vignetteMidpoint: 50, vignetteFeather: 50, grainAmount: 0, grainFrequency: 50, grainSize: 25 },
+  geometry: { hasCrop: false, perspective: { vertical: 0, horizontal: 0, rotate: 0, scale: 1, aspect: 0, x: 0, y: 0 } },
+  masks: [],
+};
+
 export interface JobInfo {
   jobId: number;
   kind: string;
