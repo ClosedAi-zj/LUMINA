@@ -1,8 +1,27 @@
 /** 对话框 / 空状态 / Toast 宿主 / 键帽条 / 图标集 */
 
-import type { ReactNode } from 'react';
+import { useLayoutEffect, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { useJobStore } from '../store/jobStore';
 import { useTheme } from '../theme/ThemeProvider';
+
+// ---------- 上下文栏插槽（v1.4.1） ----------
+
+/** 模块副导航行右侧插槽的 DOM id（App 渲染宿主，页面经 portal 注入自己的上下文控件） */
+export const SUBBAR_SLOT_ID = 'app-subbar-slot';
+
+/**
+ * 把页面级控件塞进 App 的模块副导航行 —— 顶层只留「标题栏 + 一条上下文栏」。
+ * 背景：修图台此前自占一行 40px 顶栏，叠在标题栏与副导航之下，成了三层横条。
+ * 用 layout effect 取宿主，避免首帧未见插槽造成闪动；宿主缺失则整块不渲染（不静默变形）。
+ */
+export function SubBarPortal({ children }: { children: ReactNode }) {
+  const [host, setHost] = useState<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    setHost(document.getElementById(SUBBAR_SLOT_ID));
+  }, []);
+  return host ? createPortal(children, host) : null;
+}
 
 // ---------- Dialog ----------
 

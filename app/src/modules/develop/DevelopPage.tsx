@@ -25,6 +25,7 @@ import OptionBar from './panels/OptionBar';
 import Filmstrip from '../library/Filmstrip';
 import { PanelCard } from './panels/panelKit';
 import { NavigatorCard, PresetCard, SnapshotCard, LayersCard } from './panels/LeftRail';
+import { SubBarPortal } from '../../components/shell';
 import { fileUrl } from '../../api/rpc-client';
 import { useMemo } from 'react';
 import type { EditParams } from '../../api/protocol';
@@ -301,8 +302,10 @@ function DevelopLoaded({
 
   return (
     <div className="h-full flex flex-col">
-      {/* 修图台顶栏 */}
-      <div className="flex items-center h-10 px-3 gap-3 border-b border-line shrink-0" style={{ background: 'var(--Lumina-Tokens-browserBar)' }}>
+      {/* v1.4.1：修图台控件不再自占一行 —— 经 SubBarPortal 注入 App 模块副导航条右侧。
+          顶层横条由三层（标题栏 + 模块副导航 + 修图台顶栏）收敛为两层。 */}
+      <SubBarPortal>
+        <div className="flex items-center gap-1.5 min-w-0">
         <Button size="sm" variant="ghost" onClick={() => navigate('library')}>
           ← 图库
         </Button>
@@ -320,7 +323,6 @@ function DevelopLoaded({
           {xmpStatus === 'written' ? '参数已写入 XMP' : xmpStatus === 'debouncing' ? '写入中…' : '参数未修改'}
         </span>
         {syncMessage && <span className="text-2xs text-accent">{syncMessage}</span>}
-        <div className="flex-1" />
         <button
           className="h-6 px-2 rounded-sm border border-line text-2xs text-txt3 hover:text-txt2 hover:bg-hover"
           onClick={() => togglePanel('left')}
@@ -359,7 +361,8 @@ function DevelopLoaded({
         >
           同步到序列
         </Button>
-      </div>
+        </div>
+      </SubBarPortal>
 
       {mode === 'pro' ? (
         /* 专业模式（v1.4.0 · LR 极简布局）：工具轨 44 + 左栏 204(玻璃侧栏) + 画布 + 右栏 318，

@@ -10,7 +10,7 @@ import { useJobStore } from './store/jobStore';
 import { startEventPump } from './store/events';
 import { useLibrary } from './store/libraryStore';
 import { useUi, type AppView, type BootStage } from './store/uiStore';
-import { ToastHost, Icon, ThemeToggle } from './components/shell';
+import { ToastHost, Icon, ThemeToggle, SUBBAR_SLOT_ID } from './components/shell';
 import { Button } from './components/primitives';
 import { MenuBar } from './components/MenuBar';
 import { WindowControls } from './components/WindowControls';
@@ -236,10 +236,12 @@ function TopBar({
         <WindowControls />
       </header>
 
-      {/* 模块内子视图（>1 个视图时才出现）；无视图的模块给显式提示，不留空白 */}
-      {spec && (
+      {/* 模块内子视图；无视图的模块给显式提示，不留空白。
+          v1.4.1：单一视图的模块（地图）不再白占一行；本行同时是页面上下文控件的宿主
+          （右侧 #app-subbar-slot，修图台经 SubBarPortal 注入 快速/专业、XMP、左右栏、同步）。 */}
+      {spec && spec.views.length !== 1 && (
         <div
-          className="app-no-drag flex items-center h-8 gap-1 px-3 shrink-0 border-b border-line"
+          className="app-no-drag flex items-center h-8 gap-1 px-3 shrink-0 border-b border-line overflow-x-auto scrollbar-none"
           style={{ background: 'var(--Lumina-Tokens-browserBar)' }}
         >
           {spec.views.length === 0 ? (
@@ -286,6 +288,9 @@ function TopBar({
               );
             })
           )}
+          {/* v1.4.1：页面级上下文控件插槽（修图台经 SubBarPortal 注入）。
+              宿主常驻不按需创建：portal 需要节点在挂载时就已存在。 */}
+          <div id={SUBBAR_SLOT_ID} className="app-no-drag ml-auto flex items-center gap-1.5 min-w-0" />
         </div>
       )}
     </>
