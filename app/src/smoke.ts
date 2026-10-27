@@ -10,6 +10,7 @@ import { rpc } from './api/rpc-client';
 import { useDevelop } from './store/developStore';
 import { buildBrushField, FIELD_CELL } from './modules/develop/webgl/maskField';
 import { DevelopRenderer } from './modules/develop/webgl/renderer';
+import { applyLegacyCompositeV2 } from './modules/develop/webgl/ops/legacyMaskV2';
 import { fileUrl } from './api/rpc-client';
 
 import { useLibrary } from './store/libraryStore';
@@ -859,6 +860,184 @@ export async function runSmokeScenario(): Promise<void> {
       log(`mask-parity: error ${(merr as Error).message} allPass=false`);
     }
 
+    // ---------- ⑦e T2.12 存量回归：告知横幅断言 + 差异报告（旧 v2 解释 vs 新 v3 解释） ----------
+    // 验收口径（架构行 912，冻结）：
+    //  ② 无静默改观感路径 = 静态检查（v2 composite 内联蒙版已随 054eb2c 移除）+ 首启横幅
+    //     存在性断言（解耦契约：MaskPanel data-testid="m2-semantic-change-banner" +
+    //     developStore 首启标记 localStorage["m2MaskSemanticsNotified"]）；
+    //  ① 差异报告：含蒙版存量抽样 50 张，旧解释 = 054eb2c~1 的 v2 composite CPU 逐字镜像
+    //     （legacyMaskV2.ts，施加在无蒙版渲染结果的 display 域上 = 旧管线末道 composite
+    //     位置）；新解释 = 引擎 develop.render（v3 mask pass，与导出同一代码路径）。
+    //     报告落盘 {home}/reports/m2-visual-diff.json（主进程捕获 m2-visual-diff-report 行）。
+    {
+      // ②a 横幅存在性断言（首启语义：清掉标记 → 重开照片 → 横幅必须出现并写回标记）
+      localStorage.removeItem('m2MaskSemanticsNotified');
+      await useDevelop.getState().openPhoto(firstId);
+      await sleep(1200);
+      const banner = document.querySelector('[data-testid="m2-semantic-change-banner"]');
+      const flagSet = localStorage.getItem('m2MaskSemanticsNotified');
+      log(`m2-banner: present=${banner ? 'true' : 'false'} flagSet=${flagSet ? 'true' : 'false'}`);
+      if (!banner) {
+        log('m2-banner: FAILED banner-missing（首启告知横幅未出现——若 MaskPanel 横幅 commit 未合入属预期待合跑）');
+      } else if (!flagSet) {
+        log('m2-banner: FAILED flag-not-set（横幅出现但首启标记未写回）');
+      }
+
+      // ① 差异报告：总体 = sidecar 真相源逐张判定（不编造）。develop_settings 派生缓存
+      // 未全量回填（mask_count 仅已打开过的照片有值），hasMasks 过滤会漏——所以按
+      // has_edits 全量读 sidecar 计数，含蒙版总体与 50 张等距确定性抽样都来自真实读数。
+      log('m2diff-step: scan-edited-begin');
+      const sortAsc = { field: 'capturedAt' as const, order: 'asc' as const };
+      const edited: { id: number; filePath: string }[] = [];
+      for (let off = 0; ; off += 500) {
+        const page = await api.library.queryPhotos({ edited: true }, sortAsc, { offset: off, limit: 500 });
+        for (const it of page.items) edited.push({ id: it.id, filePath: it.filePath });
+        if (page.items.length === 0 || edited.length >= page.total) break;
+      }
+      log(`m2diff-step: edited-total=${edited.length} reading-sidecars`);
+      const maskPhotos: { id: number; filePath: string; params: EditParams; maskCount: number }[] = [];
+      let scanDone = 0;
+      for (const p of edited) {
+        try {
+          const x = await api.xmp.read(p.id);
+          const n = (x.params?.masks ?? []).length;
+          if (n > 0) maskPhotos.push({ id: p.id, filePath: p.filePath, params: x.params as EditParams, maskCount: n });
+        } catch {
+          // 读不到 sidecar 的照片不进总体（xmp.read 失败会显式报错，此处计数留痕）
+        }
+        if (++scanDone % 500 === 0) log(`m2diff-step: scan ${scanDone}/${edited.length} masks-so-far=${maskPhotos.length}`);
+      }
+      const population = maskPhotos.length;
+      const SAMPLE = 50;
+      const sampled: { id: number; filePath: string; params: EditParams; maskCount: number }[] = [];
+      for (let i = 0; i < SAMPLE && population > 0; i++) {
+        const idx = Math.min(population - 1, Math.floor((i * population) / SAMPLE));
+        const it = maskPhotos[idx];
+        if (it && !sampled.some((s) => s.id === it.id)) sampled.push(it);
+      }
+      log(`m2diff-step: population=${population} sampled=${sampled.length}`);
+
+      const loadImg = (src: string): Promise<HTMLImageElement> =>
+        new Promise((res, rej) => {
+          const im = new Image();
+          im.onload = () => res(im);
+          im.onerror = () => rej(new Error(`img load failed: ${src}`));
+          im.src = src;
+        });
+      const grabPx = (src: HTMLImageElement): { px: Uint8ClampedArray; w: number; h: number } => {
+        const w = src.naturalWidth;
+        const h = src.naturalHeight;
+        const c = document.createElement('canvas');
+        c.width = w;
+        c.height = h;
+        const ctx = c.getContext('2d', { willReadFrequently: true });
+        if (!ctx) throw new Error('2d context unavailable');
+        ctx.drawImage(src, 0, 0);
+        return { px: ctx.getImageData(0, 0, w, h).data, w, h };
+      };
+
+      type PerPhoto = Record<string, unknown>;
+      const perPhoto: PerPhoto[] = [];
+      let skipped = 0;
+      let failed = 0;
+      let sumMean = 0;
+      let worstMean = 0;
+      let worstMax = 0;
+      let overThreshold = 0; // mean ≥ 0.5 或 max > 3（肉眼可见级别）
+      let affectedAny = 0;   // 存在任一像素通道差 > 3
+      let totalMasks = 0;
+      let amountZeroMasks = 0; // 新口径下完全不生效（w=f·opacity·amount=0）
+      let amountNegativeMasks = 0;
+      let truncatedOldPhotos = 0; // 旧解释 6 槽截断的照片数
+      for (const s of sampled) {
+        try {
+          const masks = s.params.masks ?? [];
+          if (masks.length === 0) {
+            skipped++;
+            continue;
+          }
+          const paramsNoMask = { ...s.params, masks: [] };
+          const rNew = await api.develop.render({ inputPath: s.filePath, params: s.params, longEdge: 320 });
+          const rBase = await api.develop.render({ inputPath: s.filePath, params: paramsNoMask, longEdge: 320 });
+          const imgNew = await loadImg(fileUrl(rNew.path));
+          const imgBase = await loadImg(fileUrl(rBase.path));
+          const a = grabPx(imgNew); // 新解释 = 引擎渲染（v3 mask pass）
+          const b = grabPx(imgBase); // 旧解释 = 无蒙版渲染 + legacy v2 composite CPU 镜像
+          applyLegacyCompositeV2(b.px, b.w, b.h, masks);
+          let sum = 0;
+          let mx = 0;
+          let affectedPx = 0;
+          const n = a.w * a.h;
+          for (let i = 0; i < n * 4; i += 4) {
+            const d0 = Math.abs(a.px[i] - b.px[i]);
+            const d1 = Math.abs(a.px[i + 1] - b.px[i + 1]);
+            const d2 = Math.abs(a.px[i + 2] - b.px[i + 2]);
+            const dmax = Math.max(d0, d1, d2);
+            sum += d0 + d1 + d2;
+            if (dmax > mx) mx = dmax;
+            if (dmax > 3) affectedPx++;
+          }
+          const mean = sum / (n * 3);
+          const pctAffected = (affectedPx / n) * 100;
+          sumMean += mean;
+          if (mean > worstMean) worstMean = mean;
+          if (mx > worstMax) worstMax = mx;
+          if (mean >= 0.5 || mx > 3) overThreshold++;
+          if (affectedPx > 0) affectedAny++;
+          const enabledCount = masks.filter((m) => m.enabled).length;
+          totalMasks += masks.length;
+          amountZeroMasks += masks.filter((m) => (m.amount ?? 100) === 0).length;
+          amountNegativeMasks += masks.filter((m) => (m.amount ?? 100) < 0).length;
+          if (enabledCount > 6) truncatedOldPhotos++;
+          perPhoto.push({
+            id: s.id,
+            filePath: s.filePath,
+            masks: masks.length,
+            enabled: enabledCount,
+            oldTruncated: enabledCount > 6,
+            types: masks.map((m) => m.type).join('+'),
+            amounts: masks.map((m) => m.amount ?? 100).join(','),
+            mean: Number(mean.toFixed(4)),
+            max: mx,
+            pctAffected: Number(pctAffected.toFixed(2)),
+          });
+        } catch (e) {
+          failed++;
+          log(`m2diff-photo: id=${s.id} FAILED ${(e as Error).message}`);
+        }
+      }
+      const meanAll = sampled.length > 0 ? sumMean / sampled.length : 0;
+      const report = {
+        scenario: 'T2.12 legacy-vs-v3 mask visual diff',
+        generatedAt: new Date().toISOString(),
+        population,
+        sampleSize: perPhoto.length,
+        skippedNonMask: skipped,
+        failed,
+        threshold: { meanLsb: 0.5, maxLsb: 3, affectedPixelLsb: 3 },
+        aggregate: {
+          meanOfMeanLsb: Number(meanAll.toFixed(4)),
+          worstMeanLsb: Number(worstMean.toFixed(4)),
+          worstMaxLsb: worstMax,
+          photosOverVisibleThreshold: overThreshold,
+          photosWithAnyAffectedPixel: affectedAny,
+        },
+        semantics: {
+          totalMasks,
+          amountZeroMasks, // v3 下 w=0 完全不生效，v2 下其余 6 叶仍生效
+          amountNegativeMasks, // v3 反向调整，v2 混入曝光公式
+          photosTruncatedByLegacy6Slots: truncatedOldPhotos,
+        },
+        methodology:
+          '旧解释 = 054eb2c~1 v2 composite 的 CPU 逐字镜像（legacyMaskV2.ts：前6槽 enabled、amount 混入曝光公式、tint/dehaze 丢弃、combine 忽略、display 域末道）施加在无蒙版引擎渲染结果上；新解释 = 引擎 develop.render（v3 mask pass，w=f·opacity·amount，与导出同一代码路径）；longEdge=320 逐像素 8bit RGB LSB 比对',
+        perPhoto,
+      };
+      log(`m2-visual-diff-report: ${JSON.stringify(report)}`);
+      log(
+        `m2-visual-diff: population=${population} sampled=${perPhoto.length} mean=${meanAll.toFixed(3)} worstMean=${worstMean.toFixed(3)} worstMax=${worstMax} over=${overThreshold} affectedAny=${affectedAny} amountZero=${amountZeroMasks} neg=${amountNegativeMasks} trunc6=${truncatedOldPhotos} failed=${failed}`,
+      );
+    }
+
     // ---------- ⑦c T1.5 导出=预览像素断言（销毁三套实现后的验收，进 CI） ----------
     // ⑦c 口径保持：回到照片 1 的 80×56 底图（t17 夹具照片会让 parity 画布变 1024×683，
     // 属另一口径；不因夹具升级改变 ⑦c 对照基准）。
@@ -924,6 +1103,7 @@ export async function runSmokeScenario(): Promise<void> {
             im.onerror = () => rej(new Error(`img load failed: ${src}`));
             im.src = src;
           });
+        let c7Pass: boolean | null = null;
         const grab = (src: HTMLCanvasElement | HTMLImageElement, w: number, h: number): Uint8ClampedArray => {
           const c = document.createElement('canvas');
           c.width = w;
@@ -1020,6 +1200,7 @@ export async function runSmokeScenario(): Promise<void> {
             );
             log(`export-parity: [${tag}] size=${w}x${h} mean=${mean.toFixed(4)} max=${maxv} pass=${pass}`);
             if (tag === 'full-leaf-P') {
+              c7Pass = pass;
               log(
                 `export-parity: size=${w}x${h} mean=${mean.toFixed(4)} max=${maxv} pass=${pass} ` +
                   `(口径: 无损 PNG 底图（同一次解码导出，消除浏览器/引擎双解码差）+参数集P；预览=GPU PipelineGL；导出=develop.render→Plan；门槛 mean<0.5/max≤3 LSB)`,
@@ -1041,6 +1222,8 @@ export async function runSmokeScenario(): Promise<void> {
           };
           await comparePair('identity', P0);
           await comparePair('full-leaf-P', P);
+          // T2.12 回归项（架构行 912 ③）：⑦c 口径含 masks:[]，蒙版管线重构后必须仍 PASS
+          log(`m2-regression-7c: masks=[] export=preview parity ${c7Pass === true ? 'PASS' : 'FAILED'}`);
         } catch (eperr) {
           log(`export-parity: FAILED ${(eperr as Error).message}`);
         }

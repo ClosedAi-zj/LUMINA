@@ -270,6 +270,20 @@ function createWindow(): void {
         process.stdout.write(`[smoke] export-parity-report write failed: ${String(err)}\n`);
       }
     }
+    // T2.12：存量视觉差异报告落盘（渲染层单行 JSON → {home}/reports/m2-visual-diff.json；
+    // 与引擎侧 migration 005 的 m2-sidecar-repair.json 同目录，架构行 912 报告口径）
+    if (isSmoke && message.includes('[smoke-scenario] m2-visual-diff-report: ')) {
+      try {
+        const json = message.slice(message.indexOf('m2-visual-diff-report: ') + 'm2-visual-diff-report: '.length).trim();
+        JSON.parse(json); // 完整性校验
+        const out = path.resolve(homeDir, 'reports/m2-visual-diff.json');
+        fs.mkdirSync(path.dirname(out), { recursive: true });
+        fs.writeFileSync(out, json, 'utf8');
+        process.stdout.write(`[smoke] m2-visual-diff-report -> ${out}\n`);
+      } catch (err) {
+        process.stdout.write(`[smoke] m2-visual-diff-report write failed: ${String(err)}\n`);
+      }
+    }
     // T1.5 ⑦c / T1.7 t17 夹具：渲染层 PNG dataURL + 行内目标路径 → 主进程写盘
     // （⑦c 共享无损底图消除浏览器/引擎双解码差；t17 代表性夹具落盘后走真实 import 入库）
     if (isSmoke) {

@@ -74,6 +74,8 @@ export interface Filter {
   pick?: PickFlag;
   located?: boolean;
   edited?: boolean;
+  /** 含局部蒙版（M2 T2.3 引擎 filterFromJson 已支持；T2.12 差异报告用于圈定存量总体） */
+  hasMasks?: boolean;
   missing?: boolean;
   isVideo?: boolean;
   dateFrom?: number;
