@@ -91,6 +91,8 @@ int semanticRank(const std::string& opName) {
       {"curve.toneCurveRGB", 1}, {"curve.toneCurveR", 2},
       {"curve.toneCurveG", 3},   {"curve.toneCurveB", 4},
       {"curve.parametric", 5},   {"color.hsl", 6}, {"color.colorGrade", 7},
+      // T2.6：蒙版局部调整在全部色调/颜色之后（§1.2：本质是基础面板的局部版本）
+      {"mask.apply", 8},
       // S5
       {"detail.sharpen", 0},
       // S6

@@ -87,6 +87,7 @@ set(LUMINA_SOURCES
   src/plan/ops/lens.cpp
   src/plan/ops/geometry.cpp
   src/plan/ops/effects.cpp
+  src/plan/ops/mask_field.cpp
   src/plan/ops/mask.cpp
   src/thumb/thumbnail_service.cpp
   src/raw/raw_decoder.cpp
@@ -277,6 +278,20 @@ add_executable(test_history_persist tests/test_history_persist.cpp)
 target_link_libraries(test_history_persist PRIVATE lumina_core)
 set_target_properties(test_history_persist PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
 add_test(NAME history_persist COMMAND test_history_persist)
+
+# M2 T2.6：蒙版数学（A1 5 类 × 3 组 vs 浮点参考 / A2 区内外 / A4 20 槽逐关 +
+# 置换不变 / A7 方向 / 羽化边界抽样）
+add_executable(test_mask_math tests/test_mask_math.cpp)
+target_link_libraries(test_mask_math PRIVATE lumina_core)
+set_target_properties(test_mask_math PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME mask_math COMMAND test_mask_math)
+
+# M2 T2.6：布尔 fold 三态（replace/intersect/subtract）、相减不施加 local、
+# amount 正负语义、A5 不支持类型显式失败、JSON 往返（A6）
+add_executable(test_mask_bool tests/test_mask_bool.cpp)
+target_link_libraries(test_mask_bool PRIVATE lumina_core)
+set_target_properties(test_mask_bool PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME mask_bool COMMAND test_mask_bool)
 
 # M0 ΔE 基线工具（不入 ctest：依赖本机 RW2 样本；由 scripts/ci/deltae.py 编排）
 add_executable(deltae_baseline tests/color/delta_e_baseline.cpp)
