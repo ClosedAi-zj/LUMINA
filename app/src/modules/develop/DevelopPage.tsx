@@ -370,7 +370,7 @@ function DevelopLoaded({
           {visibleLeft && (
             /* macOS 通透侧栏材质：半透明 + 模糊，贴文档流不加阴影 */
             <aside
-              className="glass-sidebar shrink-0 overflow-y-auto flex flex-col gap-px border-r border-line py-1"
+              className="glass-sidebar shrink-0 overflow-y-auto flex flex-col border-r border-line"
               style={{ width: 204 }}
             >
               {/* G4：左栏顺序 = 导航器 → 预设 → 快照 → 历史（R6 §3.2 LR 顺序）；图层常驻其后 */}
@@ -387,14 +387,16 @@ function DevelopLoaded({
             </aside>
           )}
           <section className="flex-1 min-w-0 flex flex-col overflow-hidden" style={{ background: 'var(--Lumina-Tokens-panel)' }}>
-            {/* 上下文选项栏（PS Option Bar 语义）；缩放%为画布实测 */}
-            <OptionBar zoomPct={viewerMetrics ? viewerMetrics.zoom * 100 : null} />
             <div className="relative flex-1 min-h-0 flex flex-col">
               {/* 画布外围 pasteboard（观察区 #08090B 恒色不动，红线 R5） */}
               <div className="relative flex-1 min-h-0 flex" style={{ background: 'var(--Lumina-Tokens-pasteboard)' }}>
                 <div className="relative flex-1 min-h-0 flex m-2.5">
                   <ViewerCanvas onHistogram={onHist} />
                   <GuidesOverlay />
+                </div>
+                {/* v1.4.0：上下文选项栏浮在画布顶部居中（macOS 毛玻璃胶囊），不再占用一行高度 */}
+                <div className="absolute top-2.5 left-1/2 -translate-x-1/2 z-10 flex justify-center max-w-full">
+                  <OptionBar floating zoomPct={viewerMetrics ? viewerMetrics.zoom * 100 : null} />
                 </div>
               </div>
               <RangeMaskBar />

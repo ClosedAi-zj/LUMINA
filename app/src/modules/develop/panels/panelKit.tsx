@@ -37,13 +37,14 @@ export function PanelCard({
   return (
     <section
       // shrink-0：卡片在 flex 纵列里不许被压缩（否则内容超出一屏时全部挤成 13px 的"空卡"）
-      // v1.3.0-m3 PS/LR 对齐：弃「网页卡片感」（大圆角/投影/悬浮位移）→ 2px 圆角 + 1px 边框的
-      // 面板堆叠形态；分组之间靠容器 gap-px 形成细分隔线（PS 面板不是卡片流）
-      className="shrink-0 rounded-[2px] border border-line bg-panel overflow-hidden"
+      // v1.4.1 分隔模型对齐设计稿 b-lr-airy-dark.html 的 .sect：
+      // 一列里连续堆叠，靠「单根发丝线」分段 —— 不再给每块加独立边框+间隙（那会变成
+      // 两层边框夹一条缝，画面又挤又碎）。外框由侧栏容器统一提供一根竖线。
+      className="shrink-0 overflow-hidden border-b border-line"
     >
       <button
         onClick={() => setOpen((v) => !v)}
-        className="w-full h-[30px] px-2.5 flex items-center gap-1.5 text-left hover:bg-hover transition-colors"
+        className="section-head w-full h-[30px] px-2.5 flex items-center gap-1.5 text-left transition-colors"
         style={{ transitionTimingFunction: EASE }}
         aria-expanded={open}
       >
@@ -66,7 +67,8 @@ export function PanelCard({
       </button>
       {open && (
         // R7 §3-6：面板展开 240ms cubic-bezier(0.2,0.8,0.2,1)（keyframes panel-in）
-        <div className="pb-2 border-t border-line animate-panel-in">
+        // 头体之间不再画线：分隔只发生在「块与块」之间，块内靠留白分层
+        <div className="pb-2 animate-panel-in">
           {children}
         </div>
       )}
@@ -132,8 +134,10 @@ export function ParamSlider({ label, value, min, max, step = 1, defaultValue = 0
 
   return (
     <div
-      // v1.3.0-m3 密度：参数行 26px（原 24px 内嵌 15px 文本行 + 6px 轨道 → 紧凑后单行内联轨道）
-      className="h-[28px] mx-1 px-2 rounded-smC hover:bg-hover transition-colors select-none"
+      // v1.4.1 排版修正：参数行单行三段式（标签 68px | 轨道 flex-1 | 数值胶囊 44px），
+      // 与已批准设计稿 b-lr-airy-dark.html 的 .roomy 一致。此前的「标签行 + 轨道行」两段堆叠
+      // 在 28px 行高内互相挤压，导致轨道横穿标签文字、胶囊与标签基线错位。
+      className="h-[28px] mx-1 px-2 flex items-center gap-[10px] rounded-smC hover:bg-hover transition-colors select-none"
       style={{ transitionTimingFunction: EASE }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
@@ -143,29 +147,12 @@ export function ParamSlider({ label, value, min, max, step = 1, defaultValue = 0
       }}
       title="双击复位"
     >
-      <div className="flex items-center h-[15px] pt-1.5">
-        <span className={`text-[11.5px] truncate ${isDefault ? 'text-txt2' : 'text-txt'}`}>{label}</span>
-        <span className="flex-1" />
-        {/* 数值胶囊 · 右对齐 · 等宽（v1.4.0 macOS 口径，与设计稿一致） */}
-        <span
-          className="num text-[11px] shrink-0"
-          style={{
-            minWidth: 44,
-            textAlign: 'right',
-            color: isDefault ? 'var(--Lumina-Tokens-textMuted)' : 'var(--Lumina-Tokens-textPrimary)',
-            background: 'rgba(0, 0, 0, 0.22)',
-            border: '0.5px solid var(--Lumina-Tokens-border)',
-            borderRadius: 5,
-            padding: '1px 6px',
-            fontVariantNumeric: 'tabular-nums',
-          }}
-        >
-          {text}
-        </span>
-      </div>
+      <span className={`w-[68px] shrink-0 text-[11.5px] leading-none truncate ${isDefault ? 'text-txt2' : 'text-txt'}`}>
+        {label}
+      </span>
       <div
         ref={trackRef}
-        className="relative h-1 rounded-pill cursor-ew-resize"
+        className="relative flex-1 h-1 rounded-pill cursor-ew-resize"
         style={{ background: 'var(--Lumina-Tokens-hover)' }}
         onPointerDown={(e) => {
           e.preventDefault();
@@ -193,22 +180,38 @@ export function ParamSlider({ label, value, min, max, step = 1, defaultValue = 0
           className="absolute left-0 top-0 h-1 rounded-pill"
           style={{ width: `${pct}%`, background: 'var(--Lumina-Tokens-accent)', transition: dragging ? 'none' : `width 120ms ${EASE}` }}
         />
-        {/* 白球 + hairline 描边（v1.4.0 macOS：常态 13px / hover·拖动 16px） */}
+        {/* 白球 + hairline 描边（v1.4.0 macOS：常态 13px / hover·拖动 16px）；以轨道中点为锚居中 */}
         <div
           className="absolute rounded-full"
           style={{
             width: hover || dragging ? 16 : 13,
             height: hover || dragging ? 16 : 13,
-            top: hover || dragging ? -6 : -4.5,
-            left: `calc(${pct}% )`,
-            marginLeft: hover || dragging ? -8 : -6.5,
+            top: '50%',
+            left: `${pct}%`,
+            transform: 'translate(-50%, -50%)',
             background: '#ffffff',
             border: '0.5px solid rgba(0, 0, 0, 0.18)',
             boxShadow: '0 1px 3px rgba(0, 0, 0, 0.45)',
-            transition: `width 120ms ${EASE}, height 120ms ${EASE}, top 120ms ${EASE}, margin-left 120ms ${EASE}`,
+            transition: `width 120ms ${EASE}, height 120ms ${EASE}`,
           }}
         />
       </div>
+      {/* 数值胶囊 · 右对齐 · 等宽（v1.4.0 macOS 口径，与设计稿一致） */}
+      <span
+        className="num text-[11px] shrink-0"
+        style={{
+          minWidth: 44,
+          textAlign: 'right',
+          color: isDefault ? 'var(--Lumina-Tokens-textMuted)' : 'var(--Lumina-Tokens-textPrimary)',
+          background: 'var(--Lumina-Tokens-hover)',
+          border: '0.5px solid var(--Lumina-Tokens-border)',
+          borderRadius: 5,
+          padding: '1px 6px',
+          fontVariantNumeric: 'tabular-nums',
+        }}
+      >
+        {text}
+      </span>
     </div>
   );
 }

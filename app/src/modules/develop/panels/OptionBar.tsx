@@ -35,7 +35,7 @@ const COMBINE_OPTIONS: { value: MaskLayer['combine']; label: string }[] = [
   { value: 'subtract', label: '减去' },
 ];
 
-export default function OptionBar({ zoomPct }: { zoomPct: number | null }) {
+export default function OptionBar({ zoomPct, floating = false }: { zoomPct: number | null; floating?: boolean }) {
   const params = useDevelop((s) => s.params);
   const maskTool = useDevelop((s) => s.maskTool);
   const selectedMaskId = useDevelop((s) => s.selectedMaskId);
@@ -61,8 +61,12 @@ export default function OptionBar({ zoomPct }: { zoomPct: number | null }) {
   return (
     <div
       data-testid="option-bar"
-      className="h-9 px-2 flex items-center gap-3 border-b border-line shrink-0 overflow-x-auto whitespace-nowrap"
-      style={{ background: 'var(--Lumina-Tokens-panel)' }}
+      className={
+        floating
+          ? 'glass-m2 h-9 px-2.5 flex items-center gap-3 rounded-mdC border border-line overflow-x-auto scrollbar-none whitespace-nowrap'
+          : 'h-9 px-2 flex items-center gap-3 border-b border-line shrink-0 overflow-x-auto scrollbar-none whitespace-nowrap'
+      }
+      style={floating ? undefined : { background: 'var(--Lumina-Tokens-panel)' }}
     >
       {/* —— 上下文 ①：裁剪 → 比例四档 —— */}
       {cropping && (

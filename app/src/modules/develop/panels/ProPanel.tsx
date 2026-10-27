@@ -107,10 +107,13 @@ export default function ProPanel({ histogram }: { histogram?: Histogram | null }
   if (!params) return null;
 
   return (
-    <div ref={colRef} className="h-full overflow-y-auto px-1.5 py-1 flex flex-col gap-px" style={{ background: 'transparent' }}>
-      {/* G5 dock：8 参数组标签组（图标化 dock 标签；组保持挂载，切 tab 不丢状态） */}
-      <div className="shrink-0 rounded-[2px] border border-line bg-panel overflow-hidden">
-        <div className="flex items-center flex-wrap gap-0.5 px-1 pt-1 border-b border-line" role="tablist" aria-label="调整面板 dock">
+    <div ref={colRef} className="h-full overflow-y-auto flex flex-col" style={{ background: 'transparent' }}>
+      {/* G5 dock：8 参数组标签组（图标化 dock 标签；组保持挂载，切 tab 不丢状态）
+          v1.4.1：dock 与下方参数组同属一列，段与段之间只用一根发丝线，不再各自套框 */}
+      <div className="shrink-0 border-b border-line">
+        {/* v1.4.1：4 列网格代替 flex-wrap —— 318px 右栏里 8 个 tab 会折成 5+3 的错位两行，
+            网格化后固定 4+4，行宽均分、视觉基线一致 */}
+        <div className="grid grid-cols-4 gap-0.5 px-1 py-1" role="tablist" aria-label="调整面板 dock">
           {DOCK_TABS.map((t) => {
             const active = activeTab === t.id;
             return (
@@ -120,18 +123,18 @@ export default function ProPanel({ histogram }: { histogram?: Histogram | null }
                 aria-selected={active}
                 onClick={() => switchTab(t.id)}
                 title={t.label}
-                className={`inline-flex items-center gap-1 h-7 px-1.5 rounded-t-smC text-2xs transition-colors ${
+                className={`inline-flex items-center justify-center gap-1 h-7 px-1 rounded-smC text-2xs transition-colors ${
                   active ? 'text-txt bg-hover font-medium' : 'text-txt2 hover:text-txt hover:bg-hover'
                 }`}
                 style={active ? { boxShadow: 'inset 0 -2px 0 var(--Lumina-Tokens-accent)' } : undefined}
               >
                 <LuIcon name={t.icon} size={13} className="shrink-0" />
-                {t.label}
+                <span className="truncate">{t.label}</span>
               </button>
             );
           })}
         </div>
-        <div className="p-1 flex flex-col gap-px">
+        <div className="flex flex-col">
           {/* inactive 组 display:none 但保持挂载：展开态/选择态/输入不丢 */}
           <div style={{ display: activeTab === 'basic' ? undefined : 'none' }}><BasicGroup params={params} /></div>
           <div style={{ display: activeTab === 'curve' ? undefined : 'none' }}><CurveGroup params={params} /></div>
@@ -172,7 +175,11 @@ function BasicGroup({ params }: { params: EditParams }) {
             { value: 'custom' as const, label: '自定义' },
           ]}
         />
-        <span className="num text-2xs text-txt3">{params.whiteBalance === 'custom' ? `${Math.round(temperatureToKelvin(params.temperature ?? 0))}K` : 'As Shot'}</span>
+        {/* v1.4.1：去掉恒显的「As Shot」英文读数——分段控件选中「拍摄时」时它只是同义重复；
+            仅自定义时显示开尔文值，读数才有信息量 */}
+        {params.whiteBalance === 'custom' && (
+          <span className="num text-2xs text-txt3">{Math.round(temperatureToKelvin(params.temperature ?? 0))}K</span>
+        )}
       </div>
       <Row params={params} path="exposure" min={-5} max={5} step={0.01} format={fmtEv} />
       <Row params={params} path="contrast" min={-100} max={100} />

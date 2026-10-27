@@ -23,8 +23,7 @@ body {
 *::-webkit-scrollbar {
   width: 10px;
   height: 10px;
-}
-*::-webkit-scrollbar-thumb {
+}*::-webkit-scrollbar-thumb {
   background: var(--Lumina-Tokens-border);
   border-radius: 5px;
   border: 2px solid transparent;
@@ -92,4 +91,25 @@ body {
   text-transform: uppercase;
   color: var(--Lumina-Tokens-textStrong);
   opacity: 0.88;
+}
+
+/* ---- 面板分段头（v1.4.1） ----
+   一列面板里每段只有「一根发丝线」分隔，段头用一层极淡的底色区分层级，
+   深浅主题都靠 color-mix 自动翻转，不新增硬编码色值。 */
+.section-head {
+  background: color-mix(in srgb, var(--Lumina-Tokens-textPrimary) 4%, transparent);
+}
+.section-head:hover {
+  background: var(--Lumina-Tokens-hover);
+}
+
+/* 横向工具条滚到底也不许出现滚动条（36px 高的硬条里，卷轴会吃掉半个球） */
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
 }
