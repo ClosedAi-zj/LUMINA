@@ -34,13 +34,19 @@ using lumina::testsupport::LeafDelta;
 using lumina::testsupport::RegionStats;
 
 static int g_fail = 0;
+// msg 先物化为 std::string 再经 c_str() 传 printf——把动态拼接的 std::string
+// 直接塞进 printf 可变参数是 UB（MinGW GCC 8 不报错）：SSO 缓冲被当作 char*
+// 解引用 → 消息乱码 / 偶发段错误（同 af32b7a 修复的 test_xmp_mask_v3；
+// 本文件 :346 一带存在不带 c_str() 的动态消息，属真实 UB 点）。
 #define CHECK(cond, msg)                                                 \
   do {                                                                   \
+    const std::string check_msg_ = (msg);                                \
     if (!(cond)) {                                                       \
-      std::printf("FAIL %s:%d %s\n", __FILE__, __LINE__, msg);           \
+      std::printf("FAIL %s:%d %s\n", __FILE__, __LINE__,                 \
+                  check_msg_.c_str());                                   \
       ++g_fail;                                                          \
     } else {                                                             \
-      std::printf("  [PASS] %s\n", msg);                                 \
+      std::printf("  [PASS] %s\n", check_msg_.c_str());                  \
     }                                                                    \
   } while (0)
 
