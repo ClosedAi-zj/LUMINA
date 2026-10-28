@@ -388,6 +388,14 @@ target_link_libraries(test_icc_embed PRIVATE lumina_core)
 set_target_properties(test_icc_embed PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
 add_test(NAME icc_embed COMMAND test_icc_embed)
 
+# A2：导出确定性常驻回归（守护 v1.2.1 OI-1 修复：ICC profile 字节跨次/跨进程一致）
+# 三个合成变体 × 4 种格式（PNG/JPEG/TIFF/PSD）各跑真实生产编码+嵌入路径两次并逐字节比对，
+# 另显式锁定 profileBytes(sRGB/AdobeRGB) 同进程两次逐字节一致且互异。
+add_executable(test_export_determinism tests/test_export_determinism.cpp)
+target_link_libraries(test_export_determinism PRIVATE lumina_core)
+set_target_properties(test_export_determinism PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME export_determinism COMMAND test_export_determinism)
+
 # M0 ΔE 基线工具（不入 ctest：依赖本机 RW2 样本；由 scripts/ci/deltae.py 编排）
 add_executable(deltae_baseline tests/color/delta_e_baseline.cpp)
 target_link_libraries(deltae_baseline PRIVATE lumina_core)
