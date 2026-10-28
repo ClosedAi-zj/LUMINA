@@ -167,6 +167,10 @@ set_target_properties(test_xmp_roundtrip PROPERTIES LINK_FLAGS "${LUMINA_LINK_FL
 add_executable(test_rpc_smoke tests/test_rpc_smoke.cpp)
 target_link_libraries(test_rpc_smoke PRIVATE lumina_core)
 set_target_properties(test_rpc_smoke PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+# 已注册进 ctest（此前只有 add_executable、没有 add_test，等于从未被执行 —— 内部
+# engineVersion 硬编码 1.1.1 的腐烂断言就是这样漏了整整两个大版本）。
+# 测试内部用绝对路径 D:/LUMINA/build/runtime/test-rpc，不依赖工作目录，无需 WORKING_DIRECTORY。
+add_test(NAME rpc_smoke COMMAND test_rpc_smoke)
 
 add_executable(test_query_perf tests/test_query_perf.cpp)
 target_link_libraries(test_query_perf PRIVATE lumina_core)

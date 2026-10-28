@@ -1,9 +1,18 @@
 // RPC 冒烟自测：装配最小引擎服务集，经 Dispatcher 实际分发关键方法
 // 覆盖：握手 / 未知方法 / 查询 / 编辑会话（含 v1.0.1 edit.endSession 四字段）/
 //       预设 / 帧编解码 / 自检 graceful failure
+// 注意：本用例已注册进 ctest（见 engine/CMakeLists.txt），因此**必须可重复执行** ——
+//       开始时整棵树清空重建，见 main() 顶部 removeTree 的说明。
 #include <cstdio>
 #include <string>
 #include <vector>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>  // RemoveDirectoryW（测试目录递归清理）
+#endif
 
 #include "core/config.h"
 #include "core/job_manager.h"
@@ -27,6 +36,7 @@
 #include "rpc/frame.h"
 #include "rpc/methods.h"
 #include "rpc/rpc_server.h"
+#include "rpc/version.h"
 #include "thumb/thumbnail_service.h"
 #include "xmp/migrator.h"
 #include "xmp/xmp_service.h"
@@ -85,19 +95,52 @@ int64_t insertPhoto(db::PhotoDao* photos, const std::string& fileName, const std
 
 }  // namespace
 
+namespace {
+
+/** 删除单个目录（必须已空）；Win32 用 RemoveDirectoryW，保持 UTF-8 路径兼容。 */
+bool removeDirInternal(const std::string& path) {
+  if (path.empty()) return false;
+#ifdef _WIN32
+  return RemoveDirectoryW(utf8ToUtf16(path).c_str()) != 0;
+#else
+  return false;
+#endif
+}
+
+/** 递归删除目录树（测试卫生）。不存在视为成功；与 gallery_service 内部 removeTree 同法。 */
+bool removeTree(const std::string& path) {
+  if (!dirExists(path)) return true;
+  std::vector<DirEntry> entries;
+  std::string listErr;
+  if (!listDir(path, &entries, &listErr)) return false;
+  for (const DirEntry& e : entries) {
+    const std::string child = joinPath(path, e.name);
+    if (e.isDir) {
+      if (!removeTree(child)) return false;
+    } else if (!removeFile(child)) {
+      return false;
+    }
+  }
+  return removeDirInternal(path);
+}
+
+}  // namespace
+
 int main() {
   printf("=== RPC 冒烟自测 ===\n");
-  makeDirs(kDir);
-  // 清理上次残留，保证可重复执行（sidecar 也必须清：否则上一轮写的 P9000001.xmp 会让
-  // 本轮 edit.beginSession 判定"外部修改"，用例 7/8/9 会连锁失败——这是测试卫生，不是引擎 bug）
-  removeFile(std::string(kHome) + "/db/lumina.db");
-  removeFile(std::string(kHome) + "/db/lumina.db-wal");
-  removeFile(std::string(kHome) + "/db/lumina.db-shm");
-  for (int i = 1; i <= 3; ++i) {
-    char sidecar[256];
-    snprintf(sidecar, sizeof(sidecar), "%s/P900000%d.xmp", kDir, i);
-    removeFile(sidecar);
+
+  /**
+   * 测试卫生（本用例已注册进 ctest，必须可重复执行）：
+   * 旧代码只删 {home}/db/lumina.db，但 config.init(kHome) 实际把库落在 {home}/lumina.db，
+   * 且用例 17/18 会在 {dir}/t22b-root 下建文件与子目录从未清理。结果第二次执行就出现
+   * "case5 total≠3 / case17 health 状态不复位"这类连锁假失败 —— 该测试此前只有
+   * add_executable、没有 add_test，从没被 ctest 跑过，所以这个卫生问题一直没人发现。
+   * 现在改为：整棵树先递归删掉再重建，任何残留都不可能影响结果。
+   */
+  if (!removeTree(kDir)) {
+    printf("  [WARN] 清理测试目录失败，将尝试继续（结果可能受残留影响）: %s\n", kDir);
   }
+  makeDirs(kDir);
 
   std::string err;
   core::Config config;
@@ -174,7 +217,12 @@ int main() {
     rpc::RpcResponse r = dispatcher.dispatch("system.initialize", json::JsonValue::objectValue());
     check(!r.isError, "case1: system.initialize 无错误");
     check(r.result.get("protocolVersion").asString() == "1.0", "case1: protocolVersion=1.0");
-    check(r.result.get("engineVersion").asString() == "1.1.1", "case1: engineVersion=1.1.1");
+    // 版本号是流动的：断言必须锚在单一事实源 rpc/version.h 的 kEngineVersion 上，
+    // 不能硬编码（本行曾写死 "1.1.1"，引擎走到 1.2.x 后一直假失败；因为该测试当时没
+    // 注册进 ctest，没人发现）。断言串里带上实际值，失败时能直接看出漂移成了什么。
+    const std::string engineVersion = r.result.get("engineVersion").asString();
+    check(engineVersion == kEngineVersion,
+          std::string("case1: engineVersion=") + engineVersion + " (期望 " + kEngineVersion + ")");
     check(r.result.get("capabilities").get("libraw").asBool(false), "case1: capabilities.libraw");
   }
 
