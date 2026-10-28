@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "source": "lensfun-db(CC-BY-SA-3.0)",
+  "attribution": "lens correction data derived from lensfun (https://lensfun.github.io/, CC-BY-SA 3.0)",
+  "camera": {
+    "make": "",
+    "model": "Canon EOS R6"
+  },
+  "lens": {
+    "make": "Canon",
+    "model": "Canon RF 85mm F1.2L USM"
+  },
+  "focalBuckets": [
+    {
+      "focalMm": 85.0,
+      "distortion": {
+        "model": "brown-conrady",
+        "k1": 0.0,
+        "k2": 0.0,
+        "k3": 0.0
+      },
+      "ca": {
+        "scaleR": 1.0,
+        "scaleB": 1.0
+      },
+      "vignetting": {
+        "a": 0.3556154,
+        "b": -0.1669995,
+        "c": 0.2150439
+      }
+    }
+  ]
+}

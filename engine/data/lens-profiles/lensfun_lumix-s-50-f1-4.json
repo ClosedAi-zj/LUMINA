@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "source": "lensfun-db(CC-BY-SA-3.0)",
+  "attribution": "lens correction data derived from lensfun (https://lensfun.github.io/, CC-BY-SA 3.0)",
+  "camera": {
+    "make": "",
+    "model": "Panasonic DC-S5M2"
+  },
+  "lens": {
+    "make": "Panasonic",
+    "model": "Lumix S 50/F1.4"
+  },
+  "focalBuckets": [
+    {
+      "focalMm": 50.0,
+      "distortion": {
+        "model": "brown-conrady",
+        "k1": 0.0,
+        "k2": 0.0,
+        "k3": 0.0
+      },
+      "ca": {
+        "scaleR": 1.0,
+        "scaleB": 1.0
+      },
+      "vignetting": {
+        "a": 0.7257684,
+        "b": -0.5860946,
+        "c": 0.5890817
+      }
+    }
+  ]
+}

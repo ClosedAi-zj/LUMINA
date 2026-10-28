@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "source": "lensfun-db(CC-BY-SA-3.0)",
+  "attribution": "lens correction data derived from lensfun (https://lensfun.github.io/, CC-BY-SA 3.0)",
+  "camera": {
+    "make": "",
+    "model": "Sony ILCE-7M4"
+  },
+  "lens": {
+    "make": "Tamron",
+    "model": "Tamron E 28-75mm F/2.8 Di III VXD G2 A063Z"
+  },
+  "focalBuckets": [
+    {
+      "focalMm": 51.5,
+      "distortion": {
+        "model": "brown-conrady",
+        "k1": 0.0,
+        "k2": 0.0,
+        "k3": 0.0
+      },
+      "vignetting": {
+        "a": -0.0306281,
+        "b": 0.7278004,
+        "c": -0.3541124
+      }
+    }
+  ]
+}

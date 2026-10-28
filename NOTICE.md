@@ -21,3 +21,22 @@ lensfun 项目：https://lensfun.github.io/ —— 其镜头校正如实归功�
 - 二进制与资源中**不得出现** LCP/DCP 文件或其派生内容（验收 L4 的扫描项：
   `*.lcp` / `*.dcp` 文件存在性 + 数据目录 `source` 字段白名单）。
 - 若未来引入 lensfun 转换数据，须保留 `attribution` 字段并同步本文件。
+
+## Third-party data
+
+This product includes lens correction data derived from the **lensfun** database.
+
+- Project: lensfun — https://lensfun.github.io/
+- License: **CC-BY-SA 3.0** (data only; lensfun *code* is LGPL-3.0 and is **not** linked
+  by this project — conversion is performed offline by
+  `engine/scripts/tools/lensfun2lumina.py`, which reads the database XML and emits
+  `engine/data/lens-profiles/lensfun_*.json`).
+
+Each converted profile carries the following attribution (also stored in its JSON
+`attribution` field):
+
+> lens correction data derived from lensfun (https://lensfun.github.io/, CC-BY-SA 3.0)
+
+Under CC-BY-SA 3.0, any distribution containing these `source=lensfun-db(CC-BY-SA-3.0)`
+data files must make those data files available under the same CC-BY-SA 3.0 license
+and retain the attribution above.

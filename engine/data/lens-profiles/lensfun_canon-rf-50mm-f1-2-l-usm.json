@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "source": "lensfun-db(CC-BY-SA-3.0)",
+  "attribution": "lens correction data derived from lensfun (https://lensfun.github.io/, CC-BY-SA 3.0)",
+  "camera": {
+    "make": "",
+    "model": "Canon EOS R6"
+  },
+  "lens": {
+    "make": "Canon",
+    "model": "Canon RF 50mm F1.2 L USM"
+  },
+  "focalBuckets": [
+    {
+      "focalMm": 50.0,
+      "distortion": {
+        "model": "brown-conrady",
+        "k1": 0.0,
+        "k2": 0.0,
+        "k3": 0.0
+      },
+      "ca": {
+        "scaleR": 1.0,
+        "scaleB": 1.0
+      },
+      "vignetting": {
+        "a": 1.7827,
+        "b": -1.7124,
+        "c": 0.7333
+      }
+    }
+  ]
+}
