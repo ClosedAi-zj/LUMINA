@@ -7,7 +7,7 @@
   "main": "../build/app/electron/main.cjs",
   "scripts": {
     "dev:vite": "vite",
-    "build:renderer": "vite build",
+    "build:renderer": "node -e \"require('node:fs').rmSync('../build/app/assets',{recursive:true,force:true})\" && vite build",
     "build:electron": "esbuild electron/main.ts electron/preload.ts electron/print-smoke.ts --bundle --platform=node --external:electron --outdir=../build/app/electron --format=cjs --out-extension:.js=.cjs",
     "build": "npm run build:renderer && npm run build:electron",
     "typecheck": "tsc --noEmit",

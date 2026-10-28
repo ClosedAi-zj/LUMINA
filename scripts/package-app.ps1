@@ -92,7 +92,15 @@ Set-Content -Path (Join-Path $resApp 'package.json') -Value $pkgJson -Encoding A
 Write-Host "[pkg] copying renderer + main process ..."
 $resBuildApp = Join-Path $pkgDir 'resources/build/app'
 New-Item -ItemType Directory -Force -Path $resBuildApp | Out-Null
-Copy-Item -Path (Join-Path $root 'build/app/*') -Destination $resBuildApp -Recurse -Force
+# build/app/node_modules is a DIRECTORY LINK to app/node_modules (about 420 MB). It is
+# needed by the build-time renderer runtime, but it must NOT be shipped: PS 5.1's
+# Copy-Item -Recurse follows directory links and copies the target contents, which once
+# bloated the portable zip to 716 MB. Enumerate the entries and skip the link itself
+# (Where-Object yields the directory entry, not its contents, so nothing is followed).
+# Only index.html / assets / electron are real build artifacts here.
+Get-ChildItem -LiteralPath (Join-Path $root 'build/app') -Force |
+    Where-Object { $_.Name -ne 'node_modules' } |
+    Copy-Item -Destination $resBuildApp -Recurse -Force
 
 $resAppElectron = Join-Path $resApp 'electron'
 New-Item -ItemType Directory -Force -Path $resAppElectron | Out-Null
@@ -100,6 +108,20 @@ Copy-Item -Path (Join-Path $root 'build/app/electron/*') -Destination $resAppEle
 # renderer side does not need a second copy of the main process bundle
 $dupElectron = Join-Path $resBuildApp 'electron'
 if (Test-Path -LiteralPath $dupElectron) { Remove-Item -LiteralPath $dupElectron -Recurse -Force }
+
+# ---- 3b. package hygiene self-check: no node_modules / no link may reach the package ----
+# Guard against the 420 MB node_modules link leaking back in (history: 716 MB zip).
+$leaked = Join-Path $resBuildApp 'node_modules'
+if (Test-Path -LiteralPath $leaked) {
+    throw "[pkg] node_modules leaked into package: $leaked"
+}
+# Any remaining reparse point (link/junction) under the copied renderer is the same bug
+# with a different name; fail loudly instead of shipping whatever its target contains.
+$leakedLinks = @(Get-ChildItem -LiteralPath $resBuildApp -Recurse -Force -ErrorAction SilentlyContinue |
+    Where-Object { ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 })
+if ($leakedLinks.Count -gt 0) {
+    throw ("[pkg] reparse point leaked into package: {0}" -f $leakedLinks[0].FullName)
+}
 
 # ---- 4. C++ engine ----
 Write-Host "[pkg] copying engine ..."
