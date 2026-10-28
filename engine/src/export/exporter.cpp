@@ -797,14 +797,23 @@ bool Exporter::exportOne(const PhotoRecord& record, const ExportSpec& spec,
   bool ok = false;
   if (spec.format == "jpg") {
     ok = core::jpeg::encodeToFile(target, image, spec.quality, &encodeErr);
-    if (ok) ok = icc_embed::injectJpegIcc(target, iccBytes, &encodeErr);
+    // 嵌入失败即删除半成品：绝不留下"有像素却没 profile"的文件（删不掉也要如实告知）
+    if (ok && !icc_embed::injectJpegIcc(target, iccBytes, &encodeErr)) {
+      if (!removeFile(target)) {
+        appendWarning(warning, "删除半成品失败，请手动清理: " + target);
+      }
+      ok = false;
+    }
   } else if (spec.format == "tiff") {
     ok = writeTiff(target, image, iccBytes, &encodeErr);
   } else if (spec.format == "png") {
     ok = imaging::encodePng(target, image, &encodeErr);
-    if (ok) {
-      // PNG 的 iCCP 需要 deflate 流，v1.2.0 未接入；如实告知而不是假装已标记
-      appendWarning(warning, "PNG 不嵌入 ICC（v1.2.0 仅 JPG/TIFF/PSD 标记色彩空间）");
+    // M4-02：iCCP 走 zlib(stored) 流真实嵌入；失败即删除半成品，绝不留下"有像素却没 profile"的文件
+    if (ok && !icc_embed::injectPngIcc(target, iccBytes, &encodeErr)) {
+      if (!removeFile(target)) {
+        appendWarning(warning, "删除半成品失败，请手动清理: " + target);
+      }
+      ok = false;
     }
   } else {
     // createJob 已拦截；这里再兜一层，避免将来加格式时静默写错

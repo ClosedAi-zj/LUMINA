@@ -144,6 +144,57 @@ bool profileBytes(ProfileId id, std::vector<uint8_t>* out, std::string* err) {
     return false;
   }
   out->resize(written);
+
+  /**
+   * ICC 头 [24:36] 是 profile 的 dateTimeNumber（创建时间，6 个 uint16 大端：
+   * 年/月/日/时/分/秒）。lcms2 序列化时填的是**本进程首次构造 profile 的时刻**，
+   * 后果：同一张照片今天导出和明天导出，嵌进 JPG/TIFF/PSD/PNG 的 profile 字节不同
+   *       → 导出物无法位级复现，任何 golden-hash 回归都会被这个时间戳打爆，
+   *         用户也无法验证"同样的输入吐出同样的文件"。
+   *
+   * 处理方式：序列化之后原地规范化为固定时间 2000-01-01 00:00:00。
+   *  - 为什么不直接设 header：lcms2 2.16 **没有** cmsSetHeaderCreated（只有
+   *    cmsGetHeaderCreationDateTime），无法在保存前指定，只能保存后规范化。
+   *  - 为什么用固定值而不是"当前时间"：确定性优先。dateTimeNumber 只是元信息，
+   *    不参与色彩计算（不进入 PCS、不参与 transform、不参与 gamut/曲线求值），
+   *    任何 CMM 都不会用它做运算，因此固定值与真实创建时间在色彩上等价。
+   */
+  constexpr size_t kDateTimeOffset = 24;
+  constexpr size_t kDateTimeBytes = 12;  // 6 × uint16
+  if (written < kDateTimeOffset + kDateTimeBytes) {
+    if (err) {
+      *err = std::string("ICC 头过短，无法规范化创建时间（") + std::to_string(written) +
+             " 字节）: " + profileName(id);
+    }
+    return false;
+  }
+  static const uint16_t kFixedDateTime[6] = {2000, 1, 1, 0, 0, 0};
+  for (size_t i = 0; i < 6; ++i) {
+    const uint16_t v = kFixedDateTime[i];
+    (*out)[kDateTimeOffset + i * 2] = static_cast<uint8_t>((v >> 8) & 0xFF);
+    (*out)[kDateTimeOffset + i * 2 + 1] = static_cast<uint8_t>(v & 0xFF);
+  }
+  // profileID [84:100]：实测 lcms2 2.16 写的是全 0（未计算 MD5），跨进程确定，
+  // 故不需要干预；若将来 lcms 改成写入随机/MD5 值，这里必须一并规范化。
+
+  /**
+   * 自证没把 profile 改坏：规范化后立刻用 lcms2 重开并核对色彩空间。
+   * 绝不允许"改完就返回 true"——一个坏 profile 会静默污染所有导出物。
+   */
+  cmsHPROFILE verify =
+      cmsOpenProfileFromMem(out->data(), static_cast<cmsUInt32Number>(out->size()));
+  if (!verify) {
+    if (err) *err = std::string("ICC 规范化后重开失败（profile 已损坏）: ") + profileName(id);
+    return false;
+  }
+  const cmsColorSpaceSignature colorSignature = cmsGetColorSpace(verify);
+  cmsCloseProfile(verify);
+  if (colorSignature != cmsSigRgbData) {
+    if (err) {
+      *err = std::string("ICC 规范化后色彩空间不是 RGB: ") + profileName(id);
+    }
+    return false;
+  }
   return true;
 }
 
