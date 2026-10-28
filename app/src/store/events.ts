@@ -8,7 +8,17 @@ import { useJobStore } from './jobStore';
 import { useLibrary } from './libraryStore';
 import type { FsChangedEvent, HealthIssueEvent, ThumbReadyEvent } from '../api/protocol';
 
+/**
+ * 泵是否已启动。
+ * App 的启动 effect 依赖 [bootAttempt]（「重试启动」会重跑），旧实现每次都会再
+ * rpc.on(...) 一遍 —— 每条事件被路由 N 次（toast 重复、loadMeta 重复请求）。
+ * 事件路由表是全局单例，装一次即可。
+ */
+let pumpStarted = false;
+
 export function startEventPump(): void {
+  if (pumpStarted) return;
+  pumpStarted = true;
   rpc.start();
   rpc.on('event.job.progress', (params) => useJobStore.getState().onJobProgress(params as never));
   rpc.on('event.job.completed', (params) => useJobStore.getState().onJobCompleted(params as never));

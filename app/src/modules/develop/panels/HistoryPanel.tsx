@@ -96,11 +96,16 @@ export default function HistoryPanel() {
               if (photoId === null) return;
               try {
                 const res = await api.edit.restoreSnapshot(photoId, g.ids[0]);
-                useDevelop.setState({
-                  params: normalizeParams(res.params),
-                  revision: useDevelop.getState().revision + 1,
-                  historyLabels: [...useDevelop.getState().historyLabels, `快照恢复 · ${g.name}`],
-                });
+                // 走 applyPatch：标签与参数快照必须**同源同步**追加。
+                // 旧写法只 push historyLabels，不 push historySnapshots → 两数组错位，
+                // 列表末行没有时间、canUndo 不更新，往上回放会跳到错位的参数。
+                // 引擎侧 restoreSnapshot 已写入 sidecar，这里同值重写幂等，不会造成参数差异。
+                const restored = normalizeParams(res.params);
+                await useDevelop.getState().applyPatch(
+                  { ...restored, adjustmentStack: restored.adjustmentStack ?? [], masks: restored.masks ?? [] },
+                  true,
+                  `快照恢复 · ${g.name}`,
+                );
               } catch (err) {
                 const { useJobStore } = await import('../../../store/jobStore');
                 useJobStore.getState().toast(`快照恢复失败：${errText(err)}`, 'error', 6000);

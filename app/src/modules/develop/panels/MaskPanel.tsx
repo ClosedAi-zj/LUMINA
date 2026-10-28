@@ -4,6 +4,7 @@
 
 import { useDevelop, maskName, sliderLabel } from '../../../store/developStore';
 import { Button, Slider, Toggle } from '../../../components/primitives';
+import { MAX_MASK_SLOTS } from '../webgl/maskField';
 import type { MaskLayer } from '../../../api/protocol';
 
 const TOOLS: { type: MaskLayer['type']; label: string }[] = [
@@ -48,11 +49,15 @@ export default function MaskPanel() {
   const selectMask = useDevelop((s) => s.selectMask);
   const addMask = useDevelop((s) => s.addMask);
   const updateMask = useDevelop((s) => s.updateMask);
+  const updateMaskField = useDevelop((s) => s.updateMaskField);
   const updateMaskLocal = useDevelop((s) => s.updateMaskLocal);
   const removeMask = useDevelop((s) => s.removeMask);
 
   if (!params) return null;
   const selected = params.masks.find((m) => m.id === selectedMaskId) ?? null;
+  /** 渲染管线是 32 槽硬上限（maskField.MAX_MASK_SLOTS）：到顶就禁止再新建，
+   *  否则第 33 个蒙版会让整页渲染失败（旧行为是 renderer 直接 throw 被 ErrorBoundary 兜走） */
+  const atCapacity = params.masks.length >= MAX_MASK_SLOTS;
 
   return (
     <div>
@@ -78,7 +83,13 @@ export default function MaskPanel() {
 
       <div className="flex items-center gap-1.5 mb-2 flex-wrap">
         {TOOLS.map((t) => (
-          <Button key={t.type} size="sm" onClick={() => void addMask(t.type)} title={`新建${maskName(t.type)}蒙版`}>
+          <Button
+            key={t.type}
+            size="sm"
+            disabled={atCapacity}
+            onClick={() => void addMask(t.type)}
+            title={atCapacity ? `已达渲染槽上限 ${MAX_MASK_SLOTS}：请先删除不用的蒙版` : `新建${maskName(t.type)}蒙版`}
+          >
             {t.label}
           </Button>
         ))}
@@ -133,6 +144,16 @@ export default function MaskPanel() {
         </div>
       )}
 
+      {/* 槽位上限提示：32 是渲染管线的硬容量，到顶必须说清「不能再加」而不是让渲染抛错 */}
+      {atCapacity && (
+        <div
+          className="text-2xs rounded-md px-2 py-1 mb-2"
+          style={{ background: 'rgba(232,194,104,0.12)', color: 'var(--Lumina-Tokens-accent)' }}
+        >
+          已达蒙版渲染槽上限 {MAX_MASK_SLOTS} 个：新建按钮已停用，请先删除不用的蒙版（超出槽位的蒙版将不参与预览渲染）
+        </div>
+      )}
+
       {selected && (
         <div className="rounded-md border border-line p-2.5">
           <div className="text-2xs text-txt2 mb-2 flex items-center justify-between">
@@ -153,7 +174,17 @@ export default function MaskPanel() {
             </span>
           </div>
           {(selected.type === 'linear' || selected.type === 'radial' || selected.type === 'brush') && (
-            <Slider label="主强度" value={selected.amount ?? 100} min={-100} max={100} defaultValue={0} onChange={(v) => void updateMask(selected.id, { amount: v })} />
+            <Slider
+              label="主强度"
+              value={selected.amount ?? 100}
+              min={-100}
+              max={100}
+              defaultValue={0}
+              // 拖动中只本地更新（commit=false），松手才提交一次：
+              // 旧写法每帧 commit=true → 一次拖动产生几十条历史 + 几十次写库
+              onChange={(v) => void updateMaskField(selected.id, { amount: v }, false)}
+              onCommit={(v) => void updateMaskField(selected.id, { amount: v }, true, '蒙版 · 主强度')}
+            />
           )}
           {selected.type === 'brush' && (
             <div className="text-2xs text-txt3 mb-2">笔画数：{selected.strokes?.length ?? 0}（WP-B5 起逐笔距离场渲染；选中蒙版后红色浮层即实际作用范围，按住 Alt 拖动为擦除）</div>

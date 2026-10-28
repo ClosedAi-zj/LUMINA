@@ -15,6 +15,9 @@ export default function PresetList() {
   const presetsLoading = useExport((s) => s.presetsLoading);
   const presetsError = useExport((s) => s.presetsError);
   const selectedPresetId = useExport((s) => s.selectedPresetId);
+  // 订阅而非渲染期 getState()：getState 读到的值不会触发重渲染，
+  // 保存中按钮仍可点（重复提交同一预设），状态变化后 UI 也不会自动更新
+  const savingPreset = useExport((s) => s.savingPreset);
   const [saveOpen, setSaveOpen] = useState(false);
   const [presetName, setPresetName] = useState('');
 
@@ -94,7 +97,7 @@ export default function PresetList() {
           <Button onClick={() => setSaveOpen(false)}>取消</Button>
           <Button
             variant="primary"
-            disabled={!presetName.trim() || useExport.getState().savingPreset}
+            disabled={!presetName.trim() || savingPreset}
             onClick={() => {
               void useExport.getState().savePreset(presetName);
               setSaveOpen(false);

@@ -11,8 +11,9 @@ import { EmptyState } from '../../components/shell';
 import HdrCard from './HdrCard';
 import DenoiseCard from './DenoiseCard';
 
-/** v1.1 能力占位卡：按 PRD 版本定位显式标注，不报错 */
-function PlannedCard({ icon, title, desc, meta }: { icon: string; title: string; desc: string; meta: string }) {
+/** v1.1 能力占位卡：按 PRD 版本定位显式标注，不报错。
+ *  meta 可选：需要真实统计才填（拿不到就整行不渲染，绝不写死假数字） */
+function PlannedCard({ icon, title, desc, meta }: { icon: string; title: string; desc: string; meta?: string }) {
   return (
     <div className="rounded-lg border border-line p-3 flex flex-col gap-2 opacity-90" style={{ background: 'var(--Lumina-Tokens-panel)' }}>
       <div className="flex items-center gap-2">
@@ -31,7 +32,7 @@ function PlannedCard({ icon, title, desc, meta }: { icon: string; title: string;
         </div>
       </div>
       <div className="text-2xs text-txt2 leading-4">{desc}</div>
-      <div className="text-2xs text-txt3">{meta}</div>
+      {meta && <div className="text-2xs text-txt3">{meta}</div>}
       <div className="rounded-md px-2 py-1.5 text-2xs" style={{ background: 'var(--Lumina-Tokens-accentSoft)', color: 'var(--Lumina-Tokens-accent)' }}>
         该能力 v1.1 提供 · 当前版本未开放
       </div>
@@ -40,13 +41,14 @@ function PlannedCard({ icon, title, desc, meta }: { icon: string; title: string;
 }
 
 const ROADMAP: { version: string; label: string; current?: boolean }[] = [
-  { version: 'v1.2.2', label: 'lensfun 镜头库 12 支 + 导出确定性回归', current: true },
+  { version: 'v1.2.3', label: '稳定性修复批次（编辑落盘 / 退出 / 竞态）', current: true },
+  { version: 'v1.2.2', label: 'lensfun 镜头库 12 支 + 导出确定性回归' },
   { version: 'v1.2.1', label: 'PNG iCCP + 确定性色彩 profile' },
   { version: 'v1.2.0', label: 'LR 闭环 + PSD 分层导出' },
   { version: 'v1.1.1', label: '核心闭环' },
   { version: 'v1.1', label: '全景 / 堆栈 / AI 降噪' },
   { version: 'v1.2', label: '星空 / 打印 / 移动端' },
-  { version: 'v2.0', label: '插件市场 / 协作新闻' },
+  { version: 'v2.0', label: '插件市场 / 协作审阅' },
 ];
 
 export default function LandscapePage() {
@@ -80,8 +82,10 @@ export default function LandscapePage() {
 
       <div className="grid grid-cols-3 gap-3">
         <HdrCard />
-        <PlannedCard icon="⛰" title="全景拼接" desc="柱形 / 球形投影 · 接缝融合 · 自动裁剪" meta="12 组待拼接 · 每组 6 ~ 9 张" />
-        <PlannedCard icon="◫" title="焦点堆栈" desc="焦点皮革 · 深度图合成 · 半径蒙版" meta="5 组待堆叠 · 每组 8 ~ 13 张" />
+        {/* 未实装能力的卡片不再报「12 组待拼接 · 每组 6~9 张」这类假统计
+            （引擎没有全景/堆栈检测接口，数字无从得来 → 整行不渲染） */}
+        <PlannedCard icon="⛰" title="全景拼接" desc="柱形 / 球形投影 · 接缝融合 · 自动裁剪" />
+        <PlannedCard icon="◫" title="焦点堆栈" desc="焦点堆栈合成 · 深度图合成 · 半径蒙版" />
         <DenoiseCard />
       </div>
 

@@ -106,7 +106,9 @@ export default function OptionBar({ zoomPct, floating = false }: { zoomPct: numb
               min={-100}
               max={100}
               defaultValue={0}
-              onChange={(v) => void useDevelop.getState().updateMask(selected.id, { amount: v })}
+              // 拖动中不写历史，松手提交一次（与蒙版面板同一口径）
+              onChange={(v) => void useDevelop.getState().updateMaskField(selected.id, { amount: v }, false)}
+              onCommit={(v) => void useDevelop.getState().updateMaskField(selected.id, { amount: v }, true, '蒙版 · 主强度')}
             />
           </div>
           <div className="w-32 shrink-0">
@@ -116,7 +118,8 @@ export default function OptionBar({ zoomPct, floating = false }: { zoomPct: numb
               min={0}
               max={100}
               defaultValue={100}
-              onChange={(v) => void useDevelop.getState().updateMask(selected.id, { opacity: v })}
+              onChange={(v) => void useDevelop.getState().updateMaskField(selected.id, { opacity: v }, false)}
+              onCommit={(v) => void useDevelop.getState().updateMaskField(selected.id, { opacity: v }, true, '蒙版 · 不透明度')}
             />
           </div>
           <ParamSegmented

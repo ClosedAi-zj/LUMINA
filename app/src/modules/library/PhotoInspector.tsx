@@ -27,7 +27,9 @@ const RATING_LABELS = ['无', '★', '★★', '★★★', '★★★★', '★
 
 export default function PhotoInspector() {
   const currentPhotoId = useLibrary((s) => s.currentPhotoId);
-  const thumbUrls = useLibrary((s) => s.thumbUrls);
+  // 只订阅「当前这张」的缩略图：直接订阅整个 thumbUrls 会让每一批缩略图到达都触发
+  // 一次 getPhotoDetail 重拉（P23）。selector 返回原始字符串，引用稳定、不会无限重渲。
+  const thumbUrl = useLibrary((s) => (s.currentPhotoId !== null ? s.thumbUrls[s.currentPhotoId] : undefined));
   const [detail, setDetail] = useState<PhotoDetail | null>(null);
   const engineInfo = useJobStore((s) => s.engineInfo);
   const isMock = (engineInfo as { capabilities?: { mock?: boolean } })?.capabilities?.mock === true;
@@ -50,7 +52,8 @@ export default function PhotoInspector() {
     return () => {
       cancelled = true;
     };
-  }, [currentPhotoId, thumbUrls]);
+    // 依赖里不再含 thumbUrls：换图才重拉详情，缩略图到货不重拉
+  }, [currentPhotoId]);
 
   if (!detail) {
     return <div className="p-3 text-2xs text-txt3">选中照片后在此查看元数据、评分与旗标。</div>;
@@ -67,7 +70,7 @@ export default function PhotoInspector() {
     }
   };
 
-  const src = detail.thumbPath ? fileUrl(detail.thumbPath) : thumbUrls[detail.id] ? fileUrl(thumbUrls[detail.id]) : null;
+  const src = detail.thumbPath ? fileUrl(detail.thumbPath) : thumbUrl ? fileUrl(thumbUrl) : null;
 
   return (
     <div className="p-3 flex flex-col gap-3 text-xs">

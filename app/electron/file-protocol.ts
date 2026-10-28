@@ -10,7 +10,15 @@ import { protocol, net } from 'electron';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const ALLOWED_EXT = new Set(['.jpg', '.jpeg', '.png', '.svg', '.webp', '.tif', '.tiff', '.dng', '.mp4', '.mov', '.psd', '.html', '.css', '.js', '.json']);
+/**
+ * 允许的扩展名 —— **只放媒体**。
+ *
+ * v1.2.3 收紧（P21）：原先还含 `.js / .json / .css`，而本协议对**目录归属不做任何校验**，
+ * 于是渲染层（或任何能构造该 URL 的内容）可以用 `lumina-file://C/Users/x/secrets.json`
+ * 读走库外任意本地文件，`.js` 更是可直接被当脚本加载。画廊静态页走的是
+ * `http://127.0.0.1:<port>/gallery/...`（main.ts startGalleryServer），不依赖本协议。
+ */
+const ALLOWED_EXT = new Set(['.jpg', '.jpeg', '.png', '.svg', '.webp', '.tif', '.tiff', '.dng', '.mp4', '.mov', '.psd', '.html']);
 
 /** 必须在 app ready 之前注册（standard 方案才能被 <img>/fetch 使用） */
 export function registerFileScheme(): void {
@@ -33,6 +41,10 @@ export function registerFileProtocol(): void {
       raw = request.url.replace(/^lumina-file:\/\//, '');
     }
     const p = path.normalize(raw);
+    // 目录穿越直接拒绝（normalize 后仍含 '..' 段 = 试图跳目录）
+    if (p.split(/[\\/]/).some((seg) => seg === '..')) {
+      return new Response('forbidden path', { status: 403 });
+    }
     const ext = path.extname(p).toLowerCase();
     if (!ALLOWED_EXT.has(ext)) {
       return new Response('forbidden extension', { status: 403 });

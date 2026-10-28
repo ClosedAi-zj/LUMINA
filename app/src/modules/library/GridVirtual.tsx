@@ -134,6 +134,9 @@ export default function GridVirtual() {
 
   return (
     <div ref={containerRef} className="h-full w-full overflow-hidden px-1 pt-1">
+      {/* itemData 只带渲染格点所需的分页访问器：thumbUrls 曾在这里用 getState() 读，
+          既是渲染期副作用（不订阅 → 缩略图到位也不会刷新），又让整张网格随每批缩略图重建。
+          GridItem 自己订阅 thumbUrls（见 GridItem.tsx），单元格粒度更新即可。 */}
       <FixedSizeGrid
         key={`${cols}_${cellW}_${filterVersion}`}
         columnCount={cols}
@@ -150,7 +153,7 @@ export default function GridVirtual() {
           const p = itemAt(index);
           return p ? p.id : `ph_${index}`;
         }}
-        itemData={{ cols, total, itemAt, thumbUrls: useLibrary.getState().thumbUrls }}
+        itemData={{ cols, total, itemAt }}
       >
         {Cell}
       </FixedSizeGrid>

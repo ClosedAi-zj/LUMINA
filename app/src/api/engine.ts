@@ -42,6 +42,7 @@ import type {
   SnapshotInfo,
   Sort,
   ThumbItem,
+  ThumbSize,
   TimelineBucket,
   TimelapseSequenceDetail,
   TimelapseSequenceSummary,
@@ -83,7 +84,7 @@ export const api = {
       rpc.request<{ albumId: number; items: number[]; total: number }>('albums.getItems', { albumId }),
   },
   thumb: {
-    ensureBatch: (ids: number[], size: 320 | 640) => rpc.request<{ items: ThumbItem[] }>('thumb.ensureBatch', { ids, size }),
+    ensureBatch: (ids: number[], size: ThumbSize) => rpc.request<{ items: ThumbItem[] }>('thumb.ensureBatch', { ids, size }),
     getStatus: (ids: number[], size: 320 | 640) => rpc.request<{ items: ThumbItem[] }>('thumb.getStatus', { ids, size }),
   },
   preview: {

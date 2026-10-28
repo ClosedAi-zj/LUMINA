@@ -9,6 +9,7 @@ import { errText, fileUrl } from './api/rpc-client';
 import { useJobStore } from './store/jobStore';
 import { startEventPump } from './store/events';
 import { useLibrary } from './store/libraryStore';
+import { useDebounced } from './api/hooks';
 import { useUi, type AppView, type BootStage } from './store/uiStore';
 import { ToastHost, Icon, ThemeToggle, SUBBAR_SLOT_ID } from './components/shell';
 import { Button } from './components/primitives';
@@ -28,6 +29,7 @@ import TimelapsePage from './modules/timelapse/TimelapsePage';
 import LandscapePage from './modules/landscape/LandscapePage';
 import PortfolioPage from './modules/portfolio/PortfolioPage';
 import GalleryPage from './modules/gallery/GalleryPage';
+import SlideshowPage from './modules/slideshow/SlideshowPage';
 
 /**
  * v1.2.0 外壳信息架构（UI 迭代 ④）：顶部模块切换对齐 LR 七大模块 tab 形态
@@ -38,7 +40,7 @@ import GalleryPage from './modules/gallery/GalleryPage';
  *   修改照片 = develop(默认) / landscape(风光·特色) / timelapse
  *   地图     = map
  *   书籍     = 本阶段未实现 → 显式占位，不许静默空白
- *   幻灯片   = 本阶段未实现 → 显式占位
+ *   幻灯片   = slideshow（v1.2.3 补齐：全屏放映，序列取自图库当前结果/多选）
  *   打印     = LUMINA 交付中心（export / portfolio / gallery），LR 中打印/导出同属输出模块
  *   Web      = 本阶段未实现 → 显式占位
  */
@@ -49,7 +51,7 @@ const MODULES: { key: ModuleKey; label: string; views: AppView[]; defaultView: A
   { key: 'develop', label: '修改照片', views: ['develop', 'landscape', 'timelapse'], defaultView: 'develop' },
   { key: 'map', label: '地图', views: ['map'], defaultView: 'map' },
   { key: 'book', label: '书籍', views: [], defaultView: null },
-  { key: 'slideshow', label: '幻灯片', views: [], defaultView: null },
+  { key: 'slideshow', label: '幻灯片', views: ['slideshow'], defaultView: 'slideshow' },
   { key: 'print', label: '打印', views: ['export', 'portfolio', 'gallery'], defaultView: 'export' },
   { key: 'web', label: 'Web', views: [], defaultView: null },
 ];
@@ -66,6 +68,7 @@ const VIEW_LABEL: Record<AppView, string> = {
   export: '交付',
   portfolio: '作品集',
   gallery: '画廊',
+  slideshow: '幻灯片',
 };
 
 function moduleOf(view: AppView): ModuleKey {
@@ -135,8 +138,27 @@ function TopBar({
   const engineVersion = useJobStore((s) => s.engineVersion);
   const healthIssueCount = useJobStore((s) => s.healthIssueCount);
   const stats = useLibrary((s) => s.stats);
+  const searchText = useLibrary((s) => s.searchText);
   const { theme } = useTheme();
   const spec = MODULES.find((m) => m.key === module);
+
+  // 顶栏搜索框接真实搜索（P24）：旧实现没有 value/onChange/onKeyDown，是个假控件。
+  // 单一真相源仍是 libraryStore.searchText —— 图库内搜索框与本框双向同步同一值。
+  const [q, setQ] = useState(searchText);
+  const debouncedQ = useDebounced(q, 250);
+  useEffect(() => {
+    // 外部写入（图库内搜索框 / 清除筛选）→ 同步显示
+    setQ(searchText);
+  }, [searchText]);
+  useEffect(() => {
+    if (debouncedQ === useLibrary.getState().searchText) return;
+    useLibrary.getState().setSearchText(debouncedQ);
+    void useLibrary.getState().refresh();
+  }, [debouncedQ]);
+  const submitSearch = () => {
+    if (useUi.getState().view !== 'library') navigate('library');
+    useUi.getState().requestSearchFocus();
+  };
 
   return (
     <>
@@ -200,7 +222,7 @@ function TopBar({
 
         {/* 右：引擎状态 + 搜索 + 导出 + 主题 */}
         <div className="ml-auto app-no-drag flex items-center gap-1.5 shrink-0">
-          <span className="flex items-center gap-1.5 text-2xs text-txt3 shrink-0 px-1" title={engineStatus === 'mock' ? '演示模式' : `引擎 ${engineVersion || '1.2.2'}`}>
+          <span className="flex items-center gap-1.5 text-2xs text-txt3 shrink-0 px-1" title={engineStatus === 'mock' ? '演示模式' : `引擎 ${engineVersion || '1.2.3'}`}>
             <span
               className="w-1.5 h-1.5 rounded-full"
               style={{
@@ -221,6 +243,19 @@ function TopBar({
             <input
               ref={(el) => {
                 searchRef.current = el;
+              }}
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  submitSearch();
+                } else if (e.key === 'Escape') {
+                  setQ('');
+                  useLibrary.getState().setSearchText('');
+                  void useLibrary.getState().refresh();
+                  (e.target as HTMLInputElement).blur();
+                }
               }}
               placeholder="搜索照片、文件夹、关键词"
               className="flex-1 min-w-0 bg-transparent text-2xs text-txt placeholder:text-txt3 focus:outline-none"
@@ -300,8 +335,7 @@ function TopBar({
 /** 未实现模块占位（书籍/幻灯片/Web）：必须显式告知（不许静默空白），沿用精修占位式提示 */
 const MODULE_META: Partial<Record<ModuleKey, { title: string; desc: string }>> = {
   book: { title: '书籍', desc: '书籍排版模块将在后续里程碑交付。现阶段请在「图库」整理照片，在「修改照片」完成编辑后经「打印」模块交付。' },
-  slideshow: { title: '幻灯片', desc: '幻灯片放映模块将在后续里程碑交付。现阶段可先在「图库」用星级/旗标精选出放映序列。' },
-  web: { title: 'Web', desc: 'Web 画廊模块将在后续里程碑交付。现阶段可用「打印」模块导出作品集后自行发布。' },
+  web: { title: 'Web', desc: 'Web 画廊模块将在后续里程碑交付。现阶段可用「打印」模块导出作品集后自行发布，或用「幻灯片」全屏放映当前图库。' },
 };
 
 function ModulePlaceholder({ module }: { module: ModuleKey }) {
@@ -547,6 +581,7 @@ function Shell() {
                 {view === 'landscape' && <LandscapePage />}
                 {view === 'portfolio' && <PortfolioPage />}
                 {view === 'gallery' && <GalleryPage />}
+                {view === 'slideshow' && <SlideshowPage />}
               </>
             )}
           </ErrorBoundary>

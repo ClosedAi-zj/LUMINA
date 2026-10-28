@@ -645,7 +645,11 @@ export class MockEngine {
     });
     H('edit.setParams', (p) => {
       const session = this.sessions.get(Number(p.sessionId));
-      if (!session) throw new RpcShapeError(3001, '会话不存在');
+      // 契约对齐（B11）：会话不存在必须与真引擎一致 —— code -32602 + 原文 "session not found"
+      // （engine/src/edit/edit_session.cpp:159/212/244/319 都是 kInvalidParams + "session not found"，
+      // 无 data）。旧写法 3001「会话不存在」会让 UI 的 isSessionGone()（按原文判）在 mock 模式下
+      // 永不命中 → 死会话写库被当成真失败，弹「参数写入失败：任务不存在」并亮红灯。
+      if (!session) throw new RpcShapeError(-32602, 'session not found');
       const commitHistory = p.commitHistory !== false;
       if (commitHistory) {
         session.undoStack.push(structuredClone(session.params));
@@ -669,9 +673,13 @@ export class MockEngine {
     });
     H('edit.undo', (p) => {
       const session = this.sessions.get(Number(p.sessionId));
-      if (!session) throw new RpcShapeError(3001, '会话不存在');
+      // 契约对齐（B11）：同 edit.setParams —— 会话不存在 = -32602 + "session not found"
+      if (!session) throw new RpcShapeError(-32602, 'session not found');
       const prev = session.undoStack.pop();
-      if (!prev) throw new RpcShapeError(3004, '无可撤销步骤', { reason: 'history-empty' });
+      // 契约对齐（B9）：空栈必须与真引擎一致 —— code -32602 + 原文 "nothing to undo"
+      // （见 engine/src/edit/edit_session.cpp:219）。旧写法 3004「无可撤销步骤」会让
+      // UI 的 isHistoryEmpty()（按原文判）在降级/mock 模式下失效 → 空栈撤销被误报成红灯。
+      if (!prev) throw new RpcShapeError(-32602, 'nothing to undo');
       session.redoStack.push(structuredClone(session.params));
       session.params = prev;
       session.revision++;
@@ -679,9 +687,11 @@ export class MockEngine {
     });
     H('edit.redo', (p) => {
       const session = this.sessions.get(Number(p.sessionId));
-      if (!session) throw new RpcShapeError(3001, '会话不存在');
+      // 契约对齐（B11）：同 edit.setParams —— 会话不存在 = -32602 + "session not found"
+      if (!session) throw new RpcShapeError(-32602, 'session not found');
       const next = session.redoStack.pop();
-      if (!next) throw new RpcShapeError(3004, '无可重做步骤', { reason: 'history-end' });
+      // 契约对齐（B9）：同 undo —— code -32602 + "nothing to redo"（edit_session.cpp:251）
+      if (!next) throw new RpcShapeError(-32602, 'nothing to redo');
       session.undoStack.push(structuredClone(session.params));
       session.params = next;
       session.revision++;
@@ -689,7 +699,11 @@ export class MockEngine {
     });
     H('edit.endSession', (p) => {
       const session = this.sessions.get(Number(p.sessionId));
-      if (!session) return {};
+      // 契约对齐（B11）：真引擎在会话不存在时抛 -32602 "session not found"
+      // （edit_session.cpp:319），mock 旧写法 `return {}` 是**静默成功**，
+      // 于是「同一会话被关两次」这条良性边界在 mock 模式下根本触发不到（修了也验不到），
+      // 且调用方拿到的 {} 会让 `end.flushed` 为 undefined —— 与真引擎的失败语义相反。
+      if (!session) throw new RpcShapeError(-32602, 'session not found');
       // 协议 v1.0.1：flush=true（默认）跳过防抖强制落盘；UI 凭 sidecarMtime 熄灭指示灯，mock 不替 UI 判断
       const flush = p.flush !== false;
       const ph = this.data.photos.find((x) => x.id === session.photoId);

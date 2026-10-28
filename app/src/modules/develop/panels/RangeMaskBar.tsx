@@ -67,7 +67,16 @@ export default function RangeMaskBar() {
               max={1}
               step={0.01}
               defaultValue={0}
-              onChange={(v) => void useDevelop.getState().updateMask(selected.id, { range: { ...selected.range!, low: v } })}
+              // 拖动中只本地更新（commit=false）：旧写法直接调 updateMask（内部固定 commit=true）
+              // → 拖一次滑条产生几十条历史（与 P15 同一缺陷）
+              onChange={(v) =>
+                void useDevelop.getState().updateMaskField(selected.id, { range: { ...selected.range!, low: v } }, false)
+              }
+              // 松手 = 一次编辑结束：提交一次并落历史。range 从 store 现读，避免用渲染期闭包里的旧值
+              onCommit={(v) => {
+                const cur = useDevelop.getState().params?.masks.find((m) => m.id === selected.id)?.range ?? selected.range!;
+                void useDevelop.getState().updateMaskField(selected.id, { range: { ...cur, low: v } }, true, '范围蒙版 · 下限');
+              }}
               format={(v) => v.toFixed(2)}
             />
           </div>
@@ -79,7 +88,13 @@ export default function RangeMaskBar() {
               max={1}
               step={0.01}
               defaultValue={1}
-              onChange={(v) => void useDevelop.getState().updateMask(selected.id, { range: { ...selected.range!, high: v } })}
+              onChange={(v) =>
+                void useDevelop.getState().updateMaskField(selected.id, { range: { ...selected.range!, high: v } }, false)
+              }
+              onCommit={(v) => {
+                const cur = useDevelop.getState().params?.masks.find((m) => m.id === selected.id)?.range ?? selected.range!;
+                void useDevelop.getState().updateMaskField(selected.id, { range: { ...cur, high: v } }, true, '范围蒙版 · 上限');
+              }}
               format={(v) => v.toFixed(2)}
             />
           </div>

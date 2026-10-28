@@ -369,6 +369,13 @@ export interface AlbumInfo {
   published?: boolean;
 }
 
+/**
+ * 缩略图请求尺寸。320/640 服务图库网格与胶片条；1600 是幻灯片全屏放映专用
+ * —— 放映是唯一需要「铺满屏幕」的场景，复用 640 会在大屏上明显发虚。
+ * 引擎侧 thumb.ensureBatch 对 size 只做透传（无上限校验），所以这里放开到 1600 是安全的。
+ */
+export type ThumbSize = 320 | 640 | 1600;
+
 export interface ThumbItem {
   id: number;
   state: ThumbState;

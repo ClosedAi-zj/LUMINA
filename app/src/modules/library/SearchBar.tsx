@@ -33,10 +33,18 @@ const SECONDARY: { key: string; label: string; patch: Filter; match: (f: Filter)
 const FORMAT_LABEL: Record<string, string> = { RW2: 'RW2', JPG: 'JPG', DNG: 'DNG', ARW: 'ARW', MP4: 'MP4', PSD: 'PSD', PNG: 'PNG' };
 
 export default function SearchBar() {
-  const [text, setInput] = useState('');
+  const filter = useLibrary((s) => s.filter);
+  const storeText = useLibrary((s) => s.searchText);
+  const [text, setInput] = useState(storeText);
   const debounced = useDebounced(text, 200);
   const inputRef = useRef<HTMLInputElement>(null);
   const focusTick = useUi((s) => s.searchFocusTick);
+
+  // 外部写入（顶栏搜索框 / 智能收藏夹 / 清除筛选）→ 同步到本地输入框，
+  // 否则两处输入框会各显示一套文本
+  useEffect(() => {
+    setInput(storeText);
+  }, [storeText]);
 
   useEffect(() => {
     if (debounced !== useLibrary.getState().searchText) {
@@ -76,13 +84,15 @@ export default function SearchBar() {
         )}
       </div>
       <div className="flex items-center gap-1.5 flex-wrap">
+        {/* P8：active 必须来自订阅的 filter（useLibrary(s => s.filter)），
+            旧写法用 getState() 读快照 —— store 变了组件不重渲染，chip 高亮永远停在首帧 */}
         {QUICK.map((q) => (
           <Chip
             key={q.key}
             label={q.label}
-            active={q.match(useLibrary.getState().filter)}
+            active={q.match(filter)}
             onClick={() => {
-              if (q.match(useLibrary.getState().filter) && q.key !== 'all') {
+              if (q.match(filter) && q.key !== 'all') {
                 useLibrary.getState().clearFilter();
               } else {
                 useLibrary.getState().setActiveSmart(null, q.patch);
@@ -125,16 +135,17 @@ function FilterPopover() {
             aria-label="筛选"
           >
             <div className="flex items-center gap-1.5 flex-wrap">
+              {/* P8：同样改用订阅值 filter（本组件已 useLibrary(s => s.filter)） */}
               {SECONDARY.map((q) => (
                 <Chip
                   key={q.key}
                   label={q.label}
-                  active={q.match(useLibrary.getState().filter)}
+                  active={q.match(filter)}
                   onClick={() => {
-                    if (q.match(useLibrary.getState().filter)) {
+                    if (q.match(filter)) {
                       useLibrary.getState().clearFilterKey(q.key === 'rated' ? 'minRating' : q.key === 'video' ? 'isVideo' : 'missing');
                     } else {
-                      useLibrary.getState().setFilter({ ...useLibrary.getState().filter, ...q.patch });
+                      useLibrary.getState().setFilter({ ...filter, ...q.patch });
                     }
                   }}
                 />
@@ -203,10 +214,13 @@ function FormatFacetChips() {
             label={f.value}
             count={f.count}
             active={active}
+            // 取消选中必须**删键**而不是写 undefined：`{...filter, formats: undefined}`
+            // 会留下一个 formats 键，LibraryPage 的 hasFilter（Object.keys(filter).length）恒真，
+            // 「清除全部筛选」按钮/空态判断从此失效。
             onClick={() =>
-              useLibrary
-                .getState()
-                .setFilter(active ? { ...useLibrary.getState().filter, formats: undefined } : { ...useLibrary.getState().filter, formats: [f.value as PhotoFormat] })
+              active
+                ? useLibrary.getState().clearFilterKey('formats')
+                : useLibrary.getState().setFilter({ ...filter, formats: [f.value as PhotoFormat] })
             }
           />
         );

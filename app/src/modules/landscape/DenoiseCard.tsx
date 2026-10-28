@@ -1,6 +1,9 @@
 /**
- * AI 降噪卡（对照 12 号设计稿）：前后对比滑块（denoise.preview）+
+ * 降噪卡（对照 12 号设计稿）：前后对比滑块（denoise.preview）+
  * 强度滑块（松开即刷新预览）+ 亮度蒙版开关 + 应用（denoise.apply 任务化）。
+ *
+ * 文案如实（P25）：引擎实现是**经典 NLM（非局部均值）**，不是 AI 模型，
+ * 也不再挂「v1.1」徽标冒充未交付能力 —— 功能当前可用。
  */
 
 import { useRef, useState } from 'react';
@@ -31,9 +34,9 @@ export default function DenoiseCard() {
   return (
     <div className="rounded-lg border border-line p-3 flex flex-col gap-2.5" style={{ background: 'var(--Lumina-Tokens-panel)' }}>
       <div className="flex items-center gap-2">
-        <span className="text-xs font-medium">AI 降噪</span>
+        <span className="text-xs font-medium">降噪（经典 NLM）</span>
+        <span className="text-2xs text-txt3">非局部均值 · 非 AI 模型</span>
         <div className="flex-1" />
-        <span className="text-2xs px-1.5 py-0.5 rounded-sm border border-line text-txt3">v1.1</span>
       </div>
 
       {/* 前后对比（拖动分割线；降噪侧金色角标） */}

@@ -7,7 +7,7 @@
 import { useDevelop } from '../../../store/developStore';
 import { Slider, Toggle } from '../../../components/primitives';
 
-/** 宽高比四档（OptionBar 裁剪上下文与工具轨共用同一份） */
+/** 宽高比四档（OptionBar 裁剪上下文与工具轨共用同一份；值为引擎口径：输出目标宽高比，0 = 自由/恒等） */
 export const ASPECTS: { label: string; value: number }[] = [
   { label: '自由', value: 0 },
   { label: '1:1', value: 1 },
@@ -15,10 +15,15 @@ export const ASPECTS: { label: string; value: number }[] = [
   { label: '16:9', value: 16 / 9 },
 ];
 
+/**
+ * 几何参数显示名。
+ * P22 修正：原先 vertical 被叫「水平透视」、horizontal 被叫「垂直透视」，与专业面板相反。
+ * 以几何语义为准：vertical 控制**垂直**方向的透视收敛（修仰拍倒楼），horizontal 控水平方向。
+ */
 const GEOM_LABEL: Record<string, string> = {
   rotate: '拉直',
-  vertical: '水平透视',
-  horizontal: '垂直透视',
+  vertical: '垂直透视',
+  horizontal: '水平透视',
   scale: '缩放',
 };
 
@@ -58,10 +63,10 @@ export default function TransformBar() {
         <GeomSlider path="geometry.perspective.rotate" label="拉直" min={-45} max={45} step={0.5} value={p.rotate} defaultValue={0} />
       </div>
       <div className="w-28 shrink-0">
-        <GeomSlider path="geometry.perspective.vertical" label="水平" min={-100} max={100} step={1} value={p.vertical} defaultValue={0} />
+        <GeomSlider path="geometry.perspective.vertical" label="垂直透视" min={-100} max={100} step={1} value={p.vertical} defaultValue={0} />
       </div>
       <div className="w-28 shrink-0">
-        <GeomSlider path="geometry.perspective.horizontal" label="垂直" min={-100} max={100} step={1} value={p.horizontal} defaultValue={0} />
+        <GeomSlider path="geometry.perspective.horizontal" label="水平透视" min={-100} max={100} step={1} value={p.horizontal} defaultValue={0} />
       </div>
       <div className="w-28 shrink-0">
         <GeomSlider path="geometry.perspective.scale" label="缩放" min={0.5} max={2} step={0.01} value={p.scale} defaultValue={1} format={(v) => `${v.toFixed(2)}×`} />

@@ -224,9 +224,11 @@ function CurveGroup({ params }: { params: EditParams }) {
         <CurveEditor
           points={pts}
           onChange={(next) => void useDevelop.getState().applyPatch({ [which]: next } as Partial<EditParams>, false)}
+          // 松手/加点/删点才提交一次：拖动中每帧 commit 会把历史刷满（P16）
+          onCommit={(next) => void useDevelop.getState().applyPatch({ [which]: next } as Partial<EditParams>, true, `曲线 · ${which === 'toneCurveRGB' ? '复合' : which.replace('toneCurve', '')}`)}
         />
       </div>
-      <div className="text-2xs text-txt3 px-3 pt-1">拖动调整 · 单击添加点 · 右键删除</div>
+      <div className="text-2xs text-txt3 px-3 pt-1">拖动调整 · 单击添加点 · 右键删除（松手写入 XMP）</div>
 
       <GroupLabel>参数曲线</GroupLabel>
       <Row params={params} path="parametric.highlights" label="高光" min={-100} max={100} />
@@ -346,11 +348,24 @@ function GeometryGroup({ params }: { params: EditParams }) {
       <Row params={params} path="geometry.cropRight" label="右边距" min={0} max={50} />
       <Row params={params} path="geometry.cropAngle" label="拉直角度" min={-10} max={10} step={0.1} format={(v) => `${v.toFixed(1)}°`} />
       <GroupLabel>透视</GroupLabel>
-      <Row params={params} path="geometry.perspective.vertical" label="垂直校正" min={-100} max={100} />
-      <Row params={params} path="geometry.perspective.horizontal" label="水平校正" min={-100} max={100} />
+      {/* 标签口径（P22）：vertical 控「垂直透视收敛」、horizontal 控「水平透视收敛」，
+          与变换工具条（TransformBar）同一份几何语义，不再两处互相颠倒 */}
+      <Row params={params} path="geometry.perspective.vertical" label="垂直透视" min={-100} max={100} />
+      <Row params={params} path="geometry.perspective.horizontal" label="水平透视" min={-100} max={100} />
       <Row params={params} path="geometry.perspective.rotate" label="旋转" min={-45} max={45} step={0.5} />
       <Row params={params} path="geometry.perspective.scale" label="缩放" min={0.5} max={2} step={0.01} defaultValue={1} format={(v) => `${v.toFixed(2)}×`} />
-      <Row params={params} path="geometry.perspective.aspect" label="宽高比" min={-100} max={100} />
+      {/* aspect 口径统一（P22）：与引擎/变换工具条一致 —— 输出画幅的目标宽高比倍数，
+          0 = 自由（几何链恒等，不激活）；旧版此处用 −100..100 的百分数口径，与工具条 1:1=1/3:2=1.5 互相打架 */}
+      <Row
+        params={params}
+        path="geometry.perspective.aspect"
+        label="宽高比"
+        min={0}
+        max={3}
+        step={0.01}
+        defaultValue={0}
+        format={(v) => (v <= 0 ? '自由' : `${v.toFixed(2)}:1`)}
+      />
       <Row params={params} path="geometry.perspective.x" label="X 偏移" min={-100} max={100} />
       <Row params={params} path="geometry.perspective.y" label="Y 偏移" min={-100} max={100} />
       <div className="text-2xs text-txt3 px-3 pt-1 leading-4">宽高比与参考线快捷操作在画面下方「变换」工具条。</div>

@@ -4,7 +4,6 @@
  * 只把视觉换成与专业模式同一套卡片 / 参数行 / 滑块。
  */
 
-import { useEffect, useState } from 'react';
 import { useDevelop, sliderLabel, temperatureToKelvin } from '../../../store/developStore';
 import { Button } from '../../../components/primitives';
 import CurveEditor from '../CurveEditor';
@@ -12,6 +11,12 @@ import MaskPanel from './MaskPanel';
 import HistogramPanel, { type Histogram } from './HistogramPanel';
 import { PanelCard, ParamSlider, ParamSegmented } from './panelKit';
 import type { EditParams, CurvePoint } from '../../../api/protocol';
+
+/** 单位曲线（0,0 → 255,255）：引擎回传缺 toneCurveRGB 时的兜底显示 */
+const IDENTITY_CURVE: CurvePoint[] = [
+  { x: 0, y: 0 },
+  { x: 255, y: 255 },
+];
 
 const BASIC_SLIDERS: { key: keyof EditParams; min: number; max: number; step?: number }[] = [
   { key: 'exposure', min: -5, max: 5, step: 0.01 },
@@ -27,13 +32,16 @@ export default function FastPanel({ histogram }: { histogram?: Histogram | null 
   const setNumeric = useDevelop((s) => s.setNumeric);
   const applyPatch = useDevelop((s) => s.applyPatch);
   const reset = useDevelop((s) => s.reset);
-  const [curvePoints, setCurvePoints] = useState<CurvePoint[]>([]);
-
-  useEffect(() => {
-    if (params) setCurvePoints(params.toneCurveRGB);
-  }, [params?.processVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!params) return null;
+
+  /**
+   * 曲线值**直接从 params 派生**（受控），不保留本地副本。
+   * 旧写法用 `useEffect(..., [params?.processVersion])` 同步一份本地副本，而
+   * processVersion 恒为 '15.4' —— 切图后依赖不变，副本永远是上一张的曲线，
+   * 拖动时又把旧曲线写进新图（跨图串数据）。现在「显示值 == 当前图的参数」由受控保证。
+   */
+  const curvePoints = params.toneCurveRGB.length >= 2 ? params.toneCurveRGB : IDENTITY_CURVE;
 
   return (
     <div className="h-full overflow-y-auto p-2 flex flex-col gap-1.5" style={{ background: 'var(--Lumina-Tokens-canvas)' }}>
@@ -94,10 +102,14 @@ export default function FastPanel({ histogram }: { histogram?: Histogram | null 
       <PanelCard title="色调曲线" icon="curve" defaultOpen hint="复合曲线">
         <div className="px-2">
           <CurveEditor
-            points={curvePoints.length >= 2 ? curvePoints : [{ x: 0, y: 0 }, { x: 255, y: 255 }]}
+            points={curvePoints}
             onChange={(pts) => {
-              setCurvePoints(pts);
+              // 拖动中：只刷新预览，不写历史
               void applyPatch({ toneCurveRGB: pts }, false);
+            }}
+            onCommit={(pts) => {
+              // 松手/加点/删点：提交一次（落历史 + 写 XMP）
+              void applyPatch({ toneCurveRGB: pts }, true, '曲线');
             }}
           />
         </div>

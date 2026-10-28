@@ -13,13 +13,14 @@ import { useJobStore } from '../../store/jobStore';
 import { Button, Spinner } from '../../components/primitives';
 import { formatCount, formatDateTime } from '../../utils/format';
 import type { MapWriteReport } from './store/mapStore';
-import type { PhotoSummary } from '../../api/protocol';
+import type { PhotoSummary, MapLocation } from '../../api/protocol';
 
 const PAGE_SIZE = 60;
 
-/** 当前地图中心（与 MapCanvas 包围盒一致的近似：全部顶级地点经纬度均值） */
-function mapCenter(): { lat: number; lng: number } | null {
-  const locs = useMap.getState().locations;
+/** 当前地图中心（与 MapCanvas 包围盒一致的近似：全部顶级地点经纬度均值）。
+ *  纯函数：locations 由调用方订阅后传入 —— 旧写法在渲染期 useMap.getState().locations，
+ *  不订阅 → 地点数据加载/变化后这里永远算的是首帧的空列表（「地图暂无地点数据」常驻）。 */
+function mapCenter(locs: MapLocation[]): { lat: number; lng: number } | null {
   if (locs.length === 0) return null;
   const lat = locs.reduce((a, l) => a + l.lat, 0) / locs.length;
   const lng = locs.reduce((a, l) => a + l.lng, 0) / locs.length;
@@ -130,6 +131,8 @@ export default function UnlocatedPanel() {
   const detailsById = useMap((s) => s.detailsById);
   const writeReport = useMap((s) => s.writeReport);
   const assigning = useMap((s) => s.assigning);
+  /** 订阅而非 getState()：地图地点变化（加载/新增/删除）后坐标默认值要跟着重算 */
+  const locations = useMap((s) => s.locations);
 
   const [items, setItems] = useState<PhotoSummary[]>([]);
   const [total, setTotal] = useState(0);
@@ -138,7 +141,7 @@ export default function UnlocatedPanel() {
   const [checkedIds, setCheckedIds] = useState<Set<number>>(new Set());
 
   const selectedDetail = selectedId !== null ? detailsById[selectedId] : undefined;
-  const center = useMemo(() => mapCenter(), [selectedId, items.length]);
+  const center = useMemo(() => mapCenter(locations), [locations, selectedId, items.length]);
   const defaultLat = selectedDetail ? selectedDetail.lat : center?.lat;
   const defaultLng = selectedDetail ? selectedDetail.lng : center?.lng;
 

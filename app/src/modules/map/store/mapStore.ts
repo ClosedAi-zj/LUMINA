@@ -64,6 +64,13 @@ interface MapStore {
 export const ZOOM_ENGINE_MIN = 4;
 export const ZOOM_ENGINE_MAX = 12;
 
+/**
+ * 集群请求序号（模块级）：滚轮/按钮连续缩放会并发发出多次 getLocations，
+ * 先发的响应可能后到并覆盖后发结果（后发先至），画面层级与 zoom 指示对不上。
+ * 只有「最后一次」发起的请求允许写回 locations。
+ */
+let zoomSeq = 0;
+
 export const useMap = create<MapStore>((set, get) => ({
   locations: [],
   detailsById: {},
@@ -117,12 +124,16 @@ export const useMap = create<MapStore>((set, get) => ({
     const clamped = Math.max(ZOOM_ENGINE_MIN, Math.min(ZOOM_ENGINE_MAX, z));
     if (clamped === get().zoom) return;
     set({ zoom: clamped });
-    // 层级变化影响引擎聚合（children 散点），重新拉取集群
+    // 层级变化影响引擎聚合（children 散点），重新拉取集群。
+    // 后发先至守卫：只有最新一次请求的结果可以写回（并顺带校正 zoom 已变时的错配）
+    const mySeq = ++zoomSeq;
     void (async () => {
       try {
         const locs = await api.map.getLocations(clamped);
+        if (zoomSeq !== mySeq) return; // 过期响应：期间又缩放过，丢弃
         set({ locations: locs });
       } catch (err) {
+        if (zoomSeq !== mySeq) return;
         useJobStore.getState().toast(`地点集群刷新失败：${errText(err)}`, 'error', 6000);
       }
     })();

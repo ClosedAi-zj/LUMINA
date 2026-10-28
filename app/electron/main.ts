@@ -127,6 +127,69 @@ const KEY_INJECTION_STEPS: Array<[string, InjectedKey[]]> = [
   ['keys-space-up', [{ key: 'Space', phase: 'up' }]],
 ];
 
+/**
+ * 基线/冒烟截图的陈旧帧检测状态。
+ *
+ * 必须放在**模块作用域**：这段代码原先写在 `console-message` 回调体内，
+ * 每条渲染层消息都会重新创建 `lastShot` / `meanLuma` / `captureTo`，
+ * 于是「与上一次截图逐字节比对」里的 prev 恒为 undefined —— 陈旧帧永远检测不到。
+ */
+const lastShot = new Map<string, Buffer>();
+
+function meanLuma(img: Electron.NativeImage): number {
+  try {
+    const buf = img.toBitmap();
+    if (buf.length === 0) return 0;
+    let sum = 0;
+    let n = 0;
+    for (let i = 0; i < buf.length; i += 4 * 37) {
+      sum += 0.299 * buf[i] + 0.587 * buf[i + 1] + 0.114 * buf[i + 2];
+      n++;
+    }
+    return n > 0 ? sum / n : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * 截图落盘（含三层防御：① show+focus；② 逐次加大等待；③ 亮度判黑 + 逐字节判陈旧帧，
+ * 重试后仍坏则明确标注 UNRESOLVED，绝不把坏帧当「通过」）。
+ */
+function captureTo(out: string, retries = 1, delayMs = 400): void {
+  setTimeout(() => {
+    const win = mainWindow;
+    if (!win) return;
+    if (!win.isVisible()) win.show();
+    win.focus();
+    void win.webContents
+      .capturePage()
+      .then((img) => {
+        const png = img.toPNG();
+        const luma = meanLuma(img);
+        const prev = lastShot.get(out);
+        const stale = prev !== undefined && png.equals(prev);
+        const black = img.isEmpty() || luma < 6;
+        const bad = black || stale;
+        if (bad && retries > 0) {
+          process.stdout.write(
+            `[baseline] ${img.isEmpty() ? 'empty' : stale ? 'stale' : 'black'} frame (luma=${luma.toFixed(2)}), retry -> ${out}\n`,
+          );
+          captureTo(out, retries - 1, Math.round(delayMs * 1.7));
+          return;
+        }
+        lastShot.set(out, png);
+        require('node:fs').mkdirSync(path.dirname(out), { recursive: true });
+        require('node:fs').writeFileSync(out, png);
+        const sz = img.getSize();
+        process.stdout.write(
+          `[baseline] shot -> ${out} (${sz.width}x${sz.height}) luma=${luma.toFixed(1)}${bad ? ' UNRESOLVED' : ''}\n`,
+        );
+      })
+      .catch((err) => process.stdout.write(`[baseline] capture failed: ${String(err)}\n`));
+  }, delayMs);
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: isBaseline ? 1440 : 1680,
@@ -175,59 +238,8 @@ function createWindow(): void {
       process.stdout.write(`[renderer][${tag}] ${message} (${sourceId}:${line})\n`);
     }
     // capturePage 偶发返回空帧/全黑帧（窗口尚未合成完成，软渲染下更常见）。
-    // 防御三层：① 窗口 show+focus；② 逐次加大等待；③ 采样亮度判黑，黑帧重试后再失败就明确标注
-    // （黑帧绝不当"通过"——报告里必须能看出来）。
-    const meanLuma = (img: Electron.NativeImage): number => {
-      try {
-        const buf = img.toBitmap();
-        if (buf.length === 0) return 0;
-        let sum = 0;
-        let n = 0;
-        for (let i = 0; i < buf.length; i += 4 * 37) {
-          sum += 0.299 * buf[i] + 0.587 * buf[i + 1] + 0.114 * buf[i + 2];
-          n++;
-        }
-        return n > 0 ? sum / n : 0;
-      } catch {
-        return 0;
-      }
-    };
-    // 与上一次截图逐字节比对：窗口未重新合成时 capturePage 会返回上一张（陈旧帧），
-    // 只查"是否空/是否黑"抓不到这种情况（陈旧帧亮度完全正常）。
-    const lastShot = new Map<string, Buffer>();
-    const captureTo = (out: string, retries = 1, delayMs = 400): void => {
-      setTimeout(() => {
-        const win = mainWindow;
-        if (!win) return;
-        if (!win.isVisible()) win.show();
-        win.focus();
-        void win.webContents
-          .capturePage()
-          .then((img) => {
-            const png = img.toPNG();
-            const luma = meanLuma(img);
-            const prev = lastShot.get(out);
-            const stale = prev !== undefined && png.equals(prev);
-            const black = img.isEmpty() || luma < 6;
-            const bad = black || stale;
-            if (bad && retries > 0) {
-              process.stdout.write(
-                `[baseline] ${img.isEmpty() ? 'empty' : stale ? 'stale' : 'black'} frame (luma=${luma.toFixed(2)}), retry -> ${out}\n`,
-              );
-              captureTo(out, retries - 1, Math.round(delayMs * 1.7));
-              return;
-            }
-            lastShot.set(out, png);
-            require('node:fs').mkdirSync(path.dirname(out), { recursive: true });
-            require('node:fs').writeFileSync(out, png);
-            const sz = img.getSize();
-            process.stdout.write(
-              `[baseline] shot -> ${out} (${sz.width}x${sz.height}) luma=${luma.toFixed(1)}${bad ? ' UNRESOLVED' : ''}\n`,
-            );
-          })
-          .catch((err) => process.stdout.write(`[baseline] capture failed: ${String(err)}\n`));
-      }, delayMs);
-    };
+    // 防御逻辑（亮度判黑 / 陈旧帧比对 / 重试）在模块级 captureTo + meanLuma + lastShot 里，
+    // 脱离本回调保存状态，否则每条 console 消息都会把 prev 重置成 undefined。
     // smoke：修图页跑通后自动截图存档（验证渲染结果肉眼可查，黑屏类问题不再靠猜）
     if (isSmoke && message.includes('[smoke-scenario] develop-xmp')) {
       captureTo(path.resolve(appRoot, 'build/smoke-develop.png'), 2);
@@ -601,10 +613,43 @@ async function bootstrap(): Promise<void> {
   process.stdout.write(`[lumina] engine mode = ${bridge.isMock ? 'mock' : 'real'} (path=${enginePath})\n`);
   void startGalleryServer();
 
+  /**
+   * RPC 错误信封（IPC 边界的坑，勿删注释）。
+   *
+   * `ipcMain.handle` 里 throw 出去的 Error，经 `ipcRenderer.invoke` 到渲染层后
+   * **只剩 message**：Electron 只序列化 message，还会加上
+   * `Error invoking remote method 'lumina:rpc': RpcCallError: ` 前缀，code / data 全丢。
+   * 结果：渲染层所有引擎错误都退化成 -32603「引擎内部错误，请查看日志」，
+   * `ERROR_MESSAGES` 的本地化（-32602「参数校验失败」、1005「文件已被其他工具修改」…）
+   * 一条也用不上，UI 只能显示那串英文长前缀。
+   *
+   * 所以 lumina:rpc **不抛错**，改为返回这个结构化信封；渲染层
+   * `api/rpc-client.ts` 收到后还原成 `RpcError(code, 原文)` 再抛。
+   * message 用**引擎原文**（不加任何包装前缀），便于按原文区分
+   * `nothing to undo` / `session not found` 这类同为 -32602 的业务边界。
+   */
+  interface RpcErrorEnvelope {
+    __luminaRpcError: true;
+    code: number;
+    message: string;
+    data?: unknown;
+  }
+  const rpcErrorEnvelope = (err: unknown): RpcErrorEnvelope => {
+    const e = err as { code?: unknown; message?: unknown; data?: unknown } | null;
+    const code = typeof e?.code === 'number' ? e.code : -32603;
+    const message = typeof e?.message === 'string' && e.message.length > 0 ? e.message : String(err);
+    return { __luminaRpcError: true, code, message, data: e?.data };
+  };
+
   ipcMain.handle('lumina:rpc', async (_e, method: string, params: unknown) => {
-    if (!bridge) throw new RpcCallError(-32603, '引擎未初始化');
-    const result = await bridge.requestWithTimeout(method, params, 10_000);
-    return rewriteGalleryUrls(result);
+    if (!bridge) return rpcErrorEnvelope(new RpcCallError(-32603, '引擎未初始化'));
+    try {
+      const result = await bridge.requestWithTimeout(method, params, 10_000);
+      return rewriteGalleryUrls(result);
+    } catch (err) {
+      // 只有 RPC 本身失败才进信封；成功结果原样返回（引擎返回的 JSON 里不会有该标记）
+      return rpcErrorEnvelope(err);
+    }
   });
   ipcMain.handle('lumina:info', () => ({
     isMock: bridge?.isMock ?? true,
@@ -650,6 +695,20 @@ async function bootstrap(): Promise<void> {
   ipcMain.handle('lumina:showInFolder', async (_e, p: string) => {
     shell.showItemInFolder(p);
     return true;
+  });
+  /**
+   * 目录选择对话框（导入向导「重定位文件夹」用）。
+   * 重定位必须由用户挑目标目录：旧 UI 传的是硬编码假路径，等于把用户数据指到不存在的目录。
+   */
+  ipcMain.handle('lumina:pickDirectory', async (_e, opts?: { title?: string; defaultPath?: string }) => {
+    if (!mainWindow) return null;
+    const r = await dialog.showOpenDialog(mainWindow, {
+      title: opts?.title ?? '选择文件夹',
+      defaultPath: opts?.defaultPath,
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    if (r.canceled || r.filePaths.length === 0) return null;
+    return r.filePaths[0];
   });
   /**
    * M4-04 打印通道（无打印机环境的 PDF 分支）：
@@ -751,20 +810,65 @@ async function bootstrap(): Promise<void> {
 // 自定义文件协议必须在 app ready 前注册为特权方案
 registerFileScheme();
 
-app.whenReady().then(bootstrap);
+app.whenReady().then(bootstrap).catch((err: unknown) => {
+  // 启动兜底：bootstrap 抛错时旧代码既没窗口也没提示（用户只看到「点了没反应」），
+  // 且不退出会留下后台进程占着引擎单实例锁，第二次启动直接失败。
+  const detail = err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err);
+  boot(`bootstrap FAILED: ${detail.replace(/\n/g, ' | ')}`);
+  process.stdout.write(`[lumina] bootstrap failed: ${detail}\n`);
+  try {
+    dialog.showErrorBox('LUMINA 启动失败', `主进程初始化失败，应用无法启动。\n\n${detail}\n\n启动日志：${bootLogPath}`);
+  } catch {
+    /* 对话框不可用（无显示环境）时，上面的日志与 stdout 已是最后凭据 */
+  }
+  app.exit(1);
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('before-quit', async (e) => {
+/** before-quit 重入标记：shutdown 完成后再次 app.quit() 时不能再拦，否则进程退不出去 */
+let quitting = false;
+
+app.on('before-quit', (e) => {
+  // 重入直接放行（否则 quit → before-quit → quit 无限递归）
+  if (quitting) return;
   stopMcpBridge();
-  if (bridge) {
-    e.preventDefault();
-    const b = bridge;
-    bridge = null;
-    await b.shutdown();
+  const b = bridge;
+  if (!b) {
     galleryServer?.close();
-    app.quit();
+    return;
   }
+  e.preventDefault();
+  quitting = true;
+  bridge = null;
+  void (async () => {
+    // try/catch/finally：shutdown 抛错时旧代码会跳过 app.quit()，
+    // 进程残留并占住引擎单实例锁（下次启动即失败）。
+    // 再加 5s 超时：shutdown 若挂住（既不等返回也不抛错），finally 永远不会执行
+    // → 窗口僵住、点了退出毫无反应，任务管理器里残留进程。超时只打日志，退出路径不变。
+    const SHUTDOWN_TIMEOUT_MS = 5000;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    try {
+      await Promise.race([
+        b.shutdown(),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(() => {
+            boot(`engine shutdown TIMEOUT after ${SHUTDOWN_TIMEOUT_MS}ms (force quit)`);
+            process.stdout.write(`[lumina] engine shutdown timeout after ${SHUTDOWN_TIMEOUT_MS}ms, forcing quit\n`);
+            resolve();
+          }, SHUTDOWN_TIMEOUT_MS);
+        }),
+      ]);
+    } catch (err) {
+      boot(`engine shutdown failed: ${String(err)}`);
+      process.stdout.write(`[lumina] engine shutdown failed: ${String(err)}\n`);
+    } finally {
+      if (timer !== null) clearTimeout(timer);
+      galleryServer?.close();
+      galleryServer = null;
+      app.quit();
+    }
+  })();
 });

@@ -158,7 +158,9 @@ export default function IngestWizard() {
   const failedReasons = useMemo(() => jobEvents.filter((e) => e.status === 'failed').slice(-5), [jobEvents]);
 
   return (
-    <div className="h-full flex" style={{ background: 'var(--Lumina-Tokens-panel)' }}>
+    // relative：底部 footer 用 absolute bottom-0 贴底，必须有一个已定位的祖先，
+    // 否则会按视口定位（在滚动容器里会漂到页面外）
+    <div className="relative h-full flex" style={{ background: 'var(--Lumina-Tokens-panel)' }}>
       {/* 步骤导航 */}
       <aside className="w-56 shrink-0 border-r border-line p-4 flex flex-col">
         <div className="text-sm font-medium mb-1">导入照片</div>
@@ -213,6 +215,7 @@ export default function IngestWizard() {
             scanning={scanJob?.state === 'running'}
             scanProgress={scanJob?.progress ?? 0}
             scanResult={scanResult}
+            selectedPath={source?.path ?? null}
             onPick={startScan}
           />
         )}
@@ -318,30 +321,57 @@ export default function IngestWizard() {
         <div className="flex flex-col gap-2">
           <Button
             onClick={async () => {
-              await api.importApi.resolveMissingFolder(missingFolder!, 'relocate', 'D:/Lumina/Relocated/105_PANA');
-              useJobStore.getState().toast('已重定位文件夹', 'success');
-              setMissingFolder(null);
+              // 必须让用户挑真实目录：旧代码把重定位目标硬编码成 'D:/Lumina/Relocated/105_PANA'
+              // 直接提交（用户数据被指到一个可能不存在的路径，且不可撤销）
+              const picked = await window.lumina.pickDirectory({
+                title: '选择该文件夹的新位置',
+                defaultPath: missingFolder ?? undefined,
+              });
+              if (!picked) {
+                useJobStore.getState().toast('未选择新路径，重定位已取消', 'warn', 4000);
+                return; // 弹窗保持打开，用户可改选其它处理方式
+              }
+              try {
+                const res = await api.importApi.resolveMissingFolder(missingFolder!, 'relocate', picked);
+                useJobStore.getState().toast(`已重定位到 ${picked} · 影响 ${res.affected} 张`, 'success', 6000);
+                setMissingFolder(null);
+              } catch (err) {
+                useJobStore.getState().toast(`重定位失败：${errText(err)}`, 'error', 8000);
+              }
             }}
           >
             重定位文件夹（指定新路径）
           </Button>
           <Button
             onClick={async () => {
-              await api.importApi.resolveMissingFolder(missingFolder!, 'orphan');
-              useJobStore.getState().toast('已跳过并记入孤儿清单', 'warn');
-              setMissingFolder(null);
+              try {
+                const res = await api.importApi.resolveMissingFolder(missingFolder!, 'orphan');
+                useJobStore.getState().toast(`已跳过并记入孤儿清单 · 影响 ${res.affected} 张`, 'warn', 6000);
+                setMissingFolder(null);
+              } catch (err) {
+                useJobStore.getState().toast(`登记孤儿失败：${errText(err)}`, 'error', 8000);
+              }
             }}
           >
             跳过并记入孤儿清单
           </Button>
           <Button
             onClick={async () => {
-              await api.importApi.resolveMissingFolder(missingFolder!, 'backfill');
-              useJobStore.getState().toast('已用衍生件（-已增强-降噪.dng）回填 96 张', 'success');
-              setMissingFolder(null);
+              try {
+                const res = await api.importApi.resolveMissingFolder(missingFolder!, 'backfill');
+                // 数量必须来自引擎返回值：旧文案写死「回填 96 张」，与实际回填数无关
+                useJobStore.getState().toast(
+                  res.affected > 0 ? `已用衍生件（-已增强-降噪.dng）回填 ${res.affected} 张` : '未找到可回填的衍生件（0 张）',
+                  res.affected > 0 ? 'success' : 'warn',
+                  6000,
+                );
+                setMissingFolder(null);
+              } catch (err) {
+                useJobStore.getState().toast(`衍生件回填失败：${errText(err)}`, 'error', 8000);
+              }
             }}
           >
-            衍生件回填（检测到 96 张「-已增强-降噪.dng」）
+            衍生件回填（用「-已增强-降噪.dng」衍生件）
           </Button>
         </div>
       </Dialog>
@@ -430,6 +460,7 @@ function SourceStep({
   scanning,
   scanProgress,
   scanResult,
+  selectedPath,
   onPick,
 }: {
   volumes: VolumeInfo[];
@@ -437,6 +468,8 @@ function SourceStep({
   scanning: boolean;
   scanProgress: number;
   scanResult: ScanSourceResult | null;
+  /** 当前已选来源路径（用于高亮；null = 尚未选择） */
+  selectedPath: string | null;
   onPick: (p: SourcePick) => void;
 }) {
   const removable = volumes.filter((v) => v.isRemovable);
@@ -447,7 +480,7 @@ function SourceStep({
           <button
             key={v.path}
             onClick={() => onPick({ kind: 'volume', path: v.path, label: v.label })}
-            className={`flex items-center gap-3 p-3 rounded-lg border text-left ${sourceEquals(v.path) ? 'border-accent bg-[var(--Lumina-Tokens-accentSoft)]' : 'border-line bg-card hover:bg-hover'}`}
+            className={`flex items-center gap-3 p-3 rounded-lg border text-left ${sourceEquals(v.path, selectedPath) ? 'border-accent bg-[var(--Lumina-Tokens-accentSoft)]' : 'border-line bg-card hover:bg-hover'}`}
           >
             <span className="w-9 h-6 rounded bg-accent text-onaccent text-2xs font-bold flex items-center justify-center">SD</span>
             <span className="flex-1">
@@ -462,7 +495,9 @@ function SourceStep({
 
         <button
           onClick={() => recent[0] && onPick({ kind: 'folder', path: recent[0], label: recent[0] })}
-          className="flex items-center gap-3 p-3 rounded-lg border border-line bg-card hover:bg-hover text-left"
+          className={`flex items-center gap-3 p-3 rounded-lg border text-left ${
+            recent[0] && sourceEquals(recent[0], selectedPath) ? 'border-accent bg-[var(--Lumina-Tokens-accentSoft)]' : 'border-line bg-card hover:bg-hover'
+          }`}
         >
           <span className="w-9 h-6 rounded bg-hover flex items-center justify-center text-txt3">
             <Icon name="folder" size={14} />
@@ -513,9 +548,18 @@ function SourceStep({
   );
 }
 
-function sourceEquals(path: string): boolean {
-  void path;
-  return false;
+/**
+ * 路径等价比较（来源卡片高亮用）。
+ * 旧实现是 `void path; return false;` —— 来源卡永远不会被选中（永远是「未选」外观）。
+ * Windows 上同一目录可能写作 `E:/DCIM`、`E:\DCIM\`、`e:/dcim`，这里统一分隔符/大小写/尾斜杠后比较。
+ */
+function normalizePathForCompare(p: string): string {
+  return p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
+function sourceEquals(path: string, selectedPath: string | null): boolean {
+  if (!selectedPath) return false;
+  return normalizePathForCompare(path) === normalizePathForCompare(selectedPath);
 }
 
 function Stat({ label, value, accent, danger }: { label: string; value: string; accent?: boolean; danger?: boolean }) {

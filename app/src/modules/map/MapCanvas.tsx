@@ -31,6 +31,13 @@ export default function MapCanvas({ locations, selectedId, onSelect }: Props) {
   const [view, setView] = useState({ k: 1, tx: 0, ty: 0 });
   const [hoverId, setHoverId] = useState<number | null>(null);
   const dragRef = useRef<{ startX: number; startY: number; tx: number; ty: number; moved: boolean } | null>(null);
+  /**
+   * 「本次 pointer 手势是否发生过移动」的独立标记。
+   * 不能在 click 里读 dragRef：pointerup 先于 click，那时 dragRef 已被清空，
+   * 于是每次「拖拽松手」都会被判成空白点击 → onSelect(null) 把刚选中的地点清掉。
+   * 语义：pointerdown 重置，pointermove 越阈值置真，click 消费后清除。
+   */
+  const movedRef = useRef(false);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -118,21 +125,33 @@ export default function MapCanvas({ locations, selectedId, onSelect }: Props) {
   const onPointerDown = (e: React.PointerEvent) => {
     (e.target as Element).setPointerCapture?.(e.pointerId);
     dragRef.current = { startX: e.clientX, startY: e.clientY, tx: view.tx, ty: view.ty, moved: false };
+    movedRef.current = false;
   };
   const onPointerMove = (e: React.PointerEvent) => {
     const d = dragRef.current;
     if (!d) return;
     const dx = e.clientX - d.startX;
     const dy = e.clientY - d.startY;
-    if (Math.abs(dx) + Math.abs(dy) > 3) d.moved = true;
+    if (Math.abs(dx) + Math.abs(dy) > 3) {
+      d.moved = true;
+      movedRef.current = true;
+    }
     setView((v) => ({ ...v, tx: d.tx + dx, ty: d.ty + dy }));
   };
   const onPointerUp = () => {
+    // 只清 dragRef（拖拽态），movedRef 留给随后的 click 判定
     dragRef.current = null;
   };
 
+  /** click 消费一次「是否拖拽过」：读后即清，避免残留标记影响下一次点击 */
+  const consumeMoved = (): boolean => {
+    const moved = movedRef.current;
+    movedRef.current = false;
+    return moved;
+  };
+
   const handleClick = () => {
-    if (!dragRef.current?.moved) onSelect(null);
+    if (!consumeMoved()) onSelect(null);
   };
 
   // 比例尺：经度方向每像素对应公里（等距投影近似 111.32 km/°）
@@ -173,7 +192,7 @@ export default function MapCanvas({ locations, selectedId, onSelect }: Props) {
                   onPointerLeave={() => setHoverId((h) => (h === id ? null : h))}
                   onClick={(e) => {
                     e.stopPropagation();
-                    if (!dragRef.current?.moved) onSelect(id);
+                    if (!consumeMoved()) onSelect(id);
                   }}
                 >
                   {isSel && <circle cx={p.x} cy={p.y} r={p.r + 6} fill="none" className="stroke-accent" strokeWidth={1.5} strokeOpacity={0.9} />}
@@ -215,7 +234,7 @@ export default function MapCanvas({ locations, selectedId, onSelect }: Props) {
       </div>
 
       {/* 右下署名（对应设计稿"抽象底图 · LUMINA"） */}
-      <div className="absolute right-3 bottom-3 text-2xs text-txt3 pointer-events-none">抽象底图 · 无网络瓦片 · LUMINA v1.2.2</div>
+      <div className="absolute right-3 bottom-3 text-2xs text-txt3 pointer-events-none">抽象底图 · 无网络瓦片 · LUMINA v1.2.3</div>
 
       {/* 视图层缩放控制 */}
       <div className="absolute top-2 right-3 flex items-center gap-1 text-2xs text-txt3 rounded-md px-1.5 py-1 border border-line bg-panel/80">

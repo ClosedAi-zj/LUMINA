@@ -138,6 +138,10 @@ export function Slider({
           step={step}
           value={value}
           onChange={onChange}
+          /* 已知偏差（不是 bug，勿重查）：这里提交的是**上一次渲染**的 value。
+             AppearanceNoneRange 的 onKeyUp 只带事件、不带值，而 ParamSlider 的值是按
+             指针坐标算出来的，末位可能差 ≤1 step；下一次 onChange 会立刻校正，
+             因此按一次方向键的提交值最多比显示值偏一个步进。 */
           onCommit={() => onCommit?.(value)}
           onReset={() => {
             if (defaultValue !== undefined) {
@@ -196,7 +200,25 @@ function AppearanceNoneRange({
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
         onPointerUp={onCommit}
-        onKeyUp={onCommit}
+        onKeyUp={(e) => {
+          // 只对「确实会改变滑块值」的键提交。旧写法 onKeyUp={onCommit} 对任意键都提交：
+          // 滑块有焦点时按一下 Shift/Tab/Ctrl 就多出一条同值历史步；
+          // 更糟的是拖完立刻 Ctrl+Z 撤销后再按任意键，会把刚撤销的值又 commit 回去。
+          switch (e.key) {
+            case 'ArrowLeft':
+            case 'ArrowRight':
+            case 'ArrowUp':
+            case 'ArrowDown':
+            case 'Home':
+            case 'End':
+            case 'PageUp':
+            case 'PageDown':
+              onCommit();
+              break;
+            default:
+              break;
+          }
+        }}
         onDoubleClick={onReset}
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}

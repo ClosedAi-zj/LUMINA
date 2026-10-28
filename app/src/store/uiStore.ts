@@ -2,7 +2,7 @@
 
 import { create } from 'zustand';
 
-export type AppView = 'library' | 'develop' | 'ingest' | 'health' | 'culling' | 'map' | 'timelapse' | 'landscape' | 'export' | 'portfolio' | 'gallery';
+export type AppView = 'library' | 'develop' | 'ingest' | 'health' | 'culling' | 'map' | 'timelapse' | 'landscape' | 'export' | 'portfolio' | 'gallery' | 'slideshow';
 
 /** 冷启动阶段（WP-B3）：引擎握手 → 库加载 → 缩略图就绪 → ready */
 export type BootStage = 'handshake' | 'library' | 'thumbs' | 'ready';

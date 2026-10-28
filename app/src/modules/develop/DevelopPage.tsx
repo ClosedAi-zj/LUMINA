@@ -241,12 +241,9 @@ function DevelopLoaded({
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
       const ctrl = e.ctrlKey || e.metaKey;
-      if (e.key === 'Tab') {
-        e.preventDefault();
-        setPanelsHidden((h) => !h);
-        return;
-      }
-      // G9 文档 Tab：Ctrl+Tab / Ctrl+⇧Tab 在已开文档间循环（LR/PS 习惯）
+      // G9 文档 Tab：Ctrl+Tab / Ctrl+⇧Tab 在已开文档间循环（LR/PS 习惯）。
+      // 必须排在「无修饰键 Tab」之前：旧顺序先命中 `e.key === 'Tab'` 就 return，
+      // Ctrl+Tab 永远走的是隐/显面板分支，文档切换根本不可达。
       if (ctrl && e.key === 'Tab') {
         e.preventDefault();
         const st = useDevelop.getState();
@@ -256,6 +253,15 @@ function DevelopLoaded({
           ? st.tabs[(idx - 1 + st.tabs.length) % st.tabs.length]
           : st.tabs[(idx + 1) % st.tabs.length];
         await st.openPhoto(next);
+        return;
+      }
+      // G3：无修饰键 Tab = 隐藏/呼出两侧面板（LR）。
+      // 只拦「不带 Shift 的 Tab」：Shift+Tab 是系统级焦点回退，绝不能被吞掉；
+      // 焦点在输入控件时上面已提前 return，因此不会劫持文本输入。
+      if (e.key === 'Tab') {
+        if (e.shiftKey) return;
+        e.preventDefault();
+        setPanelsHidden((h) => !h);
         return;
       }
       // G9：Ctrl+W 关闭当前文档（关掉最后一个则结束会话）
@@ -283,8 +289,14 @@ function DevelopLoaded({
       }
       if (ctrl && e.key.toLowerCase() === 'z') {
         e.preventDefault();
-        if (e.shiftKey) void redo();
-        else void undo();
+        // 顺手省一次 RPC：空栈已是良性路径（developStore.undo/redo 不报错），
+        // 但按钮本来就灰着，键盘也不该发出注定失败的请求
+        const st = useDevelop.getState();
+        if (e.shiftKey) {
+          if (st.canRedo) void redo();
+        } else if (st.canUndo) {
+          void undo();
+        }
       } else if (ctrl && (e.key === "'" || e.key === '"')) {
         // 上/下一张循环（LR 习惯：Ctrl+' 下一张，Shift+Ctrl+' 上一张）
         e.preventDefault();
@@ -340,10 +352,40 @@ function DevelopLoaded({
             { value: 'pro' as const, label: '专业 Pro' },
           ]}
         />
-        {/* XMP 写入指示灯（500ms 防抖语义） */}
-        <span className="inline-flex items-center gap-1.5 text-2xs" style={{ color: xmpStatus === 'written' ? 'var(--Lumina-Tokens-success)' : xmpStatus === 'debouncing' ? 'var(--Lumina-Tokens-accent)' : 'var(--Lumina-Tokens-textMuted)' }}>
+        {/* XMP 落盘指示灯（三态语义见 developStore.XmpStatus）：
+            debouncing = 引擎已接受、等待落盘（防抖窗口内）→ 「已提交 · 待落盘」；
+            written     = endSession{flush:true} 已确认落盘（flushed && sidecarMtime 非空）→ 才敢说「已写入」；
+            error       = 写库/落盘失败。禁止在 setParams 成功时就报「已写入」（假成功）。 */}
+        <span
+          className="inline-flex items-center gap-1.5 text-2xs"
+          style={{
+            color:
+              xmpStatus === 'written'
+                ? 'var(--Lumina-Tokens-success)'
+                : xmpStatus === 'debouncing'
+                  ? 'var(--Lumina-Tokens-accent)'
+                  : xmpStatus === 'error'
+                    ? 'var(--Lumina-Tokens-danger)'
+                    : 'var(--Lumina-Tokens-textMuted)',
+          }}
+          title={
+            xmpStatus === 'error'
+              ? '最近一次参数写入失败：请检查引擎连接或查看提示'
+              : xmpStatus === 'debouncing'
+                ? '参数已提交，引擎正在防抖落盘；切图或退出修图台时强制落盘并确认'
+                : xmpStatus === 'written'
+                  ? '已确认写入 XMP sidecar（磁盘文件已更新）'
+                  : undefined
+          }
+        >
           <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'currentColor' }} />
-          {xmpStatus === 'written' ? '参数已写入 XMP' : xmpStatus === 'debouncing' ? '写入中…' : '参数未修改'}
+          {xmpStatus === 'written'
+            ? '参数已写入 XMP'
+            : xmpStatus === 'debouncing'
+              ? '已提交 · 待落盘'
+              : xmpStatus === 'error'
+                ? '参数写入失败'
+                : '参数未修改'}
         </span>
         {syncMessage && <span className="text-2xs text-accent">{syncMessage}</span>}
         <button
@@ -717,10 +759,15 @@ function useFilmstripItems() {
 function EscHandler({ navigate }: { navigate: (v: 'library') => void }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        void useDevelop.getState().closePhoto();
-        navigate('library');
-      }
+      if (e.key !== 'Escape') return;
+      // 长按 Esc 的 key repeat 会连发 closePhoto（同一 sessionId 被 endSession 多次）：
+      // 引擎侧返回 session not found，且第二次的收尾会把刚结束的会话再清一遍。只认第一下。
+      if (e.repeat) return;
+      // 有浮层打开时 Esc 只关浮层（Dialog 已在捕获阶段处理并 stopPropagation，
+      // 这里再按 DOM 事实兜一层）：否则「关掉快捷键浮层」会连带退出修图会话跳回图库
+      if (document.querySelector('[data-dialog-open]')) return;
+      void useDevelop.getState().closePhoto();
+      navigate('library');
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);

@@ -113,6 +113,9 @@ export const useTimelapse = create<TimelapseStore>((set, get) => ({
     if (seqId === null) return;
     try {
       const detail = await api.timelapse.getSequence(seqId);
+      // 回查守卫：请求期间用户可能已切到别的序列，旧响应不许覆盖新选中项
+      //（旧行为：切 A→B 时 A 的慢响应最后到达，B 的画面下显示 A 的帧/坡度）
+      if (get().selectedSeqId !== seqId) return;
       set((s) => ({
         detail,
         detailLoading: false,
@@ -121,6 +124,7 @@ export const useTimelapse = create<TimelapseStore>((set, get) => ({
         frameNo: Math.min(Math.max(1, s.frameNo), Math.max(1, detail.frameCount)),
       }));
     } catch (err) {
+      if (get().selectedSeqId !== seqId) return;
       set({ detailLoading: false });
       useJobStore.getState().toast(`序列详情加载失败：${errText(err)}`, 'error', 8000);
     }

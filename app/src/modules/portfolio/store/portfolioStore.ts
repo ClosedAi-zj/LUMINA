@@ -16,7 +16,9 @@ interface PortfolioStore {
   loadError: string | null;
   selectedId: number | null;
   thumbUrls: Record<number, string>;
-  thumbsRequested: Set<number>;
+  /** 已发出的缩略图请求占位，键 = `${photoId}:${size}`（与 libraryStore / cullingStore 同一命名口径）。
+   *  必须带 size：320/640 是两条独立请求，只按 id 记会让先发的那个把另一档永久抑制掉。 */
+  thumbsRequested: Set<string>;
   /** 当前选中画册的成员（albums.getItems 返回的 position 顺序） */
   members: number[];
   membersLoading: boolean;
@@ -33,7 +35,8 @@ interface PortfolioStore {
   load: () => Promise<void>;
   select: (id: number | null) => void;
   loadMembers: () => Promise<void>;
-  ensureThumbs: (ids: number[]) => Promise<void>;
+  /** 缩略图预取；size 默认 320（封面/成员/挑选器同档），接口与 libraryStore 对齐便于日后统一抽取 */
+  ensureThumbs: (ids: number[], size?: 320 | 640) => Promise<void>;
   createAlbum: (name: string, kind: 'portfolio' | 'collection') => Promise<void>;
   openPicker: () => Promise<void>;
   closePicker: () => void;
@@ -49,7 +52,7 @@ export const usePortfolio = create<PortfolioStore>((set, get) => ({
   loadError: null,
   selectedId: null,
   thumbUrls: {},
-  thumbsRequested: new Set(),
+  thumbsRequested: new Set<string>(),
   members: [],
   membersLoading: false,
 
@@ -171,17 +174,19 @@ export const usePortfolio = create<PortfolioStore>((set, get) => ({
     }
   },
 
-  ensureThumbs: async (ids: number[]) => {
+  ensureThumbs: async (ids, size = 320) => {
     const st = get();
-    const pending = ids.filter((id) => !st.thumbsRequested.has(id) && !st.thumbUrls[id]);
+    /** 占位键带尺寸：同图 320 / 640 互不抑制（与 libraryStore 同口径） */
+    const keyOf = (id: number) => `${id}:${size}`;
+    const pending = ids.filter((id) => !st.thumbsRequested.has(keyOf(id)) && !st.thumbUrls[id]);
     if (pending.length === 0) return;
     set((s) => {
       const next = new Set(s.thumbsRequested);
-      for (const id of pending) next.add(id);
+      for (const id of pending) next.add(keyOf(id));
       return { thumbsRequested: next };
     });
     try {
-      const res = await api.thumb.ensureBatch(pending, 320);
+      const res = await api.thumb.ensureBatch(pending, size);
       set((s) => {
         const urls = { ...s.thumbUrls };
         for (const item of res.items) {
@@ -190,6 +195,13 @@ export const usePortfolio = create<PortfolioStore>((set, get) => ({
         return { thumbUrls: urls };
       });
     } catch (err) {
+      // 失败必须解除占位：旧写法只 toast 不移除，这些 id 在本次会话里永远
+      // 「被认为已请求」，封面/成员缩略图从此不再重试（永久空白）
+      set((s) => {
+        const next = new Set(s.thumbsRequested);
+        for (const id of pending) next.delete(keyOf(id));
+        return { thumbsRequested: next };
+      });
       useJobStore.getState().toast(`封面缩略加载失败：${errText(err)}`, 'error', 6000);
     }
   },

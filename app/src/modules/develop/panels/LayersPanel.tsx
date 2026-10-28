@@ -199,14 +199,17 @@ function LayerRow({
         </select>
         <span className="num text-2xs text-txt3 shrink-0">{Math.round(layer.opacity)}%</span>
       </div>
-      {/* 不透明度 */}
+      {/* 不透明度：拖动中只本地更新（commit=false），松手/键盘抬起时提交一次
+          （旧写法每帧 updateLayer → 固定 commit=true，一次拖动刷几十条历史 + 几十次写库） */}
       <div className="pl-5 pr-1" onClick={(e) => e.stopPropagation()}>
         <input
           type="range"
           min={0}
           max={100}
           value={layer.opacity}
-          onChange={(e) => void useDevelop.getState().updateLayer(layer.id, { opacity: Number(e.target.value) })}
+          onChange={(e) => void useDevelop.getState().updateLayerField(layer.id, { opacity: Number(e.target.value) }, false)}
+          onPointerUp={(e) => void useDevelop.getState().updateLayerField(layer.id, { opacity: Number((e.target as HTMLInputElement).value) }, true, `图层 · 不透明度 ${Math.round(Number((e.target as HTMLInputElement).value))}%`)}
+          onKeyUp={(e) => void useDevelop.getState().updateLayerField(layer.id, { opacity: Number((e.target as HTMLInputElement).value) }, true, `图层 · 不透明度 ${Math.round(Number((e.target as HTMLInputElement).value))}%`)}
           className="w-full h-0.5 appearance-none rounded-full cursor-pointer accent-accent mt-1"
           style={{
             background: `linear-gradient(to right, var(--Lumina-Tokens-accent) 0%, var(--Lumina-Tokens-accent) ${layer.opacity}%, var(--Lumina-Tokens-border) ${layer.opacity}%, var(--Lumina-Tokens-border) 100%)`,

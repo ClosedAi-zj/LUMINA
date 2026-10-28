@@ -74,6 +74,8 @@ export class DevelopRenderer {
   private imageHeight = 0;
   private shaderWarnings = '';
   private fieldKey = '';
+  /** 蒙版溢出告警只打一次（每次渲染都 warn 会刷满控制台） */
+  private maskOverflowWarned = false;
 
   init(canvas: HTMLCanvasElement): boolean {
     // WP-B6 验证通道：主进程以 ?nowebgl=1 告知渲染层禁用 WebGL（LUMINA_NO_WEBGL=1）
@@ -111,8 +113,29 @@ export class DevelopRenderer {
   }
 
   render(canvas: HTMLCanvasElement, opts: RenderOptions): boolean {
-    const { params, split = null, beforeParams = null } = opts;
+    let { params, split = null, beforeParams = null } = opts;
     if (!this.gl || !this.pipeline.ready) return false;
+
+    // 蒙版槽容量（T2.7：32 槽 4×8 图集）。上限语义保留但**不再抛异常**：
+    // 旧写法超限 throw 会被 ErrorBoundary 兜走整页，用户只是多建了一个蒙版却丢掉整个修图台。
+    // 现在 = 前 32 个正常渲染 + 超出部分不参与预览 + 一次性 warn（UI 侧 MaskPanel 同时禁止再新建）。
+    //
+    // beforeParams 必须**在条件外**单独截断：主参数已降到 ≤32、而对比基线仍是旧侧车里的
+    // 33 个蒙版时，只截 params 会让 pipeline.setMaskData 在对比分支再抛一次 → 整页崩。
+    // 双问号兜底：beforeParams 由调用方拼（快照/旧侧车），万一缺 masks 也不能在这里 throw 整页。
+    const beforeMaskCount = beforeParams?.masks?.length ?? 0;
+    if (beforeParams && beforeMaskCount > MAX_MASKS) {
+      beforeParams = { ...beforeParams, masks: beforeParams.masks.slice(0, MAX_MASKS) };
+    }
+    if (params.masks.length > MAX_MASKS) {
+      if (!this.maskOverflowWarned) {
+        this.maskOverflowWarned = true;
+        console.warn(
+          `[renderer] 蒙版数量 ${params.masks.length} 超出渲染槽容量 ${MAX_MASKS}：仅前 ${MAX_MASKS} 个参与预览渲染（参数仍完整保存，导出以引擎为准）`,
+        );
+      }
+      params = { ...params, masks: params.masks.slice(0, MAX_MASKS) };
+    }
 
     // CSS 尺寸仍量宿主容器（既有修复：不量 canvas 自己）；缓冲尺寸由管线输出决定
     const host = (canvas.closest('[data-viewer-host]') as HTMLElement | null) ?? canvas.parentElement;
@@ -147,9 +170,7 @@ export class DevelopRenderer {
     }
 
     // 蒙版数据（T2.7）：由 pipeline.render 内部从 params.masks 打包上传（独立 mask pass）
-    if (params.masks.length > MAX_MASKS) {
-      throw new Error(`蒙版数量超出 GPU 槽容量：${params.masks.length} > ${MAX_MASKS}`);
-    }
+    // 槽位容量已在函数入口截断 + 告警，这里不再重复断言（pipeline.setMaskData 仍保有自身断言）
 
     return this.pipeline.render(canvas, params, beforeParams, split);
   }

@@ -25,7 +25,10 @@ interface LibraryStore {
   zoom: number;
   pages: Record<number, PhotoSummary[]>;
   thumbUrls: Record<number, string>;
-  thumbsRequested: Set<number>;
+  /** 已发出的缩略图请求占位，键 = `${photoId}:${size}`。
+   *  必须带 size：320/640 是两条独立请求，只按 id 记会让先发的那个把另一个永久抑制掉。
+   *  （thumbUrls 仍按 id 存：同一张图不同尺寸互相覆盖是可接受的，因为都指向同一画面） */
+  thumbsRequested: Set<string>;
   total: number;
   selectedIds: number[];
   anchorId: number | null;
@@ -79,7 +82,7 @@ export const useLibrary = create<LibraryStore>((set, get) => ({
   zoom: 132,
   pages: {},
   thumbUrls: {},
-  thumbsRequested: new Set(),
+  thumbsRequested: new Set<string>(),
   total: 0,
   selectedIds: [],
   anchorId: null,
@@ -95,7 +98,15 @@ export const useLibrary = create<LibraryStore>((set, get) => ({
   lastError: null,
 
   setFilter: (patch) => {
-    set((st) => ({ filter: { ...st.filter, ...patch }, activeSmartId: null, filterVersion: st.filterVersion + 1, pages: {}, total: 0 }));
+    // `undefined` 的语义是「删除该筛选键」（对齐 clearFilterKey），不是「保留一个值为 undefined 的键」。
+    // 留键会让 Object.keys(filter).length 恒大于 0：LibraryPage 的 hasFilter 永远为真、
+    // 「清除全部筛选」与空态判断全部失效。所有调用方（格式 chip / 目录树 rootIds 等）在这层统一收口。
+    const merged: Record<string, unknown> = { ...(get().filter as Record<string, unknown>), ...(patch as Record<string, unknown>) };
+    const clean: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(merged)) {
+      if (v !== undefined) clean[k] = v;
+    }
+    set((st) => ({ filter: clean as Filter, activeSmartId: null, filterVersion: st.filterVersion + 1, pages: {}, total: 0 }));
     void get().refresh();
   },
 
@@ -174,7 +185,9 @@ export const useLibrary = create<LibraryStore>((set, get) => ({
         api.library.getFacets(st.filter),
         api.library.getStats(),
       ]);
-      set({ folderTree: tree, timeline, facets, stats });
+      // 与 fetchPage 同一把竞态尺子：响应回来时筛选可能已变，旧响应不许覆盖新筛选的 facets。
+      //（facets 是按 st.filter 算的：不守卫就会「筛选切到 RAW，面板还显示上一个筛选的机身分布」）
+      set((s) => (s.filterVersion === st.filterVersion ? { folderTree: tree, timeline, facets, stats } : s));
     } catch (err) {
       const { useJobStore } = await import('./jobStore');
       useJobStore.getState().toast(`图库元数据加载失败：${errText(err)}`, 'error', 8000);
@@ -183,11 +196,13 @@ export const useLibrary = create<LibraryStore>((set, get) => ({
 
   ensureThumbs: async (ids, size) => {
     const { thumbsRequested, thumbUrls } = get();
-    const pending = ids.filter((id) => !thumbsRequested.has(id) && !thumbUrls[id]);
+    /** 占位键带尺寸：同图 320 / 640 互不抑制 */
+    const keyOf = (id: number) => `${id}:${size}`;
+    const pending = ids.filter((id) => !thumbsRequested.has(keyOf(id)) && !thumbUrls[id]);
     if (pending.length === 0) return;
     set((st) => {
       const next = new Set(st.thumbsRequested);
-      for (const id of pending) next.add(id);
+      for (const id of pending) next.add(keyOf(id));
       return { thumbsRequested: next };
     });
     try {
@@ -211,6 +226,13 @@ export const useLibrary = create<LibraryStore>((set, get) => ({
         return { thumbUrls: urls, pages };
       });
     } catch (err) {
+      // 请求失败必须解除占位：旧写法只 toast 不移除，这些 id 在本次会话里永远
+      // 「被认为已请求」，缩略图从此不再重试（永久空白）。
+      set((st) => {
+        const next = new Set(st.thumbsRequested);
+        for (const id of pending) next.delete(keyOf(id));
+        return { thumbsRequested: next };
+      });
       const { useJobStore } = await import('./jobStore');
       useJobStore.getState().toast(`缩略图请求失败：${errText(err)}`, 'error', 6000);
     }

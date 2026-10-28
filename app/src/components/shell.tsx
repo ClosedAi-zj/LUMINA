@@ -1,6 +1,6 @@
 /** 对话框 / 空状态 / Toast 宿主 / 键帽条 / 图标集 */
 
-import { useLayoutEffect, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useJobStore } from '../store/jobStore';
 import { useTheme } from '../theme/ThemeProvider';
@@ -26,9 +26,24 @@ export function SubBarPortal({ children }: { children: ReactNode }) {
 // ---------- Dialog ----------
 
 export function Dialog({ open, title, children, onClose, width = 420 }: { open: boolean; title: string; children: ReactNode; onClose?: () => void; width?: number }) {
+  // Esc 归浮层自己处理：捕获阶段拦下并 stopPropagation，页面级 Esc 处理器
+  // （修图台 EscHandler：关会话 + 回图库）就收不到 —— 否则「关掉一个弹窗」
+  // 会连带退出修图会话并跳回图库。
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      e.preventDefault();
+      onClose?.();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [open, onClose]);
+
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.55)' }} onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.55)' }} onClick={onClose} data-dialog-open>
       {/* R7 M2：模态浮层统一玻璃材质 + 浮入动效（浅色主题玻璃底 = --glass 令牌，文字对比 ≥4.5:1） */}
       <div
         className="glass-m2 rounded-lgC border border-line animate-float-in"
