@@ -26,6 +26,7 @@
 #include "health/scanner.h"
 #include "health/watcher.h"
 #include "import/importer.h"
+#include "jobs/rebuild_develop_settings.h"
 #include "library/query_engine.h"
 #include "mock/generator.h"
 #include "raw/raw_decoder.h"
@@ -240,6 +241,14 @@ int main(int argc, char** argv) {
       logWarn("main", "files reconcile failed: " + recErr + " (" + rep.detail + ")");
     }
   });
+
+  // ---- 7.8 启动回填 job（M2 T2.2b⑥）：develop_settings 派生缓存对齐 sidecar ----
+  //     真空档收口：迁移 003 只建表不扫盘，升级库（有已编辑照片、缓存为空）此前
+  //     永远不会回填。首跑（表空）全量重建，之后每次启动按 sidecar_mtime 增量；
+  //     低优先级（批间让出）、可取消（jobs.shutdown 置位 + 批间检查，延迟 ≤ 一批）、
+  //     有进度（event.job.progress）、失败不静默（failed/unavailable 均显式 warn）。
+  //     与 7.5 XMP 迁移并行执行：即便读到迁移中途的 sidecar，mtime 增量下次启动自愈。
+  jobs::submitRebuildDevelopSettings(&jobs, &database, &xmpService);
 
   // ---- 7.6 诊断看门狗：主循环状态变化/心跳落日志（挂死定位用） ----
   std::atomic<bool> watchdogStop{false};

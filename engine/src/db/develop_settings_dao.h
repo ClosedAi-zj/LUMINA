@@ -94,9 +94,37 @@ class DevelopSettingsDao {
 
   // 全量重建：扫 photos，逐张读 sidecar 覆盖缓存。可取消、有进度、失败不静默。
   // H5 的「删表重建后逐条相等」由它保证。
+  // yieldBetweenChunks（可空）：每处理完一批（kRebuildChunk 张）后调用一次，供启动
+  // 回填 job 做低优先级节流（批间让出 CPU）；普通调用方不传即无节流，行为不变。
   bool rebuildFromSidecar(xmp::XmpService* xmp, RebuildReport* rep, std::atomic<bool>* cancel,
                           const std::function<void(int, const std::string&)>& progress,
-                          std::string* err);
+                          std::string* err,
+                          const std::function<void()>& yieldBetweenChunks = nullptr);
+
+  // 增量回填（M2 T2.2b⑥ N11/N12：rebuildFromSidecar 的增量入口）。
+  // 口径（比任务书「has_edits=1」稍宽，理由见下）：
+  //   候选 = 「无缓存行且盘上 sidecar 存在」 或 「有缓存行且缓存 sidecar_mtime <
+  //   盘上 sidecar mtime」；其余照片只做一次 stat 比对即跳过。
+  //   不把候选限定在 has_edits=1：mtime 变新即代表 sidecar 被外部改动（外部编辑
+  //   工具给「未调整」照片加调整同理），按 has_edits 过滤会漏回填；mtime 相等或
+  //   更旧则无论 has_edits 取值都跳过，常规启动时 0 解析 0 写库。
+  //   失配行的两种处理（口径不同，勿混）：
+  //   a) sidecar 丢失但缓存行仍在 → 与全量重建同口径删行（防筛选幽灵命中），计入 removed；
+  //   b) sidecar 在但 loadParams 解析失败 → **保留旧缓存行** + failed++ + WARN，不删行：
+  //      每次启动重试、sidecar 修复后自愈；旧缓存内容仍与上次成功解析一致，删行反而
+  //      会把「已调整」照片降级成「未调整」（此处与全量重建的删行口径有意不同）。
+  // RebuildReport 语义：scanned = 实际读 sidecar 并回填的候选数（跳过的不计）；
+  // written = 候选中成功 upsert 的行数；removed = 删掉的失配行数。可取消（批间
+  // 检查，已提交部分保持有效）、有进度、失败不静默。
+  bool backfillFromSidecar(xmp::XmpService* xmp, RebuildReport* rep, std::atomic<bool>* cancel,
+                           const std::function<void(int, const std::string&)>& progress,
+                           std::string* err,
+                           const std::function<void()>& yieldBetweenChunks = nullptr);
+
+  // 缓存行计数（启动回填 job 的首跑判定：0 行 → 全量重建）。表不存在时返回 0 行
+  // 且不报错——可用性判定走 available()，本方法只管行数。查询失败（库损坏/锁死等
+  // step 失败）返回 false 并写明 err，调用方必须显式留痕，不得当作「空表」。
+  bool cachedRowCount(int64_t* out, std::string* err);
 
   // 走部分索引 idx_dev_edited（WHERE has_edits=1）的筛选
   bool queryEdited(std::vector<int64_t>* out, int limit, std::string* err);

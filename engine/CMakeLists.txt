@@ -59,6 +59,7 @@ set(LUMINA_SOURCES
   src/db/migrations.cpp
   src/db/image_dao.cpp
   src/db/develop_settings_dao.cpp
+  src/jobs/rebuild_develop_settings.cpp
   src/db/history_dao.cpp
   src/db/photo_dao.cpp
   src/db/fts_indexer.cpp
@@ -363,6 +364,13 @@ add_executable(test_sidecar_repair tests/test_sidecar_repair.cpp)
 target_link_libraries(test_sidecar_repair PRIVATE lumina_core)
 set_target_properties(test_sidecar_repair PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
 add_test(NAME sidecar_repair COMMAND test_sidecar_repair)
+
+# M2 T2.2b⑥：启动回填 job（首跑全量判定 / 增量只回填 mtime 变新的行 / 批间取消 /
+# 失败不静默 / unavailable 零静默 / 低优先级节流实测打印）
+add_executable(test_backfill_job tests/test_backfill_job.cpp)
+target_link_libraries(test_backfill_job PRIVATE lumina_core)
+set_target_properties(test_backfill_job PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME backfill_job COMMAND test_backfill_job)
 
 # M4-01：ICC 色彩管理（lcms2 接入 → 内置 sRGB/AdobeRGB profile 构造与序列化 →
 # 16bit 中间态往返 mean|Δ|=0 / max≤1 LSB → 灰阶零染色 → 软打样实现冒烟）

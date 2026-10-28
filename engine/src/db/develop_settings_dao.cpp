@@ -22,7 +22,8 @@ namespace lumina {
 namespace db {
 namespace {
 
-constexpr int kRebuildChunk = 200;  // 重建每批读 200 张，便于取消与进度
+constexpr int kRebuildChunk = 200;   // 重建每批读 200 张，便于取消与进度
+constexpr int kBackfillChunk = 50;   // 增量回填批更小：进度更平滑、取消延迟更低
 
 // 表是否存在（迁移 003 是否已跑）。SQL 走 sqlite_master，不猜。
 bool tableExists(Database* db, const std::string& table) {
@@ -387,7 +388,8 @@ bool DevelopSettingsDao::rebuildFromSidecar(xmp::XmpService* xmp, RebuildReport*
                                             std::atomic<bool>* cancel,
                                             const std::function<void(int, const std::string&)>&
                                                 progress,
-                                            std::string* err) {
+                                            std::string* err,
+                                            const std::function<void()>& yieldBetweenChunks) {
   RebuildReport local;
   RebuildReport& r = rep ? *rep : local;
   if (!db_ || !db_->isOpen()) {
@@ -482,9 +484,160 @@ bool DevelopSettingsDao::rebuildFromSidecar(xmp::XmpService* xmp, RebuildReport*
       const int pct = static_cast<int>(std::min<int64_t>(100, r.scanned * 100 / total));
       progress(pct, "重建参数缓存 " + std::to_string(r.scanned) + "/" + std::to_string(total));
     }
+    if (yieldBetweenChunks) yieldBetweenChunks();
   }
   r.detail = "重建完成：扫描 " + std::to_string(r.scanned) + "，写入 " + std::to_string(r.written) +
              "，清除 " + std::to_string(r.removed) + "，失败 " + std::to_string(r.failed);
+  if (progress) progress(100, r.detail);
+  logInfo("db", r.detail);
+  return true;
+}
+
+bool DevelopSettingsDao::cachedRowCount(int64_t* out, std::string* err) {
+  if (out) *out = 0;
+  if (!db_ || !db_->isOpen()) {
+    if (err) *err = "develop_settings: database not open";
+    return false;
+  }
+  if (!tableExists(db_, "develop_settings")) return true;  // 表不存在 = 0 行（可用性走 available()）
+  auto stmt = db_->prepareCached("ds:rowCount", "SELECT COUNT(*) FROM develop_settings;", err);
+  if (!stmt || !stmt->valid()) return false;
+  // 零静默：step 失败（库损坏/锁死）必须报错，不得返回「0 行」让调用方误判成空表
+  // 而走全量重建——job 侧收到 false 会以 mode=unavailable 显式留痕。
+  if (!stmt->step(err)) {
+    stmt->reset();
+    if (err && err->empty()) *err = "develop_settings: cachedRowCount 查询失败";
+    return false;
+  }
+  if (out) *out = stmt->columnInt64(0);
+  stmt->reset();
+  return true;
+}
+
+bool DevelopSettingsDao::backfillFromSidecar(xmp::XmpService* xmp, RebuildReport* rep,
+                                             std::atomic<bool>* cancel,
+                                             const std::function<void(int, const std::string&)>&
+                                                 progress,
+                                             std::string* err,
+                                             const std::function<void()>& yieldBetweenChunks) {
+  RebuildReport local;
+  RebuildReport& r = rep ? *rep : local;
+  if (!db_ || !db_->isOpen()) {
+    if (err) *err = "develop_settings: database not open";
+    return false;
+  }
+  if (!xmp) {
+    if (err) *err = "develop_settings: backfillFromSidecar 需要 XmpService（sidecar 是唯一真相源）";
+    return false;
+  }
+  if (!tableExists(db_, "develop_settings")) {
+    if (err) *err = "develop_settings 表不存在（迁移 003 未执行）";
+    return false;
+  }
+
+  int64_t total = 0;
+  {
+    auto stmt = db_->prepareCached("ds:backfillCountPhotos", "SELECT COUNT(*) FROM photos;", err);
+    if (!stmt || !stmt->valid()) return false;
+    if (stmt->step(nullptr)) total = stmt->columnInt64(0);
+    stmt->reset();
+  }
+  if (progress) progress(0, "增量回填 0/" + std::to_string(total));
+
+  int64_t lastId = 0;
+  int64_t judged = 0;  // 已判定（含跳过）的照片数，进度用它而不是 r.scanned（候选数会跳变）
+  while (true) {
+    if (cancel && cancel->load()) {
+      r.cancelled = true;
+      r.detail = "增量回填被取消（已判定 " + std::to_string(judged) + "/" +
+                 std::to_string(total) + "，已提交部分保持有效）";
+      logWarn("db", r.detail);
+      if (err) *err = "backfill cancelled";
+      return false;
+    }
+    // LEFT JOIN 一次取回「缓存行是否存在 + 缓存 mtime」；无缓存行的照片
+    // ds.sidecar_mtime 为 NULL，用 columnIsNull 区分（不是错误）。
+    std::string sql =
+        "SELECT p.id, p.file_path, p.sidecar_path, ds.sidecar_mtime "
+        "FROM photos p LEFT JOIN develop_settings ds ON ds.photo_id=p.id "
+        "WHERE p.id > " + std::to_string(lastId) + " ORDER BY p.id LIMIT " +
+        std::to_string(kBackfillChunk) + ";";
+    auto stmt = db_->prepareCached("ds:backfillScan", sql, err);
+    if (!stmt || !stmt->valid()) return false;
+    struct Row {
+      int64_t id = 0;
+      std::string filePath;
+      std::string sidecarPath;
+      bool hasCache = false;
+      int64_t cacheMtime = 0;
+    };
+    std::vector<Row> rows;
+    while (stmt->step(nullptr)) {
+      Row row;
+      row.id = stmt->columnInt64(0);
+      row.filePath = stmt->columnText(1);
+      row.sidecarPath = stmt->columnText(2);
+      row.hasCache = !stmt->columnIsNull(3);
+      row.cacheMtime = row.hasCache ? stmt->columnInt64(3) : 0;
+      rows.push_back(row);
+    }
+    stmt->reset();
+    if (rows.empty()) break;
+    lastId = rows.back().id;
+
+    for (const Row& row : rows) {
+      ++judged;
+      const std::string sidecar =
+          row.sidecarPath.empty() ? xmp->sidecarPathFor(row.filePath) : row.sidecarPath;
+      bool candidate = false;
+      int64_t diskMtime = 0;
+      if (!row.hasCache) {
+        // 无缓存行：盘上有 sidecar 才是候选（未调整照片本就不该有缓存行）
+        if (fileExists(sidecar)) {
+          candidate = true;
+          diskMtime = fileMtimeMs(sidecar);
+        }
+      } else if (!fileExists(sidecar)) {
+        // 缓存行还在但 sidecar 丢失：与全量重建同口径删行，防「已调整/含蒙版」筛选幽灵命中
+        if (!erase(row.id, err)) return false;
+        if (db_->changes() > 0) {
+          ++r.removed;
+          logWarn("db",
+                  "backfill: photo " + std::to_string(row.id) + " 无 sidecar，已清除缓存行");
+        }
+        continue;
+      } else {
+        diskMtime = fileMtimeMs(sidecar);
+        // 缓存 mtime 落后盘上 mtime 即重读（不限定 has_edits，见头文件口径注释）
+        if (diskMtime > row.cacheMtime) candidate = true;
+      }
+      if (!candidate) continue;
+      ++r.scanned;
+      json::JsonValue params;
+      std::string loadErr;
+      if (!xmp->loadParams(row.id, &params, &loadErr)) {
+        ++r.failed;
+        logWarn("db", "backfill: photo " + std::to_string(row.id) +
+                          " sidecar 解析失败，跳过该行: " + loadErr);
+        continue;
+      }
+      if (!upsert(row.id, params, diskMtime, "rebuilt", err)) {
+        ++r.failed;
+        logError("db", "backfill: upsert failed for photo " + std::to_string(row.id));
+        continue;
+      }
+      ++r.written;
+    }
+    if (progress && total > 0) {
+      const int pct = static_cast<int>(std::min<int64_t>(100, judged * 100 / total));
+      progress(pct, "增量回填 " + std::to_string(judged) + "/" + std::to_string(total) +
+                        "，更新 " + std::to_string(r.written));
+    }
+    if (yieldBetweenChunks) yieldBetweenChunks();
+  }
+  r.detail = "增量回填完成：判定 " + std::to_string(judged) + "，回填 " +
+             std::to_string(r.scanned) + "，写入 " + std::to_string(r.written) + "，清除 " +
+             std::to_string(r.removed) + "，失败 " + std::to_string(r.failed);
   if (progress) progress(100, r.detail);
   logInfo("db", r.detail);
   return true;
