@@ -122,6 +122,7 @@ json::JsonValue MapService::getLocations(const json::JsonValue& params, rpc::Rpc
   };
   std::vector<std::pair<std::string, ClusterAgg>> clusters;
   std::map<std::string, size_t> nameIndex;
+  dbErr.clear();
   while (stmt->step(&dbErr)) {
     double lat = stmt->columnDouble(0);
     double lng = stmt->columnDouble(1);
@@ -152,6 +153,11 @@ json::JsonValue MapService::getLocations(const json::JsonValue& params, rpc::Rpc
     clusters.emplace_back(name, agg);
   }
   stmt->reset();
+  // step 失败 ≠ 没有定位照片：前者必须报错，否则地图会静默显示「一张都没有」
+  if (!dbErr.empty()) {
+    *err = rpc::RpcError(rpc::kDbError, "map.getLocations 查询失败: " + dbErr);
+    return json::JsonValue::nullValue();
+  }
 
   json::JsonValue out = json::JsonValue::arrayValue();
   for (const auto& kv : clusters) {
@@ -197,8 +203,14 @@ json::JsonValue MapService::getLocationDetail(const json::JsonValue& params, rpc
       return json::JsonValue::nullValue();
     }
     q->bindInt64(1, locationId);
+    dbErr.clear();
     if (!q->step(&dbErr)) {
       q->reset();
+      // SQL 失败 ≠ 该地点不存在（否则用户看到「地点已删除」而真因是库坏了）
+      if (!dbErr.empty()) {
+        *err = rpc::RpcError(rpc::kDbError, "map.getLocationDetail 查询失败: " + dbErr);
+        return json::JsonValue::nullValue();
+      }
       *err = rpc::RpcError(rpc::kFileNotFound, "location not found: " + std::to_string(locationId));
       return json::JsonValue::nullValue();
     }

@@ -214,7 +214,7 @@ bool XmpService::loadParamsFromPath(const std::string& photoPath, const std::str
 bool XmpService::loadParams(int64_t photoId, json::JsonValue* out, std::string* err) {
   PhotoRecord p;
   if (!photos_->getById(photoId, &p, err)) {
-    if (err->empty()) *err = "photo not found: " + std::to_string(photoId);
+    if (err && err->empty()) *err = "photo not found: " + std::to_string(photoId);
     return false;
   }
   std::string sidecar = p.sidecarPath.empty() ? sidecarPathFor(p.filePath) : p.sidecarPath;
@@ -299,14 +299,17 @@ bool XmpService::saveParams(int64_t photoId, const json::JsonValue& params, std:
                             bool force) {
   PhotoRecord p;
   if (!photos_->getById(photoId, &p, err)) {
-    if (err->empty()) *err = "photo not found: " + std::to_string(photoId);
+    if (err && err->empty()) *err = "photo not found: " + std::to_string(photoId);
     return false;
   }
   std::lock_guard<std::mutex> lock(*photoWriteMutex(photoId));
   std::string sidecar = p.sidecarPath.empty() ? sidecarPathFor(p.filePath) : p.sidecarPath;
   if (!force && fileExists(sidecar)) {
     int64_t current = fileMtimeMs(sidecar);
-    if (p.hasSidecarMtime && current > 0 && current != p.sidecarMtime) {
+    // 「已知且为正」才比对：sidecar_mtime = 0 的语义是「库里没有可信锚点」（历史脏数据，
+    // 或 photo 行由 mock/迁移路径写入），此时 current != 0 必然成立，会把每一次正常保存
+    // 都判成 external conflict —— 导入自带 XMP 的照片后第一次编辑就写不出去。
+    if (p.hasSidecarMtime && p.sidecarMtime > 0 && current > 0 && current != p.sidecarMtime) {
       // 红线：外部修改检测，绝不覆盖
       if (err) *err = "external conflict";
       logWarn("xmp", "external modification detected for " + sidecar);
@@ -451,7 +454,9 @@ json::JsonValue XmpService::checkExternal(int64_t photoId, rpc::RpcError* err) {
     return out;
   }
   int64_t current = fileMtimeMs(sidecar);
-  bool changed = p.hasSidecarMtime && current != p.sidecarMtime;
+  // 同 saveParams：unknown(0) 不是「mtime 不同」，不报外部修改（否则 UI 天天弹冲突）
+  bool changed =
+      p.hasSidecarMtime && p.sidecarMtime > 0 && current > 0 && current != p.sidecarMtime;
   out.setItem("changed", changed);
   out.setItem("sidecarMtime", current);
   return out;

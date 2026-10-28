@@ -91,7 +91,15 @@ void bindRecordTail(const PhotoRecord& p, std::vector<Bind>* binds) {
   bt(p.keywords);
   bt(p.description);
   bt(p.sidecarPath);
-  b(p.sidecarMtime);
+  // sidecar_mtime 的 0 语义是「未知」，必须绑 NULL 而不是整数 0：
+  // 读回侧 `hasSidecarMtime = !columnIsNull(...)`，绑 0 会让它变成「已知 mtime = 0」，
+  // 于是 saveParams 的外部修改检测（current > 0 && current != 0）在磁盘上已存在
+  // sidecar 时必定判定冲突 —— 导入一张自带 XMP 的照片后第一次编辑就保存失败。
+  if (p.sidecarMtime > 0) {
+    b(p.sidecarMtime);
+  } else {
+    binds->push_back(Bind{Bind::kNull, 0, 0.0, std::string()});
+  }
   b(p.hasEdits ? 1 : 0);
   b(p.isMissing ? 1 : 0);
   b(p.isVideo ? 1 : 0);
@@ -448,6 +456,9 @@ bool buildWhere(Database* db, const Filter& f, bool* hasCond, std::string* where
     *hasCond = true;
   };
   auto addInts = [&](const std::string& col, const std::vector<int64_t>& values) {
+    // 空数组语义 = 不筛选（不追加条件）。若拼出 `col IN ()`，SQLite 直接语法报错，
+    // 整个查询 500 —— 前端把「清空筛选」表达成 `folderIds: []` 就会炸掉图库。
+    if (values.empty()) return;
     std::string cond = col + " IN (";
     for (size_t i = 0; i < values.size(); ++i) {
       if (i) cond += ",";
@@ -461,6 +472,7 @@ bool buildWhere(Database* db, const Filter& f, bool* hasCond, std::string* where
     add(cond);
   };
   auto addStrings = [&](const std::string& col, const std::vector<std::string>& values) {
+    if (values.empty()) return;  // 同 addInts：空数组 = 不筛选
     std::string cond = col + " IN (";
     for (size_t i = 0; i < values.size(); ++i) {
       if (i) cond += ",";
@@ -960,8 +972,11 @@ bool PhotoDao::setSidecar(int64_t id, const std::string& sidecarPath, int64_t mt
   std::string sql = "UPDATE photos SET sidecar_path=?, sidecar_mtime=?, has_edits=? WHERE id=?;";
   auto stmt = db_->prepareCached("setSidecar", sql, err);
   if (!stmt || !stmt->valid()) return false;
-  bindAll(stmt.get(), std::vector<Bind>{Bind{Bind::kText, 0, 0, sidecarPath},
-                                        Bind{Bind::kInt64, mtime, 0, std::string()},
+  // 0 = 「mtime 未知」（调用方在文件刚写完/取不到 mtime 时会传 0），必须写 NULL 而不是 0，
+  // 否则读回侧 hasSidecarMtime 会变成「已知 mtime=0」，把外部修改检测变成永久误报。
+  Bind mtimeBind = (mtime > 0) ? Bind{Bind::kInt64, mtime, 0.0, std::string()}
+                               : Bind{Bind::kNull, 0, 0.0, std::string()};
+  bindAll(stmt.get(), std::vector<Bind>{Bind{Bind::kText, 0, 0, sidecarPath}, mtimeBind,
                                         Bind{Bind::kInt, hasEdits ? 1 : 0, 0, std::string()},
                                         Bind{Bind::kInt64, id, 0, std::string()}},
           err);

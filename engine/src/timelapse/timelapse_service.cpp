@@ -1928,6 +1928,17 @@ bool TimelapseService::writeSidecarText(const SeqFrame& frame,
     return false;
   }
   if (fields.empty()) return true;
+  // 与 XmpService::saveParams / setExifGps / XmpMigrator::migrateOne 共用同一把
+  // per-photo 写锁，且**全程持有**（读-改-写整体在临界区内）。
+  // 不加锁时：timelapse 写 ExposureRamp 与修图台写 crs: 并发 → 后写者用自己读到的
+  // 旧文档覆盖前者，exactly 丢更新（此前 timelapse_service 是唯一漏锁的 sidecar 写方）。
+  // 锁序：本函数调用的 photos_->setSidecar / xmp_->sidecarPathFor 都不取其他
+  // per-photo 锁，且调用方（writeKeyframes/writeDeflickerMarker）未持有任何锁，
+  // 因此不存在 ABBA 死锁。
+  static std::mutex kNoXmpFallbackMutex;  // xmp_ 为空时退化为全局串行化（正常构造不会发生）
+  std::shared_ptr<std::mutex> photoLock =
+      xmp_ ? xmp_->photoWriteMutex(frame.photoId) : std::shared_ptr<std::mutex>();
+  std::lock_guard<std::mutex> lock(photoLock ? *photoLock : kNoXmpFallbackMutex);
   std::string sidecar = frame.sidecarPath;
   if (sidecar.empty() && xmp_ && !frame.filePath.empty()) {
     sidecar = xmp_->sidecarPathFor(frame.filePath);

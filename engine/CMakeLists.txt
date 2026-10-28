@@ -159,6 +159,10 @@ set_target_properties(lumina-engine PROPERTIES
   LINK_FLAGS "${LUMINA_LINK_FLAGS}"
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
+# 发布体积：只 strip 随产品发布的引擎可执行文件。
+# 测试二进制刻意保留符号表 —— 用例失败时需要回溯调用栈，“能取证”优先于“少几 MB”。
+target_link_options(lumina-engine PRIVATE "$<$<CONFIG:Release>:-s>")
+
 # ---- 测试 ----
 enable_testing()
 add_executable(test_xmp_roundtrip tests/test_xmp_roundtrip.cpp)
@@ -400,3 +404,33 @@ add_test(NAME export_determinism COMMAND test_export_determinism)
 add_executable(deltae_baseline tests/color/delta_e_baseline.cpp)
 target_link_libraries(deltae_baseline PRIVATE lumina_core)
 set_target_properties(deltae_baseline PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+
+# ---- v1.2.3 缺陷修复批次（engine 侧）回归 ----
+
+# E1：编辑参数周期落盘。tick() 此前全仓无调用点、flushThread_ 只用声明 ——
+# 崩溃/被杀丢掉整段未 end() 的编辑。该测试不调 endSession，只靠 tick()/落盘线程。
+add_executable(test_edit_flush_on_tick tests/test_edit_flush_on_tick.cpp)
+target_link_libraries(test_edit_flush_on_tick PRIVATE lumina_core)
+set_target_properties(test_edit_flush_on_tick PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME edit_flush_on_tick COMMAND test_edit_flush_on_tick)
+
+# E4/E5：空数组筛选不得生成 `col IN ()`；Database::open 的 PRAGMA foreign_keys 必须真为 1
+add_executable(test_db_invariants tests/test_db_invariants.cpp)
+target_link_libraries(test_db_invariants PRIVATE lumina_core)
+set_target_properties(test_db_invariants PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME db_invariants COMMAND test_db_invariants)
+
+# E8：JobContext::fail → failed 终态；cancel 对已结束任务返回 false；
+# 源目录不可访问时 import job 终态必须是 failed 而非 done
+add_executable(test_job_fail_state tests/test_job_fail_state.cpp)
+target_link_libraries(test_job_fail_state PRIVATE lumina_core)
+set_target_properties(test_job_fail_state PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME job_fail_state COMMAND test_job_fail_state)
+
+# E16：sidecar_mtime=0 语义 = 「未知」（写 NULL 而非 0）。
+# 修复前「已知 mtime=0」会让外部修改检测恒真 → 导入自带 XMP 的照片后首次编辑存不进去。
+# 同时锁定红线：已知 mtime 且磁盘被外部改过时仍必须 external conflict。
+add_executable(test_sidecar_mtime_zero tests/test_sidecar_mtime_zero.cpp)
+target_link_libraries(test_sidecar_mtime_zero PRIVATE lumina_core)
+set_target_properties(test_sidecar_mtime_zero PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME sidecar_mtime_zero COMMAND test_sidecar_mtime_zero)

@@ -76,9 +76,23 @@ int64_t JobManager::start(const std::string& kind, Task task) {
       if (it == jobs_.end()) return;
       it->second.state.result = result;
     };
-    JobContext ctx(jobId, cancelFlag.get(), progressFn, setResultFn);
+    // 失败终态（E8）：任务显式 fail() 时置 errorCode/errorMessage，
+    // 让下面的终态判定走 failed 分支而不是 done。
     int errorCode = 0;
     std::string errorMessage;
+    auto failFn = [this, jobId, &errorCode, &errorMessage](const json::JsonValue& result) {
+      const std::string message = result.get("error").asString();
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = jobs_.find(jobId);
+        if (it == jobs_.end()) return;
+        it->second.state.result = result;
+      }
+      // 3004 = 引擎内部任务失败（与 emitCompleted 的缺省 code 一致）
+      errorCode = 3004;
+      errorMessage = message.empty() ? std::string("job failed") : message;
+    };
+    JobContext ctx(jobId, cancelFlag.get(), progressFn, setResultFn, failFn);
     try {
       task(ctx);
     } catch (const std::exception& ex) {
@@ -119,8 +133,12 @@ bool JobManager::cancel(int64_t jobId) {
   std::lock_guard<std::mutex> lock(mutex_);
   auto it = jobs_.find(jobId);
   if (it == jobs_.end()) return false;
+  const std::string& current = it->second.state.state;
+  // 已进终态的任务取消无意义：必须回报 false（此前恒 true 是谎报，
+  // 调用方据此渲染"已取消"，而任务其实早就成功了）。
+  if (current == "done" || current == "failed" || current == "cancelled") return false;
   it->second.cancelFlag->store(true);
-  if (it->second.state.state == "queued") it->second.state.state = "cancelled";
+  if (current == "queued") it->second.state.state = "cancelled";
   return true;
 }
 
@@ -185,7 +203,17 @@ void JobManager::emitCompleted(const JobState& state) {
 void JobManager::shutdown() {
   shuttingDown_.store(true);
   std::lock_guard<std::mutex> lock(mutex_);
-  for (auto& kv : jobs_) kv.second.cancelFlag->store(true);
+  for (auto& kv : jobs_) {
+    kv.second.cancelFlag->store(true);
+    // queued 的任务在 pool.shutdown() 之后永远不会被执行：状态必须落到终态，
+    // 否则 jobs.list 里会永久留一条 queued（UI 认为还有活没跑完）。
+    if (kv.second.state.state == "queued") {
+      kv.second.state.state = "cancelled";
+      kv.second.state.detail = "引擎退出，任务未执行";
+      kv.second.state.hasEta = false;
+      kv.second.state.finishedAt = nowMs();
+    }
+  }
 }
 
 }  // namespace lumina

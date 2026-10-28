@@ -94,21 +94,30 @@ bool ThumbnailService::ensureThumb(int64_t photoId, int size, std::string* outPa
 }
 
 void ThumbnailService::generateAsync(int64_t photoId, int size) {
+  const ThumbKey key(photoId, size);
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (inFlight_.find(photoId) != inFlight_.end()) return;
-    inFlight_[photoId] = true;
+    // 键含 size：同一张照片的 320 与 640 是两条独立任务，互不吞并。
+    if (inFlight_.find(key) != inFlight_.end()) return;
+    inFlight_[key] = true;
   }
-  pool_->submit([this, photoId, size]() {
+  pool_->submit([this, photoId, size, key]() {
     std::string path;
     std::string err;
     bool ok = ensureThumb(photoId, size, &path, &err);
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      inFlight_.erase(photoId);
+      // 无论成功失败都必须清 inFlight_，否则一次失败会让该 (photo,size) 永不重试。
+      inFlight_.erase(key);
+      if (ok) {
+        failures_.erase(key);
+      } else {
+        failures_[key] = err;
+      }
     }
     if (ok && onReady_) onReady_(photoId, size, path);
-    else logWarn("thumb", "async thumb failed for " + std::to_string(photoId) + ": " + err);
+    else logWarn("thumb", "async thumb failed for " + std::to_string(photoId) + " @" +
+                              std::to_string(size) + ": " + err);
   });
 }
 
@@ -156,7 +165,20 @@ json::JsonValue ThumbnailService::getStatus(const std::vector<int64_t>& ids, int
       item.setItem("state", "ready");
       item.setItem("path", target);
     } else {
-      item.setItem("state", "pending");
+      // 失败要显式呈现：否则 UI 见 pending 永远转圈，用户没有任何线索
+      const ThumbKey key(id, size);
+      std::string failure;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = failures_.find(key);
+        if (it != failures_.end()) failure = it->second;
+      }
+      if (!failure.empty()) {
+        item.setItem("state", "failed");
+        item.setItem("error", failure);
+      } else {
+        item.setItem("state", "pending");
+      }
     }
     items.addItem(item);
   }

@@ -532,7 +532,9 @@ json::JsonValue Exporter::cancelJob(const json::JsonValue& params, JobManager* j
     return json::JsonValue::nullValue();
   }
   if (!jobs->cancel(jobId)) {
-    if (err) *err = rpc::RpcError(rpc::kJobNotFound, "任务不存在: " + std::to_string(jobId));
+    // cancel 现在对「已终态（done/failed/cancelled）」也返回 false —— 文案必须
+    // 同时覆盖「不存在」与「已结束」，否则用户看到「任务不存在」却被 UI 画着进度条。
+    if (err) *err = rpc::RpcError(rpc::kJobNotFound, "任务不存在或已结束: " + std::to_string(jobId));
     return json::JsonValue::nullValue();
   }
   return json::JsonValue::objectValue();

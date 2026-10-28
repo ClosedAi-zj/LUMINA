@@ -409,7 +409,15 @@ bool DevelopSettingsDao::rebuildFromSidecar(xmp::XmpService* xmp, RebuildReport*
   {
     auto stmt = db_->prepareCached("ds:countPhotos", "SELECT COUNT(*) FROM photos;", err);
     if (!stmt || !stmt->valid()) return false;
-    if (stmt->step(nullptr)) total = stmt->columnInt64(0);
+    std::string countErr;
+    if (stmt->step(&countErr)) {
+      total = stmt->columnInt64(0);
+    } else if (!countErr.empty()) {
+      // 计数失败不能静默按 0 处理：进度分母会变成 0，整次重建看起来「瞬间完成」
+      stmt->reset();
+      if (err) *err = "develop_settings: 统计照片总数失败: " + countErr;
+      return false;
+    }
     stmt->reset();
   }
   if (progress) progress(0, "重建参数缓存 0/" + std::to_string(total));
@@ -435,7 +443,8 @@ bool DevelopSettingsDao::rebuildFromSidecar(xmp::XmpService* xmp, RebuildReport*
       std::string sidecarPath;
     };
     std::vector<Row> rows;
-    while (stmt->step(nullptr)) {
+    std::string chunkErr;
+    while (stmt->step(&chunkErr)) {
       Row row;
       row.id = stmt->columnInt64(0);
       row.filePath = stmt->columnText(1);
@@ -443,6 +452,12 @@ bool DevelopSettingsDao::rebuildFromSidecar(xmp::XmpService* xmp, RebuildReport*
       rows.push_back(row);
     }
     stmt->reset();
+    // 批次枚举失败必须终止：若当成「本批读完了」就会把错判成缩容，
+    // 后面 rows.empty() 直接 break 并回报成功（静默截断重建）。
+    if (!chunkErr.empty()) {
+      if (err) *err = "develop_settings: 扫描照片批次失败: " + chunkErr;
+      return false;
+    }
     if (rows.empty()) break;
     lastId = rows.back().id;
 

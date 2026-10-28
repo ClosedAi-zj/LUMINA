@@ -245,7 +245,13 @@ void registerMethods(Dispatcher* d, EngineServices* s) {
                       (void)params;
                       json::JsonValue out = json::JsonValue::arrayValue();
                       std::string dbErr;
-                      for (const FolderNode& node : library::buildFolderTree(s->photos, &dbErr)) {
+                      const std::vector<FolderNode> tree = library::buildFolderTree(s->photos, &dbErr);
+                      // 空树 + 有错必须显式失败：否则 UI 会把「DB 坏了」渲染成「图库空了」
+                      if (!dbErr.empty()) {
+                        *err = RpcError(kDbError, dbErr);
+                        return json::JsonValue::nullValue();
+                      }
+                      for (const FolderNode& node : tree) {
                         out.addItem(folderNodeToJson(node));
                       }
                       return out;
@@ -897,6 +903,7 @@ void registerMethods(Dispatcher* d, EngineServices* s) {
                         return json::JsonValue::nullValue();
                       }
                       json::JsonValue out = json::JsonValue::arrayValue();
+                      sqlErr.clear();
                       while (stmt->step(&sqlErr)) {
                         json::JsonValue item = json::JsonValue::objectValue();
                         item.setItem("id", std::to_string(stmt->columnInt64(0)));
@@ -911,6 +918,11 @@ void registerMethods(Dispatcher* d, EngineServices* s) {
                         out.addItem(item);
                       }
                       stmt->reset();
+                      // step 失败不得当成「预设已读完」静默截断
+                      if (!sqlErr.empty()) {
+                        *err = RpcError(kDbError, "presets 查询失败: " + sqlErr);
+                        return json::JsonValue::nullValue();
+                      }
                       return out;
                     });
   d->registerMethod("presets.apply",
@@ -926,9 +938,15 @@ void registerMethods(Dispatcher* d, EngineServices* s) {
                       }
                       stmt->bindInt64(1, atoll(presetId.c_str()));
                       stmt->bindText(2, presetId);
+                      sqlErr.clear();
                       if (!stmt->step(&sqlErr)) {
-                        *err = RpcError(kInvalidParams, "preset not found: " + presetId);
                         stmt->reset();
+                        // SQL 失败 ≠ 预设不存在，两者必须分开上报
+                        if (!sqlErr.empty()) {
+                          *err = RpcError(kDbError, "preset 查询失败: " + sqlErr);
+                          return json::JsonValue::nullValue();
+                        }
+                        *err = RpcError(kInvalidParams, "preset not found: " + presetId);
                         return json::JsonValue::nullValue();
                       }
                       std::string text = stmt->columnText(0);
@@ -994,12 +1012,19 @@ void registerMethods(Dispatcher* d, EngineServices* s) {
                       }
                       stmt->bindInt64(1, seqId);
                       int updated = 0;
+                      sqlErr.clear();
                       while (stmt->step(&sqlErr)) {
                         int64_t id = stmt->columnInt64(0);
                         std::string saveErr;
                         if (s->xmp->saveParams(id, source, &saveErr)) ++updated;
                       }
                       stmt->reset();
+                      // 帧枚举中断时必须报错：否则 updated 偏小仍被当成成功，
+                      // 用户以为整段序列已同步（静默部分应用）。
+                      if (!sqlErr.empty()) {
+                        *err = RpcError(kDbError, "edit.syncToSequence 枚举帧失败: " + sqlErr);
+                        return json::JsonValue::nullValue();
+                      }
                       json::JsonValue out = json::JsonValue::objectValue();
                       out.setItem("updated", updated);
                       return out;
@@ -1340,8 +1365,11 @@ void registerMethods(Dispatcher* d, EngineServices* s) {
                         *err = RpcError(kJobNotFound, "job not found: " + std::to_string(jobId));
                         return json::JsonValue::nullValue();
                       }
-                      s->jobs->cancel(jobId);
-                      return json::JsonValue::objectValue();
+                      // 用 cancel 的真实返回值：已完成/已失败的任务取消必须回 false，
+                      // 不能固定回成功让 UI 显示「已取消」而任务其实早跑完了。
+                      json::JsonValue out = json::JsonValue::objectValue();
+                      out.setItem("cancelled", s->jobs->cancel(jobId) ? true : false);
+                      return out;
                     });
   d->registerMethod("import.resolveMissingFolder",
                     [s](const json::JsonValue& params, RpcError* err) -> json::JsonValue {
@@ -1353,6 +1381,9 @@ void registerMethods(Dispatcher* d, EngineServices* s) {
                         return json::JsonValue::nullValue();
                       }
                       int affected = 0;
+                      // 逐张收集写失败（旧实现三个写操作共用一个 e 且从不检查，
+                      // ++affected 无条件累加：写失败也报「已处理 N 张」，纯谎报）
+                      json::JsonValue warnings = json::JsonValue::arrayValue();
                       std::string dbErr;
                       if (action == "relocate" || action == "backfill") {
                         if (newPath.empty()) {
@@ -1428,14 +1459,34 @@ void registerMethods(Dispatcher* d, EngineServices* s) {
                         }
                         stmt->bindText(1, path + "/%");
                         std::vector<int64_t> ids;
+                        dbErr.clear();
                         while (stmt->step(&dbErr)) ids.push_back(stmt->columnInt64(0));
                         stmt->reset();
+                        if (!dbErr.empty()) {
+                          *err = RpcError(kDbError,
+                                          "import.resolveMissingFolder 枚举照片失败: " + dbErr);
+                          return json::JsonValue::nullValue();
+                        }
                         for (int64_t id : ids) {
                           std::string e;
-                          s->photos->setMissing(id, true, &e);
-                          s->photos->setHealth(id, "missing", &e);
-                          s->health->recordIssue(id, "missing", "", "", &e);
-                          ++affected;
+                          if (!s->photos->setMissing(id, true, &e)) {
+                            warnings.addItem("photo " + std::to_string(id) + " 标记缺失失败: " +
+                                             (e.empty() ? std::string("unknown error") : e));
+                            continue;
+                          }
+                          if (!s->photos->setHealth(id, "missing", &e)) {
+                            warnings.addItem("photo " + std::to_string(id) + " 更新健康状态失败: " +
+                                             (e.empty() ? std::string("unknown error") : e));
+                            continue;
+                          }
+                          const int64_t issueId =
+                              s->health->recordIssue(id, "missing", "", "", &e);
+                          if (issueId <= 0) {
+                            warnings.addItem("photo " + std::to_string(id) + " 记录异常失败: " +
+                                             (e.empty() ? std::string("unknown error") : e));
+                            continue;
+                          }
+                          ++affected;  // 只有三步全部成功才计入 affected
                         }
                       } else {
                         *err = RpcError(kInvalidParams, "params.action must be relocate|orphan|backfill");
@@ -1443,6 +1494,7 @@ void registerMethods(Dispatcher* d, EngineServices* s) {
                       }
                       json::JsonValue out = json::JsonValue::objectValue();
                       out.setItem("affected", affected);
+                      if (warnings.size() > 0) out.setItem("warnings", warnings);
                       return out;
                     });
   d->registerMethod("import.listRecentSources",
@@ -1610,21 +1662,41 @@ void registerMethods(Dispatcher* d, EngineServices* s) {
                     });
   d->registerMethod("health.restoreFromBackup",
                     [s](const json::JsonValue& params, RpcError* err) -> json::JsonValue {
-                      int64_t photoId = params.get("photoId").asInt();
-                      std::string restored;
-                      std::string restoreErr;
-                      if (!s->backup->restorePhoto(photoId, &restored, &restoreErr)) {
-                        *err = RpcError(kFileNotFound, restoreErr);
+                      const int64_t photoId = params.get("photoId").asInt();
+                      if (photoId <= 0) {
+                        *err = RpcError(kInvalidParams, "params.photoId is required");
                         return json::JsonValue::nullValue();
                       }
-                      int64_t jobId = s->jobs->start("health.restore", [](JobContext& ctx) {
-                        json::JsonValue result = json::JsonValue::objectValue();
-                        ctx.setResult(result);
-                        ctx.progress(100, "restored");
-                      });
+                      // 真异步：恢复动作（文件复制 + DB 写）在 job 内执行并如实上报进度。
+                      // 旧实现是「RPC 内同步 restorePhoto + 起一个只 setResult/progress(100)
+                      // 的空 job」—— RPC 被长 IO 阻塞（超 UI 10s 超时），而 job 事件是假的。
+                      int64_t jobId =
+                          s->jobs->start("health.restore", [s, photoId](JobContext& ctx) {
+                            ctx.progress(5, "定位备份并准备目标文件");
+                            std::string restored;
+                            std::string restoreErr;
+                            if (!s->backup->restorePhoto(photoId, &restored, &restoreErr)) {
+                              logError("health",
+                                       "restore from backup failed for photo " +
+                                           std::to_string(photoId) + ": " + restoreErr);
+                              json::JsonValue failure = json::JsonValue::objectValue();
+                              failure.setItem("photoId", photoId);
+                              failure.setItem("error", "从备份恢复失败: " + restoreErr);
+                              ctx.progress(100, "restore failed: " + restoreErr);
+                              ctx.fail(failure);
+                              return;
+                            }
+                            ctx.progress(90, "备份文件已就位，刷新照片记录");
+                            json::JsonValue result = json::JsonValue::objectValue();
+                            result.setItem("photoId", photoId);
+                            result.setItem("restoredPath", restored);
+                            ctx.setResult(result);
+                            ctx.progress(100, "restored");
+                          });
                       json::JsonValue out = json::JsonValue::objectValue();
                       out.setItem("jobId", jobId);
-                      out.setItem("restoredPath", restored);
+                      // restoredPath 不再同步返回：恢复由 job 完成，路径经
+                      // event.job.completed.result.restoredPath 下发。
                       return out;
                     });
   d->registerMethod("health.verifyPhotos",
@@ -1660,9 +1732,9 @@ void registerMethods(Dispatcher* d, EngineServices* s) {
                         *err = RpcError(kJobNotFound, "job not found: " + std::to_string(jobId));
                         return json::JsonValue::nullValue();
                       }
-                      s->jobs->cancel(jobId);
+                      // 用 cancel 的真实返回值：已终态的任务必须回 false（不谎报取消成功）
                       json::JsonValue out = json::JsonValue::objectValue();
-                      out.setItem("cancelled", true);
+                      out.setItem("cancelled", s->jobs->cancel(jobId) ? true : false);
                       return out;
                     });
   // WP-A5（@since 1.1.0）：双备份差异报告导出

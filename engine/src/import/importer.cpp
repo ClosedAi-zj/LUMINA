@@ -407,7 +407,9 @@ void Importer::run(const ImportOptions& opts, JobContext& ctx) {
     failure.setItem("imported", 0);
     failure.setItem("failed", 0);
     failure.setItem("error", "扫描失败：" + scanErr);
-    ctx.setResult(failure);
+    // 必须走 fail() 而不是 setResult()：setResult 只会挂上结果，
+    // JobManager 的终态判定仍会给出 done —— 源目录不可访问也报「导入完成」。
+    ctx.fail(failure);
     ctx.progress(100, "scan failed: " + scanErr);
     return;
   }

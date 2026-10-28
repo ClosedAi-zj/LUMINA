@@ -70,6 +70,7 @@ json::JsonValue VirtualCopyService::list(int64_t photoId, rpc::RpcError* err) {
   }
   stmt->bindInt64(1, photoId);
   json::JsonValue out = json::JsonValue::arrayValue();
+  sqlErr.clear();
   while (stmt->step(&sqlErr)) {
     json::JsonValue item = json::JsonValue::objectValue();
     item.setItem("vcopyId", stmt->columnInt64(0));
@@ -78,6 +79,11 @@ json::JsonValue VirtualCopyService::list(int64_t photoId, rpc::RpcError* err) {
     out.addItem(item);
   }
   stmt->reset();
+  // step 失败必须上报，不得把半截列表当完整结果（否则 UI 会误判「副本被删了」）
+  if (!sqlErr.empty()) {
+    *err = rpc::RpcError(rpc::kDbError, "vcopy 列表查询失败: " + sqlErr);
+    return json::JsonValue::nullValue();
+  }
   return out;
 }
 

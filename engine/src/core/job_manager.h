@@ -21,9 +21,10 @@ class JobContext {
  public:
   JobContext(int64_t jobId, std::atomic<bool>* cancelFlag,
              std::function<void(int, const std::string&)> progress,
-             std::function<void(const json::JsonValue&)> setResult)
+             std::function<void(const json::JsonValue&)> setResult,
+             std::function<void(const json::JsonValue&)> fail = nullptr)
       : jobId_(jobId), cancelFlag_(cancelFlag), progress_(std::move(progress)),
-        setResult_(std::move(setResult)) {}
+        setResult_(std::move(setResult)), fail_(std::move(fail)) {}
 
   int64_t jobId() const { return jobId_; }
   bool isCancelled() const { return cancelFlag_ ? cancelFlag_->load() : false; }
@@ -35,12 +36,20 @@ class JobContext {
   void setResult(const json::JsonValue& result) {
     if (setResult_) setResult_(result);
   }
+  // 把任务置为 failed 终态（协议 §4 JobInfo.state=failed + error{code,message}）。
+  // 此前 JobContext 只有 setResult，任务"失败"与"成功"无法区分：导入扫描失败时
+  // 只要 setResult(全 0 统计) 就会被 JobManager 判成 done，UI 以为导入成功。
+  // result 可携带失败时的部分统计；错误文案取 result.error（缺省 "job failed"）。
+  void fail(const json::JsonValue& result) {
+    if (fail_) fail_(result);
+  }
 
  private:
   int64_t jobId_;
   std::atomic<bool>* cancelFlag_;
   std::function<void(int, const std::string&)> progress_;
   std::function<void(const json::JsonValue&)> setResult_;
+  std::function<void(const json::JsonValue&)> fail_;
 };
 
 // 任务状态（对应 ipc-protocol §4 JobInfo）

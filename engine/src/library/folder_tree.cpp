@@ -8,9 +8,25 @@ namespace library {
 
 std::vector<FolderNode> buildFolderTree(db::PhotoDao* photos, std::string* err) {
   std::vector<FolderNode> out;
-  std::string dbErr;
-  std::vector<RootRecord> roots = photos->listRoots(&dbErr);
-  std::vector<db::FolderInfo> folders = photos->listFolders(&dbErr);
+  if (!photos) {
+    if (err) *err = "buildFolderTree: PhotoDao 未就绪";
+    return out;
+  }
+  // 两次查询各用独立错误变量：共用同一个 dbErr 会让第二次覆盖第一次的错误，
+  // 而末尾又从不检查它 —— DB 故障时返回空树，RPC 回 ok:true 空数组，
+  // 用户看到的是「图库突然空了」（静默谎报）。
+  std::string rootsErr;
+  std::vector<RootRecord> roots = photos->listRoots(&rootsErr);
+  if (!rootsErr.empty()) {
+    if (err) *err = "buildFolderTree: 读取库根失败: " + rootsErr;
+    return out;
+  }
+  std::string foldersErr;
+  std::vector<db::FolderInfo> folders = photos->listFolders(&foldersErr);
+  if (!foldersErr.empty()) {
+    if (err) *err = "buildFolderTree: 读取文件夹失败: " + foldersErr;
+    return out;
+  }
   for (const RootRecord& root : roots) {
     FolderNode node;
     node.id = 0;

@@ -115,11 +115,14 @@ bool filterFromJson(const json::JsonValue& v, Filter* out, std::string* err) {
     return false;
   }
   Filter f;
+  // 空数组语义 = 不筛选（与 PhotoDao::buildWhere 的 addInts/addStrings 保持一致）：
+  // 不设置 optional，就不会拼出 `col IN ()` 让整个查询语法报错。
   auto readInts = [&v](const char* key, std::optional<std::vector<int64_t>>* target) {
     const json::JsonValue& arr = v.get(key);
     if (!arr.isArray()) return;
     std::vector<int64_t> list;
     for (const auto& item : arr.arrayItems()) list.push_back(item.asInt());
+    if (list.empty()) return;
     *target = list;
   };
   auto readStrings = [&v](const char* key, std::optional<std::vector<std::string>>* target) {
@@ -127,6 +130,7 @@ bool filterFromJson(const json::JsonValue& v, Filter* out, std::string* err) {
     if (!arr.isArray()) return;
     std::vector<std::string> list;
     for (const auto& item : arr.arrayItems()) list.push_back(item.asString());
+    if (list.empty()) return;
     *target = list;
   };
   readInts("folderIds", &f.folderIds);

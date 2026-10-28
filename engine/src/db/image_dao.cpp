@@ -21,7 +21,7 @@ namespace {
 
 // 绑定值载体（按占位符顺序绑定）
 struct Bind {
-  enum Kind { kInt64, kText } kind = kInt64;
+  enum Kind { kInt64, kText, kNull } kind = kInt64;
   int64_t i = 0;
   std::string s;
   static Bind num(int64_t v) {
@@ -36,14 +36,23 @@ struct Bind {
     b.s = v;
     return b;
   }
+  // 可空数值：sidecar_mtime 的 0 语义是「未知」，必须写 NULL 而非 0
+  // （否则读回侧 hasSidecarMtime=true+mtime 0 → 外部修改检测永久误报）
+  static Bind numOrNull(int64_t v) {
+    if (v > 0) return num(v);
+    Bind b;
+    b.kind = kNull;
+    return b;
+  }
 };
 
 bool bindAll(Stmt* stmt, const std::vector<Bind>& binds, std::string* err) {
   for (size_t idx = 0; idx < binds.size(); ++idx) {
     const int pos = static_cast<int>(idx) + 1;
     const Bind& b = binds[idx];
-    const bool ok =
-        (b.kind == Bind::kInt64) ? stmt->bindInt64(pos, b.i) : stmt->bindText(pos, b.s);
+    const bool ok = (b.kind == Bind::kInt64)   ? stmt->bindInt64(pos, b.i)
+                    : (b.kind == Bind::kText) ? stmt->bindText(pos, b.s)
+                                              : stmt->bindNull(pos);
     if (!ok) {
       if (err) *err = "bind failed at " + std::to_string(pos);
       return false;
@@ -344,7 +353,7 @@ bool ImageDao::relocate(int64_t photoId, int64_t rootId, const std::string& relP
           "UPDATE photos SET sidecar_path=?, sidecar_mtime=? WHERE id=?;", err);
       if (upd && upd->valid()) {
         if (!bindAll(upd.get(),
-                     {Bind::text(newSidecar), Bind::num(mtime), Bind::num(photoId)}, err)) {
+                     {Bind::text(newSidecar), Bind::numOrNull(mtime), Bind::num(photoId)}, err)) {
           return false;
         }
         if (!upd->step(err)) return false;

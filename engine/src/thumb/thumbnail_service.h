@@ -6,6 +6,7 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "core/config.h"
@@ -36,13 +37,19 @@ class ThumbnailService {
  private:
   void generateAsync(int64_t photoId, int size);
   static int scaledHeight(int width, int height, int targetWidth);
+  // 去重键：(photoId, size)。仅按 photoId 去重会让 320 与 640 互相吞掉
+  // ——后到的那次直接 return，永远不生成，UI 那张尺寸永远停在 pending。
+  using ThumbKey = std::pair<int64_t, int>;
 
   core::Config* config_;
   db::PhotoDao* photos_;
   core::ThreadPool* pool_;
   ReadyFn onReady_;
   mutable std::mutex mutex_;
-  std::map<int64_t, bool> inFlight_;
+  std::map<ThumbKey, bool> inFlight_;
+  // 最近一次生成失败的键与原因：getStatus 据此返回 failed 而不是永远 pending
+  // （否则失败后 UI 会无限转圈，且没有任何线索）。
+  std::map<ThumbKey, std::string> failures_;
 };
 
 }  // namespace thumb

@@ -81,7 +81,7 @@ bool XmpMigrator::migrateOne(int64_t photoId, std::string* err) {
   std::lock_guard<std::mutex> lock(photoLock ? *photoLock : kFallbackMutex);
   PhotoRecord p;
   if (!photos_->getById(photoId, &p, err)) {
-    if (err->empty()) *err = "photo not found";
+    if (err && err->empty()) *err = "photo not found";
     return false;
   }
   std::string sidecar = p.sidecarPath.empty() ? replaceExtension(p.filePath, "xmp") : p.sidecarPath;
@@ -138,6 +138,14 @@ bool XmpMigrator::migrateAll(int* migrated, std::string* err,
 }
 
 json::JsonValue XmpMigrator::status(rpc::RpcError* err) {
+  // ⚠ 本方法必须**只读**：RPC 是同步 dispatch，历史库首次调用时若在这里逐张
+  // migrateOne（读-改-写磁盘 + 取 per-photo 写锁），会把整个引擎冻结数分钟
+  // —— 期间连 system.ping 都不回，UI 判定引擎死亡。真正的迁移由 main.cpp 的
+  // 后台 migrationThread（migrateAll）负责，两者扫描的是同一人群：
+  //   migrateAll: SELECT id FROM photos WHERE deleted=0 AND sidecar_path IS NOT NULL
+  //               AND sidecar_path<>''
+  //   status    : 同一 WHERE 条件（见下方 sql）
+  // 因此这里只做版本分布统计，不再触发任何写入。
   json::JsonValue out = json::JsonValue::objectValue();
   out.setItem("current", kXmpSchemaVersion);
   json::JsonValue distribution = json::JsonValue::objectValue();
@@ -145,7 +153,7 @@ json::JsonValue XmpMigrator::status(rpc::RpcError* err) {
   distribution.setItem("1", 0);
   distribution.setItem("2", 0);
   distribution.setItem("3", 0);
-  int64_t migrated = 0;
+  int64_t pending = 0;
   std::string sqlErr;
   std::string sql = "SELECT id, sidecar_path FROM photos WHERE deleted=0 AND sidecar_path IS NOT "
                     "NULL AND sidecar_path<>'' ORDER BY id;";
@@ -155,31 +163,51 @@ json::JsonValue XmpMigrator::status(rpc::RpcError* err) {
     return json::JsonValue::nullValue();
   }
   int64_t total = 0;
+  sqlErr.clear();
   while (stmt->step(&sqlErr)) {
-    int64_t id = stmt->columnInt64(0);
     std::string sidecar = stmt->columnText(1);
     ++total;
     std::string bytes;
     std::string readErr;
-    if (!readFile(sidecar, &bytes, &readErr)) continue;
+    if (!readFile(sidecar, &bytes, &readErr)) {
+      // 读不到就无法判定版本：计入 pending（需要后台迁移尝试），但不在这里修
+      ++pending;
+      continue;
+    }
     std::string parseErr;
     std::unique_ptr<XmpDocument> doc = XmpDocument::parse(bytes, &parseErr);
-    if (!doc) continue;
+    if (!doc) {
+      ++pending;
+      continue;
+    }
     int64_t version = doc->getInt("lumina", "SchemaVersion", 0);
     if (version < kXmpSchemaVersion) {
       distribution.setItem(std::to_string(version),
                            distribution.get(std::to_string(version)).asInt() + 1);
-      std::string oneErr;
-      if (migrateOne(id, &oneErr)) ++migrated;
+      ++pending;
     } else {
       // 已达标（含 v3）与过新（>3，1006 schemaTooNew 提示）都计入当前版本桶
       distribution.setItem("3", distribution.get("3").asInt() + 1);
     }
   }
   stmt->reset();
+  // 扫描中断不得当成「扫完了」：distribution 会偏小、sidecars 计数错，
+  // 用户据此判断「已全部迁移」，属于静默谎报。
+  if (!sqlErr.empty()) {
+    *err = rpc::RpcError(rpc::kDbError, "xmp.migrationStatus 扫描失败: " + sqlErr);
+    return json::JsonValue::nullValue();
+  }
+  if (pending > 0) {
+    logInfo("xmp", "migrationStatus: " + std::to_string(pending) +
+                       " 个 sidecar 待迁移，由启动后台迁移线程处理（status 本身只读）");
+  }
   out.setItem("distribution", distribution);
-  out.setItem("migrated", migrated);
+  // migrated 保留字段（前端 app/src/api/engine.ts 声明为数字）：status 不再写入，
+  // 恒为 0 —— 真实迁移量看后台线程日志，不再用「顺手迁移的张数」冒充状态。
+  out.setItem("migrated", static_cast<int64_t>(0));
+  out.setItem("pending", pending);
   out.setItem("sidecars", total);
+  out.setItem("note", "background migration");
   return out;
 }
 

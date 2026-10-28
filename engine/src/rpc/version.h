@@ -10,7 +10,7 @@ constexpr const char* kProtocolVersion = "1.0";
 constexpr int kProtocolMajor = 1;
 constexpr int kProtocolMinor = 0;
 // 引擎版本（随构建推进递增）
-constexpr const char* kEngineVersion = "1.2.2";
+constexpr const char* kEngineVersion = "1.2.3";
 // sidecar 当前 schema 版本（XMP 映射表 §7；v2 = 引入 lumina:NodeGraph；
 // v3 = masks[*].combine + 94 叶口径（T2.5，Q2/Q3 已批）。v2 读端向后可读。）
 constexpr int kXmpSchemaVersion = 3;

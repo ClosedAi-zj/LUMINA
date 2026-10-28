@@ -5,6 +5,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
+#include <set>
+#include <string>
 #include <utility>
 
 #include "core/logger.h"
@@ -222,9 +225,38 @@ const char* kPerspectiveKeys[][2] = {{"vertical", "perspectiveVertical"},
 json::JsonValue flattenParams(const json::JsonValue& params) {
   json::JsonValue flat = json::JsonValue::objectValue();
   if (!params.isObject()) return flat;
+  // 已知（会被下面展开）的顶层对象键。不在白名单里的对象型顶层键既不会被展开、
+  // 也不会被平铺 —— 旧实现直接 `continue` 静默丢弃，用户设的参数"凭空消失"
+  // 却没有任何痕迹。这里对它们显式告警一次（每个键一次，进程内去重）。
+  static std::mutex warnedMutex;
+  static std::set<std::string> warnedKeys;
   for (const auto& item : params.objectItems()) {
-    if (item.second.isObject()) continue;  // 嵌套对象下面单独展开
-    flat.setItem(item.first, item.second);
+    if (!item.second.isObject()) {
+      flat.setItem(item.first, item.second);
+      continue;
+    }
+    const std::string& key = item.first;
+    bool known = (key == "hsl") || (key == "geometry");
+    if (!known) {
+      for (const NestedMap& m : kNestedFields) {
+        if (key == m.objectKey) {
+          known = true;
+          break;
+        }
+      }
+    }
+    if (known) continue;  // 下面单独展开
+    // 未处理的对象型键：无法安全映射到 sidecar 属性（硬塞会破坏既有兼容写法），
+    // 至少让"参数凭空消失"可见。
+    bool firstTime = false;
+    {
+      std::lock_guard<std::mutex> lock(warnedMutex);
+      firstTime = warnedKeys.insert(key).second;
+    }
+    if (firstTime) {
+      logWarn("xmp", "flattenParams: 未知对象型参数键被忽略（未映射到 sidecar 属性）: " + key +
+                         "，字段数=" + std::to_string(item.second.size()));
+    }
   }
   for (const NestedMap& m : kNestedFields) {
     const json::JsonValue& obj = params.get(m.objectKey);

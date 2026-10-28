@@ -107,6 +107,25 @@ int main() {
   removeFile(std::string(kHome) + "/lumina.db");
   removeFile(std::string(kHome) + "/lumina.db-wal");
   removeFile(std::string(kHome) + "/lumina.db-shm");
+  // 夹具卫生（E23）：清掉上一轮遗留的 *.xmp。本测试所有口径（首跑全量、二跑 0 写、
+  // 增量只含 victim、取消后行数不变）都以「本进程刚写出的 sidecar + 全新库」为前提；
+  // 残留 sidecar 会让「新库 + 旧盘上文件」的组合混进来（夹具不干净，不是被测逻辑）。
+  // 只做清理，不放宽任何断言。
+  {
+    std::vector<DirEntry> entries;
+    std::string lsErr;
+    if (listDir(kPhotoDir, &entries, &lsErr)) {
+      int removed = 0;
+      for (const auto& entry : entries) {
+        if (entry.isDir) continue;
+        if (extensionOf(entry.name) != "xmp") continue;
+        if (removeFile(joinPath(kPhotoDir, entry.name))) ++removed;
+      }
+      if (removed > 0) printf("  [夹具] 清理上轮遗留 sidecar %d 个\n", removed);
+    } else {
+      printf("  [夹具] 列目录失败（不新增断言，仅提示）: %s\n", lsErr.c_str());
+    }
+  }
 
   std::string err;
   core::Config config;

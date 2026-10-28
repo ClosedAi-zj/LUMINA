@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -38,14 +39,21 @@ class ThreadPool {
     using ResultType = decltype(func());
     auto task = std::make_shared<std::packaged_task<ResultType()>>(std::forward<F>(func));
     std::future<ResultType> fut = task->get_future();
+    bool runInline = false;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (stop_) {
-        // 已关闭：就地执行，保证调用方拿到结果而不丢任务
-        (*task)();
-        return fut;
+        runInline = true;
+      } else {
+        queue_.emplace([task]() { (*task)(); });
       }
-      queue_.emplace([task]() { (*task)(); });
+    }
+    if (runInline) {
+      // 已关闭：就地执行，保证调用方拿到结果而不丢任务。
+      // ⚠ 必须在解锁之后执行：持锁内联运行用户任务会让任务内任何再次 submit()
+      // 直接自死锁（std::mutex 不可重入），也会拖住 shutdown()/pendingCount()。
+      (*task)();
+      return fut;
     }
     cv_.notify_one();
     return fut;
@@ -59,10 +67,18 @@ class ThreadPool {
   size_t threadCount() const { return workers_.size(); }
 
   void shutdown() {
+    std::queue<std::function<void()>> dropped;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (stop_) return;
       stop_ = true;
+      // 未开始的任务不会被执行：必须显式留痕（此前是静默丢弃，调用方只看到
+      // 一个永远不完成的 future / 永远 queued 的 job，没有任何线索）。
+      dropped.swap(queue_);
+    }
+    if (!dropped.empty()) {
+      logWarn("pool", "shutdown: dropped " + std::to_string(dropped.size()) +
+                          " queued task(s) that never started");
     }
     cv_.notify_all();
     for (std::thread& t : workers_) {

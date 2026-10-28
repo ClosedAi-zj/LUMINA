@@ -42,9 +42,11 @@ bool HealthWatcher::start(std::string* err) {
 void HealthWatcher::stop() {
   if (!running_.exchange(false)) return;
   stopCounter_.fetch_add(1);
-  // 线程内部用 INFINITE 等待，仅在进程退出时整体回收；这里尽力 join 短暂时间
+  // 必须 join 而非 detach：detach 后 worker 仍可能访问 photos_/health_/notify_（它们
+  // 在 main 退出路径上紧跟着就析构），是确定的 use-after-free。worker 的
+  // WaitForSingleObject 已降到 150ms 轮询，所以 join 最坏等待约 150ms + 一次事件处理。
   for (std::thread& t : threads_) {
-    if (t.joinable()) t.detach();
+    if (t.joinable()) t.join();
   }
   threads_.clear();
   logInfo("health", "fs watcher stopped");
@@ -128,8 +130,9 @@ void HealthWatcher::watchRoot(int64_t rootId, const std::string& rootPath) {
       logWarn("health", "ReadDirectoryChangesW failed for " + rootPath);
       break;
     }
-    // 用 1s 轮询代替无限阻塞，保证 stop() 后线程能及时退出
-    DWORD wait = WaitForSingleObject(ov.hEvent, 1000);
+    // 用 150ms 轮询代替无限阻塞：stop() 现在是 join（不再 detach），
+    // 轮询间隔就是退出延迟上限 —— 1s 会让每个库根线程各拖 1s 退出。
+    DWORD wait = WaitForSingleObject(ov.hEvent, 150);
     if (wait != WAIT_OBJECT_0) {
       // 超时：取消本次未完成的请求，重新发起
       CancelIo(hDir);

@@ -141,6 +141,9 @@ int main(int argc, char** argv) {
   // M2 T2.2b：四级表身份层（relocate 走它重算 sidecar_path，见 image_dao.cpp N10）
   db::ImageDao imageDao(&database, &xmpService);
   edit::EditSessionManager sessions(&xmpService, &photos);
+  // 500ms 防抖落盘线程：此前 tick() 全仓无调用点，setParams 只改内存，
+  // 引擎崩溃/被杀即丢掉整段未 end() 的编辑。启动该线程后 tick() 才真正跑起来。
+  sessions.startFlushThread();
   edit::VirtualCopyService vcopy(&config, &database, &photos, &xmpService);
   health::HealthScanner healthScanner(&config, &photos, &health, server.notifyFn());
   health::BackupService backup(&config, &photos, &database, server.notifyFn());
@@ -251,6 +254,8 @@ int main(int argc, char** argv) {
   jobs::submitRebuildDevelopSettings(&jobs, &database, &xmpService);
 
   // ---- 7.6 诊断看门狗：主循环状态变化/心跳落日志（挂死定位用） ----
+  // 捕获 [&] 引用了 server/pool/Logger，因此必须 join 而非 detach —— detach 的线程
+  // 在退出路径上会读到已析构的 server/pool（UB）。
   std::atomic<bool> watchdogStop{false};
   std::thread watchdog([&]() {
     int last = -1;
@@ -269,26 +274,54 @@ int main(int argc, char** argv) {
       }
     }
   });
-  watchdog.detach();
 
   // ---- 8. 主循环 ----
   int exitCode = server.run();
 
   // ---- 9. 优雅退出：flush sidecar / 停止监测 ----
-  watchdogStop.store(true);
+  // E22：退出段按资源边界分段 try/catch。任何一段抛异常（容器操作、string 分配失败、
+  // 第三方库异常）都不允许跳过它后面那几步收尾：跳过 pool.shutdown() 会让线程池线程
+  // 在 main 返回后继续跑；跳过 database.close() 会让 WAL 不做收尾 checkpoint；
+  // 跳过 config.releaseLock() 会让下次启动误判「已有引擎在跑」直接拒绝启动。
+  // 顺序铁律不变：先停并 join 全部后台线程 → 各服务 shutdown → close → releaseLock。
+  // 所有 logError 都发生在 Logger::shutdown() 之前（否则日志会写进已关闭的 sink）。
+  auto cleanupStep = [](const char* what, auto&& step) {
+    try {
+      step();
+    } catch (const std::exception& ex) {
+      logError("main", std::string("cleanup step failed [") + what + "]: " + ex.what());
+    } catch (...) {
+      logError("main", std::string("cleanup step failed [") + what + "]: unknown exception");
+    }
+  };
+
+  // 立刻 join 看门狗（它只读 server/pool/Logger，最迟 100ms 退出），
+  // 保证后面 server/pool/Logger 析构时没有任何线程还持有它们的引用。
+  cleanupStep("watchdog join", [&]() {
+    watchdogStop.store(true);
+    if (watchdog.joinable()) watchdog.join();
+  });
   // 后台迁移优雅退出：置 stop 后处理完当前张即收尾，join 保证退出前迁移线程已结束
   // （迁移持 per-photo 写锁，须先于 sessions.shutdown 完成，避免与编辑会话写 sidecar 竞争）
-  migrationStop.store(true);
-  if (migrationThread.joinable()) migrationThread.join();
-  if (reconcileThread.joinable()) reconcileThread.join();
-  logInfo("main", "shutting down, pool pending=" + std::to_string(pool.pendingCount()));
-  sessions.shutdown();
-  logInfo("main", "cleanup: sessions flushed");
-  jobs.shutdown();
-  logInfo("main", "cleanup: jobs cancelled");
+  cleanupStep("background thread join", [&]() {
+    migrationStop.store(true);
+    if (migrationThread.joinable()) migrationThread.join();
+    if (reconcileThread.joinable()) reconcileThread.join();
+  });
+  cleanupStep("log pool pending", [&]() {
+    logInfo("main", "shutting down, pool pending=" + std::to_string(pool.pendingCount()));
+  });
+  cleanupStep("sessions flush", [&]() {
+    sessions.shutdown();
+    logInfo("main", "cleanup: sessions flushed");
+  });
+  cleanupStep("jobs cancel", [&]() {
+    jobs.shutdown();
+    logInfo("main", "cleanup: jobs cancelled");
+  });
   // 退出前再补一份当日快照（WP-A2）：首启快照是空库，会话内新增数据必须落进当日备份，
   // 否则"损坏→恢复"会回退到空库（本轮 A2 验证抓到的真实缺陷）。
-  {
+  cleanupStep("shutdown db backup", [&]() {
     std::string outPath;
     std::string bErr;
     if (dbBackup.backupNow(&outPath, &bErr)) {
@@ -296,17 +329,25 @@ int main(int argc, char** argv) {
     } else {
       logWarn("main", "shutdown db backup failed: " + bErr);
     }
-  }
-  dbBackup.stopDaily();
-  logInfo("main", "cleanup: db backup thread stopped");
-  watcher.stop();
-  logInfo("main", "cleanup: watcher stopped");
-  pool.shutdown();
-  logInfo("main", "cleanup: pool joined");
-  database.close();
-  logInfo("main", "cleanup: db closed");
-  config.releaseLock();
-  logInfo("main", "cleanup: lock released");
+    dbBackup.stopDaily();
+    logInfo("main", "cleanup: db backup thread stopped");
+  });
+  cleanupStep("watcher stop", [&]() {
+    watcher.stop();
+    logInfo("main", "cleanup: watcher stopped");
+  });
+  cleanupStep("pool shutdown", [&]() {
+    pool.shutdown();
+    logInfo("main", "cleanup: pool joined");
+  });
+  cleanupStep("database close", [&]() {
+    database.close();
+    logInfo("main", "cleanup: db closed");
+  });
+  cleanupStep("release lock", [&]() {
+    config.releaseLock();
+    logInfo("main", "cleanup: lock released");
+  });
   Logger::instance().shutdown();
   return exitCode;
 }

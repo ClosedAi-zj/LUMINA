@@ -93,6 +93,20 @@ bool resizeImage(const Image& src, Image* dst, int targetWidth, int targetHeight
   return true;
 }
 
+namespace {
+
+// stb 的「写回调」收集器：把编码结果攒进内存，再由 writeFileBytes 走
+// UTF-8→Wide 的宽字符 API 落盘。
+// 起因与解码侧同源：stbi_write_* 的 path 版本内部是窄字符 fopen，Windows 下
+// 任何非 ASCII 路径（中文目录/文件名）都写不出去 —— 导出到「D:/图片/」必然失败。
+void collectBytes(void* context, void* data, int size) {
+  if (!context || !data || size <= 0) return;
+  static_cast<std::string*>(context)->append(static_cast<const char*>(data),
+                                             static_cast<size_t>(size));
+}
+
+}  // namespace
+
 bool encodeJpeg(const std::string& path, const Image& image, int quality, std::string* err) {
   if (quality < 1) quality = 80;
   if (quality > 100) quality = 100;
@@ -101,8 +115,15 @@ bool encodeJpeg(const std::string& path, const Image& image, int quality, std::s
     if (err) *err = "mkdir failed: " + parent;
     return false;
   }
-  if (!stbi_write_jpg(path.c_str(), image.width, image.height, 3, image.pixels.data(), quality)) {
-    if (err) *err = "jpeg write failed: " + path;
+  std::string buffer;
+  if (!stbi_write_jpg_to_func(&collectBytes, &buffer, image.width, image.height, 3,
+                              image.pixels.data(), quality)) {
+    if (err) *err = "jpeg encode failed: " + path;
+    return false;
+  }
+  std::string writeErr;
+  if (!writeFileBytes(path, buffer, &writeErr)) {
+    if (err) *err = "jpeg write failed: " + path + " (" + writeErr + ")";
     return false;
   }
   return true;
@@ -114,9 +135,15 @@ bool encodePng(const std::string& path, const Image& image, std::string* err) {
     if (err) *err = "mkdir failed: " + parent;
     return false;
   }
-  if (!stbi_write_png(path.c_str(), image.width, image.height, 3, image.pixels.data(),
-                      image.width * 3)) {
-    if (err) *err = "png write failed: " + path;
+  std::string buffer;
+  if (!stbi_write_png_to_func(&collectBytes, &buffer, image.width, image.height, 3,
+                              image.pixels.data(), image.width * 3)) {
+    if (err) *err = "png encode failed: " + path;
+    return false;
+  }
+  std::string writeErr;
+  if (!writeFileBytes(path, buffer, &writeErr)) {
+    if (err) *err = "png write failed: " + path + " (" + writeErr + ")";
     return false;
   }
   return true;

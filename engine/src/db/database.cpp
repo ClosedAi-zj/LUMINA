@@ -110,15 +110,59 @@ bool Database::open(const std::string& path, std::string* err) {
     return false;
   }
   // WAL 支撑多读单写；busy_timeout 防瞬时锁冲突
+  // 返回码必须检查：sqlite3_exec 失败时 msg 才被填充，只 free 不看的写法会让
+  // 「foreign_keys 没打开」「WAL 降级成 delete 日志」这类问题完全隐形。
   char* msg = nullptr;
-  sqlite3_exec(db_, "PRAGMA journal_mode=WAL;", nullptr, nullptr, &msg);
-  if (msg) { sqlite3_free(msg); msg = nullptr; }
-  sqlite3_exec(db_, "PRAGMA busy_timeout=5000;", nullptr, nullptr, &msg);
-  if (msg) { sqlite3_free(msg); msg = nullptr; }
-  sqlite3_exec(db_, "PRAGMA synchronous=NORMAL;", nullptr, nullptr, &msg);
-  if (msg) { sqlite3_free(msg); msg = nullptr; }
-  sqlite3_exec(db_, "PRAGMA foreign_keys=ON;", nullptr, nullptr, &msg);
-  if (msg) { sqlite3_free(msg); msg = nullptr; }
+  auto execPragma = [&](const char* sql, bool fatal, const char* what) -> bool {
+    msg = nullptr;
+    const int rc = sqlite3_exec(db_, sql, nullptr, nullptr, &msg);
+    std::string detail = (msg != nullptr) ? std::string(msg) : std::string();
+    if (msg) {
+      sqlite3_free(msg);
+      msg = nullptr;
+    }
+    if (rc == SQLITE_OK) return true;
+    const std::string line = std::string(what) + " 设置失败（rc=" + std::to_string(rc) + "）" +
+                             (detail.empty() ? std::string() : ": " + detail);
+    if (fatal) {
+      logError("db", line);
+    } else {
+      // 只读介质 / 网络盘上 WAL 会失败，此时降级为默认日志模式是可接受的，
+      // 但必须留痕：不能假装自己跑在 WAL 上。
+      logWarn("db", line);
+    }
+    return false;
+  };
+  execPragma("PRAGMA journal_mode=WAL;", /*fatal=*/false, "journal_mode=WAL");
+  execPragma("PRAGMA busy_timeout=5000;", /*fatal=*/false, "busy_timeout=5000");
+  execPragma("PRAGMA synchronous=NORMAL;", /*fatal=*/false, "synchronous=NORMAL");
+  // 外键是 schema 完整性的一部分（files/photos/albums 的 ON DELETE 级联依赖它）。
+  // 打开失败会让删照片留下孤儿行，属于必须显式告警的降级，不能静默继续。
+  const bool fkViaPragma = execPragma("PRAGMA foreign_keys=ON;", /*fatal=*/true, "foreign_keys=ON");
+  // 启动日志输出实际生效值，便于事后验证（而非相信「我设置过」）
+  {
+    int fkOn = 0;
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db_, "PRAGMA foreign_keys;", -1, &st, nullptr) == SQLITE_OK) {
+      if (sqlite3_step(st) == SQLITE_ROW) fkOn = sqlite3_column_int(st, 0);
+      sqlite3_finalize(st);
+    }
+    std::string journalMode = "unknown";
+    st = nullptr;
+    if (sqlite3_prepare_v2(db_, "PRAGMA journal_mode;", -1, &st, nullptr) == SQLITE_OK) {
+      if (sqlite3_step(st) == SQLITE_ROW) {
+        const unsigned char* p = sqlite3_column_text(st, 0);
+        if (p) journalMode = reinterpret_cast<const char*>(p);
+      }
+      sqlite3_finalize(st);
+    }
+    if (fkOn != 1) {
+      logError("db", "PRAGMA foreign_keys 实际生效值为 " + std::to_string(fkOn) + "（期望 1）" +
+                         (fkViaPragma ? "" : "，且设置语句本身失败"));
+    }
+    logInfo("db", "pragmas effective: journal_mode=" + journalMode +
+                      ", foreign_keys=" + std::to_string(fkOn) + ", busy_timeout=5000");
+  }
   logInfo("db", "opened " + path);
   return true;
 }
@@ -127,9 +171,18 @@ void Database::close() {
   std::lock_guard<std::mutex> lock(mutex_);
   cache_.clear();
   if (db_) {
-    sqlite3_close(db_);
+    // 必须先看返回码：sqlite3_close 在仍有未 finalize 的 Stmt / 未提交事务时返回
+    // SQLITE_BUSY 且**不会关闭句柄**。原来无条件 db_=nullptr + logInfo("closed")
+    // 等于日志谎报「已关闭」并泄漏句柄（WAL 文件也不会被正常收尾）。
+    const int rc = sqlite3_close(db_);
+    if (rc != SQLITE_OK) {
+      // 不抛错、不阻塞退出（红线：退出路径不能被一个坏句柄拖住），但必须留痕
+      logWarn("db", std::string("sqlite3_close failed (rc=") + std::to_string(rc) + "): " +
+                        sqlite3_errmsg(db_) + " —— 仍有未释放的语句或未提交事务，句柄泄漏");
+    } else {
+      logInfo("db", "closed");
+    }
     db_ = nullptr;
-    logInfo("db", "closed");
   }
 }
 

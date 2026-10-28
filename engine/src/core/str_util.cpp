@@ -9,6 +9,7 @@
 #endif
 #include <windows.h>
 
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cstdio>
@@ -438,12 +439,39 @@ std::string xmlUnescape(const std::string& s) {
 
 std::string randomHex(size_t len) {
   static const char* kHex = "0123456789abcdef";
-  static uint64_t seed = 0x9E3779B97F4A7C15ULL;
+  // 原子状态：旧实现是 `static uint64_t seed`，被 writeFileAtomic 的临时文件名
+  // 多线程并发调用时是数据竞争（UB），且可能两条线程读到同一 seed 值产出完全相同的
+  // 「随机」串 —— 临时文件名撞车会导致原子写互相覆盖。
+  // 现在：xorshift64* + 原子 CAS，种子混入高精度时钟与进程内计数器。
+  static std::atomic<uint64_t> state{0};
+  uint64_t cur = state.load(std::memory_order_relaxed);
+  if (cur == 0) {
+    // 首次使用：用时间 + 计数器初始化（避免固定种子在跨进程时产生同一序列）
+    static std::atomic<uint64_t> initCounter{0};
+    const uint64_t t = static_cast<uint64_t>(
+        std::chrono::high_resolution_clock::now().time_since_epoch().count());
+    uint64_t seed = t ^ (initCounter.fetch_add(1) * 0x9E3779B97F4A7C15ULL);
+    if (seed == 0) seed = 0x9E3779B97F4A7C15ULL;
+    uint64_t expected = 0;
+    state.compare_exchange_strong(expected, seed, std::memory_order_relaxed);
+    cur = state.load(std::memory_order_relaxed);
+  }
   std::string out;
   out.reserve(len);
   for (size_t i = 0; i < len; ++i) {
-    seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
-    out.push_back(kHex[(seed >> 33) & 0xF]);
+    // 每个字符取一个新的原子步进值：CAS 失败即重试，保证任意两个并发调用者
+    // 永远不会拿到同一个中间状态。
+    uint64_t prev = state.load(std::memory_order_relaxed);
+    uint64_t next = prev;
+    do {
+      next = prev;
+      next ^= next >> 12;
+      next ^= next << 25;
+      next ^= next >> 27;
+      next *= 2685821657736338717ULL;
+      if (next == 0) next = 0x9E3779B97F4A7C15ULL;
+    } while (!state.compare_exchange_weak(prev, next, std::memory_order_relaxed));
+    out.push_back(kHex[(next >> 33) & 0xF]);
   }
   return out;
 }
