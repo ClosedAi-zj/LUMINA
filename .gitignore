@@ -29,3 +29,8 @@ thirdparty/libraw_build.log
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# ---- Python 验证脚本的字节码缓存 ----
+# scripts/ 下有一批 gate/verify 脚本，被 import 时会留 __pycache__，不该进仓库。
+__pycache__/
+*.pyc
