@@ -200,7 +200,7 @@ function TopBar({
 
         {/* 右：引擎状态 + 搜索 + 导出 + 主题 */}
         <div className="ml-auto app-no-drag flex items-center gap-1.5 shrink-0">
-          <span className="flex items-center gap-1.5 text-2xs text-txt3 shrink-0 px-1" title={engineStatus === 'mock' ? '演示模式' : `引擎 ${engineVersion || '1.2.0'}`}>
+          <span className="flex items-center gap-1.5 text-2xs text-txt3 shrink-0 px-1" title={engineStatus === 'mock' ? '演示模式' : `引擎 ${engineVersion || '1.2.1'}`}>
             <span
               className="w-1.5 h-1.5 rounded-full"
               style={{

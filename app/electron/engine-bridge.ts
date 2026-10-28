@@ -111,7 +111,7 @@ export class EngineBridge {
   private breakerTripped = false;
   private eventListeners = new Set<(n: EngineNotification) => void>();
   private lifecycleListeners = new Set<(s: BridgeLifecycle) => void>();
-  private initParams: { uiVersion: string } = { uiVersion: '1.2.0' };
+  private initParams: { uiVersion: string } = { uiVersion: '1.2.1' };
   /** initialize 返回的握手信息（供 UI 状态栏显示引擎版本） */
   engineInfo: Record<string, unknown> = {};
 
@@ -225,7 +225,7 @@ export class EngineBridge {
     this.mode = 'mock';
     this.engineInfo = {
       protocolVersion: PROTOCOL_VERSION,
-      engineVersion: 'mock-1.2.0',
+      engineVersion: 'mock-1.2.1',
       capabilities: { libraw: false, fts5: true, codecs: ['h264', 'h265'], mock: true },
       homeDir: this.homeDir.replace(/\\/g, '/'),
       dbPath: `${this.homeDir.replace(/\\/g, '/')}/lumina.db`,
