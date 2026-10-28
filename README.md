@@ -9,7 +9,7 @@ An all-in-one workstation for landscape and architecture photographers — C++17
 
 | Directory | Contents |
 |---|---|
-| `engine/` | C++ engine: LibRaw RAW decoding, SQLite FTS5, XMP sidecar editing, ingest/health scanning, export (JPG/PNG/TIFF), RPC service |
+| `engine/` | C++ engine: LibRaw RAW decoding, SQLite FTS5, XMP sidecar editing, ingest/health scanning, export (JPG/PNG/TIFF/PSD), RPC service |
 | `app/` | Electron UI: library, develop module (quick/pro dual modes), culling, map, timelapse, portfolio, web client galleries |
 | `scripts/` | Build, gate-test and acceptance scripts (RW2 benchmarks / zero-rewrite / 50k performance / 8-hour stress test, etc.) |
 | `docs/` | PRD, architecture design, IPC protocol, release gate reports |
@@ -22,9 +22,10 @@ Prerequisites: MinGW-w64 (g++ 8.1.0), CMake, Ninja, Node.js 22, Python 3 (test s
 - Engine (C++17 → `build/engine/lumina-engine.exe`): `powershell -File scripts/build-engine.ps1`
 - UI (Electron + React → `build/app/`): `cd app && npm install && npm run typecheck && npm run build`
 - Package (self-contained folder + portable zip → `build/pkg/`): `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-app.ps1 -Zip`
-- Installer (NSIS → `build/pkg/LUMINA-1.1.0-setup.exe`): `makensis scripts/installer.nsi`
+- Installer (NSIS → `build/pkg/LUMINA-1.2.3-setup.exe`): `makensis scripts/installer.nsi`
 - Dev mode (Vite + Electron, hot reload): `powershell -File scripts/dev.ps1`
 
 ## Status
 
-v1.1.0 released (2026-10-24) — download from [Releases](https://github.com/xjjj22/LUMINA/releases/tag/v1.1.0); see `docs/release-gate-1.1.0.md` for release gates.
+v1.2.2 released — installers and portable zips are built into `build/pkg/` (`LUMINA-1.2.2-setup.exe` / `LUMINA-1.2.2-portable.zip`); release gates for 1.1.0 are recorded in `docs/release-gate-1.1.0.md`.
+v1.2.3 is a defect-fix batch on top of v1.2.2 (no new features).

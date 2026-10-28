@@ -71,6 +71,23 @@ Move-Item -LiteralPath (Join-Path $pkgDir 'electron.exe') -Destination $renamedE
 $defaultApp = Join-Path $pkgDir 'resources/default_app.asar'
 if (Test-Path -LiteralPath $defaultApp) { Remove-Item -LiteralPath $defaultApp -Force }
 
+# ---- 1b. 体积精简：Electron 自带 100+ 个语言 pak（约 41MB），本产品只需中英两门。
+# 其余语言删除后 Electron 自动回退 en-US，不影响功能；保留清单之外的任何 pak 都不随包发布。
+$localesDir = Join-Path $pkgDir 'locales'
+$keepLocales = @('en-US.pak', 'zh-CN.pak')
+if (Test-Path -LiteralPath $localesDir) {
+  $removedLocales = 0
+  Get-ChildItem -LiteralPath $localesDir -Filter '*.pak' | ForEach-Object {
+    if ($keepLocales -notcontains $_.Name) {
+      Remove-Item -LiteralPath $_.FullName -Force
+      $removedLocales++
+    }
+  }
+  Write-Host "[pkg] locales trimmed: removed $removedLocales pak(s), kept $($keepLocales -join ',')"
+  $missing = $keepLocales | Where-Object { -not (Test-Path -LiteralPath (Join-Path $localesDir $_)) }
+  if ($missing.Count -gt 0) { throw "[pkg] required locale pak missing after trim: $($missing -join ',')" }
+}
+
 # ---- 2. app entry: resources/app/package.json ----
 # main must stay INSIDE the app dir. A "../build/..." main silently fails to load
 # (Electron resolves main relative to the app root and refuses to escape it), which
@@ -81,7 +98,7 @@ $pkgJson = @'
 {
   "name": "lumina-app",
   "productName": "LUMINA",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "LUMINA photography workspace",
   "main": "electron/main.cjs"
 }
@@ -138,7 +155,7 @@ Write-Host ("[pkg] done -> {0}  ({1:N1} MB)" -f $pkgDir, ($size / 1MB))
 Write-Host "[pkg] exe = $renamedExe"
 
 if ($Zip) {
-    $zipPath = Join-Path $outRoot 'LUMINA-1.2.2-portable.zip'
+    $zipPath = Join-Path $outRoot 'LUMINA-1.2.3-portable.zip'
     if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
     Write-Host "[pkg] compressing -> $zipPath ..."
     Compress-Archive -Path (Join-Path $pkgDir '*') -DestinationPath $zipPath -CompressionLevel Optimal
