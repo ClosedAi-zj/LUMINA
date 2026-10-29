@@ -182,7 +182,8 @@ bool parseTiff(const uint8_t* data, size_t size, ExifInfo* out) {
     any = true;
   }
   if (read(ifd0, 0x0112, 3, nullptr, &num)) {
-    // orientation 暂时不使用，但标记已解析
+    // orientation 1-8：≥5 = 存储位图需旋转显示（竖拍），宽高互换
+    out->orientation = (num >= 1 && num <= 8) ? static_cast<int>(num) : 1;
     any = true;
   }
   if (read(ifd0, 0x0131, 2, &text, nullptr)) { out->software = text; any = true; }

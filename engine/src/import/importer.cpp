@@ -2,6 +2,7 @@
 #include "import/importer.h"
 
 #include <set>
+#include <utility>
 
 #include "core/logger.h"
 #include "core/md5.h"
@@ -129,6 +130,33 @@ bool Importer::findPhotoIdByMd5(const std::string& md5, int64_t* photoId) {
 // 元数据探测（RAW 走 LibRaw，JPEG/PNG 走 EXIF，视频走容器探测）。
 // importOne 在重命名之前就要用（拍摄时间/机型进文件名），故与 buildRecord 分离、
 // 整个导入只探测一次，不重复打开文件。
+
+// 轻量 JPEG 尺寸探测：只扫 SOF0/1/2 标记读宽高（不解码像素，微秒级）
+bool probeJpegSofSize(const std::string& path, int* width, int* height) {
+  std::string bytes;
+  std::string readErr;
+  if (!readFile(path, &bytes, &readErr) || bytes.size() < 16) return false;
+  const auto* d = reinterpret_cast<const unsigned char*>(bytes.data());
+  const size_t n = bytes.size();
+  size_t i = 2;
+  while (i + 9 < n) {
+    if (d[i] != 0xFF) { ++i; continue; }
+    const unsigned char m = d[i + 1];
+    if (m == 0xC0 || m == 0xC1 || m == 0xC2 || m == 0xC3) {
+      if (i + 9 > n) return false;
+      *height = (d[i + 5] << 8) | d[i + 6];
+      *width = (d[i + 7] << 8) | d[i + 8];
+      return *width > 0 && *height > 0;
+    }
+    if (m == 0xD8 || m == 0x01 || (m >= 0xD0 && m <= 0xD7)) { i += 2; continue; }
+    if (i + 4 > n) return false;
+    const uint16_t len = static_cast<uint16_t>((d[i + 2] << 8) | d[i + 3]);
+    if (len < 2) return false;
+    i += 2 + len;
+  }
+  return false;
+}
+
 void Importer::probeMeta(const ScanItem& item, raw::RawMeta* meta) {
   if (item.isRaw) {
     std::string err;
@@ -151,6 +179,22 @@ void Importer::probeMeta(const ScanItem& item, raw::RawMeta* meta) {
       meta->gpsLat = exif.gpsLat;
       meta->gpsLng = exif.gpsLng;
       meta->gpsAlt = exif.gpsAlt;
+      // 竖拍修正：orientation≥5 表示显示需旋转，入库宽高必须是显示方向
+      // （实测：PANA 竖拍 JPG orientation=8，入库写成 6000×4000 横向，UI 全按横图渲染）
+      if (exif.orientation >= 5 && meta->width > 0 && meta->height > 0) {
+        std::swap(meta->width, meta->height);
+      }
+      // EXIF 像素尺寸缺失/解析失败（实测 PANA JPG 两项皆空 → 入库 0×0）：
+      // 轻量扫 SOF 标记拿真实尺寸，只读头部不解码
+      if (meta->width <= 0 || meta->height <= 0) {
+        int w = 0;
+        int h = 0;
+        if (probeJpegSofSize(item.path, &w, &h) && w > 0 && h > 0) {
+          if (exif.orientation >= 5) std::swap(w, h);
+          meta->width = w;
+          meta->height = h;
+        }
+      }
     }
   } else if (item.isVideo) {
     metadata::VideoInfo video;

@@ -450,6 +450,12 @@ target_link_libraries(test_import_scan_single_file PRIVATE lumina_core)
 set_target_properties(test_import_scan_single_file PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
 add_test(NAME import_scan_single_file COMMAND test_import_scan_single_file)
 
+# EXIF orientation 竖拍修正：decodeImageFile 解码后立即转正（缩略图/预览/底图不再侧倒）
+add_executable(test_exif_orientation tests/test_exif_orientation.cpp)
+target_link_libraries(test_exif_orientation PRIVATE lumina_core)
+set_target_properties(test_exif_orientation PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME exif_orientation COMMAND test_exif_orientation)
+
 # 延时 Phase B：imaging 8-bit 色调数学（applyToneCurve / applyColorGrade / computeHistogram luma）
 add_executable(test_tone_grade tests/test_tone_grade.cpp)
 target_link_libraries(test_tone_grade PRIVATE lumina_core)

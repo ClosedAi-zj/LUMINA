@@ -20,6 +20,7 @@ struct ExifInfo {
   int64_t timestampMs = 0;
   int width = 0;
   int height = 0;
+  int orientation = 1;  // EXIF 0x0112（1-8；≥5 表示存储位图需旋转，宽高互换）
   bool hasGps = false;
   double gpsLat = 0.0;
   double gpsLng = 0.0;

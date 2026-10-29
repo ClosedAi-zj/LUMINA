@@ -50,7 +50,107 @@ bool decodeImageFile(const std::string& path, Image* out, std::string* err) {
   out->height = h;
   out->pixels.assign(data, data + static_cast<size_t>(w) * h * 3);
   stbi_image_free(data);
+  // EXIF orientation 立即转正（stb_image 不读 EXIF；竖拍 JPEG 的存储位图是横向的，
+  // 不转正则缩略图/预览/修图底图全部侧倒 —— 用户实测"竖屏变横批"的根因）
+  const int orientation = jpegOrientationFromMemory(reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size());
+  if (orientation != 1) applyOrientation(out, orientation);
   return true;
+}
+
+// ---- EXIF orientation（竖拍修正） ----
+
+int jpegOrientationFromMemory(const unsigned char* data, size_t size) {
+  // 最小 JPEG 标记扫描：SOI → APP1("Exif\0\0") → TIFF header → IFD0 tag 0x0112。
+  // 只读头部不解码，开销可忽略。
+  if (size < 12 || data[0] != 0xFF || data[1] != 0xD8) return 1;
+  size_t i = 2;
+  while (i + 4 < size) {
+    if (data[i] != 0xFF) { ++i; continue; }
+    const unsigned char marker = data[i + 1];
+    if (marker == 0xE1 && i + 10 < size && std::memcmp(data + i + 4, "Exif\0\0", 6) == 0) {
+      const size_t tiff = i + 10;
+      if (tiff + 8 > size) return 1;
+      const bool big = data[tiff] == 'M' && data[tiff + 1] == 'M';
+      auto rd16 = [&](size_t off) -> uint16_t {
+        if (off + 2 > size) return 0;
+        return big ? static_cast<uint16_t>((data[off] << 8) | data[off + 1])
+                   : static_cast<uint16_t>((data[off + 1] << 8) | data[off]);
+      };
+      auto rd32 = [&](size_t off) -> uint32_t {
+        if (off + 4 > size) return 0;
+        return big ? ((static_cast<uint32_t>(data[off]) << 24) | (static_cast<uint32_t>(data[off + 1]) << 16) |
+                      (static_cast<uint32_t>(data[off + 2]) << 8) | data[off + 3])
+                   : ((static_cast<uint32_t>(data[off + 3]) << 24) | (static_cast<uint32_t>(data[off + 2]) << 16) |
+                      (static_cast<uint32_t>(data[off + 1]) << 8) | data[off]);
+      };
+      const uint32_t ifd = rd32(tiff + 4);
+      if (ifd == 0 || ifd + 2 > size - tiff) return 1;
+      const uint16_t n = rd16(tiff + ifd);
+      for (uint16_t k = 0; k < n; ++k) {
+        const size_t e = tiff + ifd + 2 + static_cast<size_t>(k) * 12;
+        if (e + 12 > size) return 1;
+        if (rd16(e) == 0x0112) {
+          const uint16_t v = rd16(e + 8);
+          return (v >= 1 && v <= 8) ? v : 1;
+        }
+      }
+      return 1;
+    }
+    if (marker == 0xD8 || marker == 0x01 || (marker >= 0xD0 && marker <= 0xD7)) { i += 2; continue; }
+    if (i + 4 > size) return 1;
+    const uint16_t len = static_cast<uint16_t>((data[i + 2] << 8) | data[i + 3]);
+    if (len < 2) return 1;
+    i += 2 + len;
+  }
+  return 1;
+}
+
+void applyOrientation(Image* img, int orientation) {
+  if (!img || img->width <= 0 || img->height <= 0 || orientation == 1) return;
+  const int w = img->width;
+  const int h = img->height;
+  const std::vector<uint8_t>& src = img->pixels;
+  auto at = [&](int x, int y, int c) -> uint8_t { return src[(static_cast<size_t>(y) * w + x) * 3 + c]; };
+  std::vector<uint8_t> dst;
+  switch (orientation) {
+    case 2:  // 水平镜像
+    case 3:  // 180
+    case 4:  // 垂直镜像
+      dst.resize(src.size());
+      for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+          int sx = x, sy = y;
+          if (orientation == 2) sx = w - 1 - x;
+          else if (orientation == 3) { sx = w - 1 - x; sy = h - 1 - y; }
+          else sy = h - 1 - y;
+          for (int c = 0; c < 3; ++c) dst[(static_cast<size_t>(y) * w + x) * 3 + c] = at(sx, sy, c);
+        }
+      }
+      break;
+    case 5:    // 转置
+    case 6:    // 顺时针 90
+    case 7:    // 反转置
+    case 8: {  // 逆时针 90
+      dst.resize(src.size());
+      const int W = h, H = w;
+      for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+          int sx, sy;
+          if (orientation == 5) { sx = y; sy = x; }
+          else if (orientation == 6) { sx = y; sy = h - 1 - x; }
+          else if (orientation == 7) { sx = w - 1 - y; sy = h - 1 - x; }
+          else { sx = w - 1 - y; sy = x; }
+          for (int c = 0; c < 3; ++c) dst[(static_cast<size_t>(y) * W + x) * 3 + c] = at(sx, sy, c);
+        }
+      }
+      img->width = W;
+      img->height = H;
+      break;
+    }
+    default:
+      return;  // 未知值：保持原样（不猜测）
+  }
+  img->pixels = std::move(dst);
 }
 
 bool resizeImage(const Image& src, Image* dst, int targetWidth, int targetHeight) {

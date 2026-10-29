@@ -16,8 +16,16 @@ struct Image {
   std::vector<uint8_t> pixels;  // RGBRGB...，size = w*h*3
 };
 
-// 解码 JPEG/PNG/BMP 等（RAW 请走 raw/raw_decoder.cpp）
+// 解码 JPEG/PNG/BMP 等（RAW 请走 raw/raw_decoder.cpp）。
+// JPEG 的 EXIF orientation(1-8) 会在解码后立即应用：返回的位图永远是显示方向
+// （竖拍照片 = 竖位图）。此前忽略 orientation，竖拍照片的缩略图/预览全部侧倒成横图。
 bool decodeImageFile(const std::string& path, Image* out, std::string* err);
+
+// EXIF orientation 工具（导出供测试与特殊管线复用）：
+// 从内存中的 JPEG 字节流读 orientation 标记（非 JPEG / 无标记 / 越界 → 1）
+int jpegOrientationFromMemory(const unsigned char* data, size_t size);
+// 按 orientation(1-8) 原位转正位图（5-8 宽高互换）
+void applyOrientation(Image* img, int orientation);
 
 // 盒式滤波缩放（无需插值参数，质量足够缩略图）
 bool resizeImage(const Image& src, Image* dst, int targetWidth, int targetHeight);
