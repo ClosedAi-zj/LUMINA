@@ -34,6 +34,33 @@ bool ImportScanner::scanFolder(const std::string& rootPath, ScanResult* out,
                                const ProgressFn& progress, const CancelFn& cancelled,
                                std::string* err) {
   if (!dirExists(rootPath)) {
+    // 单文件导入（用户自由选择权：单张照片 / 单个视频可直接导入，不必整夹）：
+    // 路径指向文件本身时按单条目扫描，格式白名单与目录扫描同一套。
+    // scanFolder 名字保留（run()/scanSource 两处调用方零改动即获得该能力）。
+    if (fileExists(rootPath)) {
+      std::string ext = extensionOf(rootPath);
+      if (ext.empty() || (!raw::isSupportedExtension(ext) && !isVideoExtension(ext))) {
+        if (err) *err = "unsupported file type: " + rootPath;
+        return false;
+      }
+      ScanItem item;
+      item.path = rootPath;
+      item.fileName = baseName(rootPath);
+      item.format = raw::formatOfExtension(ext);
+      item.size = fileSize(rootPath);
+      item.mtimeMs = fileMtimeMs(rootPath);
+      item.isRaw = isRawExtension(ext);
+      item.isJpg = isJpegExtension(ext);
+      item.isVideo = isVideoExtension(ext);
+      item.pairKey = baseNameNoExt(rootPath);
+      out->items.push_back(item);
+      out->totalFiles = 1;
+      out->totalBytes = item.size;
+      out->byFormat[item.format] += 1;
+      if (progress) progress(100, "scanned 1 file");
+      logInfo("import", "scan single file " + rootPath + ": " + ext);
+      return true;
+    }
     if (err) *err = "source folder not found: " + rootPath;
     return false;
   }

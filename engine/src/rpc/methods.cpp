@@ -1240,7 +1240,9 @@ void registerMethods(Dispatcher* d, EngineServices* s) {
                         *err = RpcError(kSourceUnreadable, "volume not available: " + path);
                         return json::JsonValue::nullValue();
                       }
-                      if (!dirExists(path)) {
+                      // 单文件导入：kind=file 或路径本身是文件时放行（scanner 按单条目扫描）；
+                      // 只有既非目录又非文件才是真错误（用户自由选择权：单张照片/单个视频不必整夹导入）
+                      if (!dirExists(path) && !fileExists(path)) {
                         *err = RpcError(kFileNotFound, "source folder not found: " + path);
                         return json::JsonValue::nullValue();
                       }

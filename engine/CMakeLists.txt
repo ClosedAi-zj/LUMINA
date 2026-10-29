@@ -444,6 +444,12 @@ target_link_libraries(test_sidecar_mtime_zero PRIVATE lumina_core)
 set_target_properties(test_sidecar_mtime_zero PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
 add_test(NAME sidecar_mtime_zero COMMAND test_sidecar_mtime_zero)
 
+# 单文件导入：scanFolder 路径指向文件本身时按单条目扫描（RAW/JPEG/视频白名单同一套）
+add_executable(test_import_scan_single_file tests/test_import_scan_single_file.cpp)
+target_link_libraries(test_import_scan_single_file PRIVATE lumina_core)
+set_target_properties(test_import_scan_single_file PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME import_scan_single_file COMMAND test_import_scan_single_file)
+
 # 延时 Phase B：imaging 8-bit 色调数学（applyToneCurve / applyColorGrade / computeHistogram luma）
 add_executable(test_tone_grade tests/test_tone_grade.cpp)
 target_link_libraries(test_tone_grade PRIVATE lumina_core)
