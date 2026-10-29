@@ -494,9 +494,28 @@ function SourceStep({
         ))}
 
         <button
+          onClick={async () => {
+            const picked = await window.lumina.pickDirectory({ title: '选择要导入的照片文件夹' });
+            if (picked) onPick({ kind: 'folder', path: picked, label: picked });
+          }}
+          className="flex items-center gap-3 p-3 rounded-lg border text-left border-line bg-card hover:bg-hover"
+        >
+          <span className="w-9 h-6 rounded bg-accent text-onaccent text-2xs font-bold flex items-center justify-center">浏览</span>
+          <span className="flex-1">
+            <span className="block text-xs text-txt">选择文件夹…</span>
+            <span className="block text-2xs text-txt3">从本机任意目录导入照片（RAW / JPG 等）</span>
+          </span>
+          <span className="text-2xs text-accent">浏览 →</span>
+        </button>
+        <button
+          disabled={!recent[0]}
           onClick={() => recent[0] && onPick({ kind: 'folder', path: recent[0], label: recent[0] })}
           className={`flex items-center gap-3 p-3 rounded-lg border text-left ${
-            recent[0] && sourceEquals(recent[0], selectedPath) ? 'border-accent bg-[var(--Lumina-Tokens-accentSoft)]' : 'border-line bg-card hover:bg-hover'
+            recent[0] && sourceEquals(recent[0], selectedPath)
+              ? 'border-accent bg-[var(--Lumina-Tokens-accentSoft)]'
+              : recent[0]
+                ? 'border-line bg-card hover:bg-hover'
+                : 'border-line bg-card opacity-50 cursor-not-allowed'
           }`}
         >
           <span className="w-9 h-6 rounded bg-hover flex items-center justify-center text-txt3">
