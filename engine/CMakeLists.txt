@@ -443,3 +443,9 @@ add_executable(test_sidecar_mtime_zero tests/test_sidecar_mtime_zero.cpp)
 target_link_libraries(test_sidecar_mtime_zero PRIVATE lumina_core)
 set_target_properties(test_sidecar_mtime_zero PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
 add_test(NAME sidecar_mtime_zero COMMAND test_sidecar_mtime_zero)
+
+# 延时 Phase B：imaging 8-bit 色调数学（applyToneCurve / applyColorGrade / computeHistogram luma）
+add_executable(test_tone_grade tests/test_tone_grade.cpp)
+target_link_libraries(test_tone_grade PRIVATE lumina_core)
+set_target_properties(test_tone_grade PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME tone_grade COMMAND test_tone_grade)
