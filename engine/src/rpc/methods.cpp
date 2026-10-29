@@ -22,6 +22,7 @@
 #include "raw/embedded_proxy.h"
 #include "rpc/version.h"
 #include "specialty/denoise_service.h"
+#include "specialty/focus_stack_service.h"
 #include "specialty/hdr_service.h"
 #include "timelapse/timelapse_service.h"
 #include "xmp/xmp_mapper.h"
@@ -1945,6 +1946,18 @@ void registerMethods(Dispatcher* d, EngineServices* s) {
   d->registerMethod("hdr.composite",
                     [hdrSvc, s](const json::JsonValue& params, RpcError* err) -> json::JsonValue {
                       return hdrSvc->composite(params, s->jobs, err);
+                    });
+
+  // ================= 5.13 风光专项（新增）：景深堆栈 =================
+  auto stackSvc =
+      std::make_shared<specialty::FocusStackService>(s->config, s->db, s->photos, s->decoder);
+  d->registerMethod("stack.detectStackGroups",
+                    [stackSvc](const json::JsonValue& params, RpcError* err) -> json::JsonValue {
+                      return stackSvc->detectStackGroups(params, err);
+                    });
+  d->registerMethod("stack.composite",
+                    [stackSvc, s](const json::JsonValue& params, RpcError* err) -> json::JsonValue {
+                      return stackSvc->composite(params, s->jobs, err);
                     });
 
   auto denoiseSvc =

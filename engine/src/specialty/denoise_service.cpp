@@ -18,7 +18,7 @@
 #include "core/jpeg_encoder.h"
 #include "core/logger.h"
 #include "core/str_util.h"
-#include "specialty/hdr_service.h"  // writeRgb8Tiff：与 HDR 产物共用同一套 TIFF 落地
+#include "specialty/compositing_common.h"  // writeRgb8Tiff：与 HDR / 景深堆栈产物共用同一套 TIFF 落地
 #include "xmp/xmp_document.h"
 
 namespace lumina {
@@ -439,7 +439,7 @@ void DenoiseService::runApply(int64_t photoId, int strength, bool luminanceMask,
   }
   ctx.progress(84, "写出降噪缓存");
   std::string encodeErr;
-  if (!writeRgb8Tiff(path, denoised, &encodeErr)) {
+  if (!compositing::writeRgb8Tiff(path, denoised, &encodeErr)) {
     removeFile(path);
     throw std::runtime_error("降噪结果编码失败：" + (encodeErr.empty() ? path : encodeErr));
   }

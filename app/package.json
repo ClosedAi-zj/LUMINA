@@ -1,7 +1,7 @@
 {
   "name": "lumina-app",
   "productName": "LUMINA",
-  "version": "1.2.3",
+  "version": "1.3.0",
   "private": true,
   "description": "LUMINA · 综合图像处理软件（风光摄影为特色模块）· Electron UI",
   "main": "../build/app/electron/main.cjs",

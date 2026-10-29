@@ -28,10 +28,12 @@
 //   夹具清理改为校验 removeFile 返回值 —— 残留 sidecar 删不掉会静默污染下一轮。
 //
 // 注意：T4a 全程不调 endSession()，这正是缺陷的要害 —— 崩溃时没有 end()。
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <string>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 
 #include "core/config.h"
@@ -59,8 +61,13 @@ void check(bool condition, const std::string& name) {
   }
 }
 
-const char* kHome = "D:/LUMINA/build/runtime/test-edit-flush/home";
-const char* kPhotoDir = "D:/LUMINA/build/runtime/test-edit-flush/photos";
+// 每进程独立运行时目录：两次并发 ctest 跑同一二进制时，各自的 home/photos 互不踩踏
+// （之前就是两个 ctest 同时跑本文件、共享 test-edit-flush 目录，造成假失败）。
+const int kPid = getpid();
+const std::string kHome =
+    "D:/LUMINA/build/runtime/test-edit-flush-" + std::to_string(kPid) + "/home";
+const std::string kPhotoDir =
+    "D:/LUMINA/build/runtime/test-edit-flush-" + std::to_string(kPid) + "/photos";
 
 void sleepMs(int ms) { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); }
 
@@ -116,6 +123,10 @@ int main() {
   purgeFixtureFile(std::string(kPhotoDir) + "/flush_b.RW2");
   purgeFixtureFile(std::string(kPhotoDir) + "/flush_c.xmp");
   purgeFixtureFile(std::string(kPhotoDir) + "/flush_c.RW2");
+  purgeFixtureFile(std::string(kPhotoDir) + "/flush_d.xmp");
+  purgeFixtureFile(std::string(kPhotoDir) + "/flush_d.RW2");
+  purgeFixtureFile(std::string(kPhotoDir) + "/flush_e.xmp");
+  purgeFixtureFile(std::string(kPhotoDir) + "/flush_e.RW2");
 
   std::string err;
   core::Config config;
@@ -164,7 +175,9 @@ int main() {
   const int64_t photoA = makePhoto("flush_a.RW2");
   const int64_t photoB = makePhoto("flush_b.RW2");
   const int64_t photoC = makePhoto("flush_c.RW2");
-  check(photoA > 0 && photoB > 0 && photoC > 0, "三张照片就绪");
+  const int64_t photoD = makePhoto("flush_d.RW2");
+  const int64_t photoE = makePhoto("flush_e.RW2");
+  check(photoA > 0 && photoB > 0 && photoC > 0 && photoD > 0 && photoE > 0, "五张照片就绪");
 
   auto sidecarOf = [&](int64_t photoId) -> std::string {
     PhotoRecord rec;
@@ -479,6 +492,100 @@ int main() {
     const bool readBack = paramsOf(photoC, &ex, &ct);
     check(readBack && ct == last, "T4c end 后 sidecar 立刻 = 最后值 " + std::to_string(last) +
                                       "（实际 " + std::to_string(ct) + "）");
+  }
+
+  // ---------------- T5：真并发（外部线程狂打 setParams）下 end(flush=true) 不丢编辑（E20 回归）----------------
+  // 与 T4c 的区别：T4c 是「先连发完、再 end」（串行）。这里让一个**外部**线程在 end()
+  // 执行期间持续打 setParams，制造 setParams 与 flush 的真实数据竞争；end() 返回前
+  // 先把写线程停产，断言 flushed==true 且 sidecar == 停产前最后一笔。这正是 E20 的核心
+  // 不变量：单调序号保证「写盘期间来的新变更」要么被本次收尾补刷覆盖、要么保持 dirty
+  // 下轮写，绝不悄无声息丢（回归前用墙钟时间戳判定，同毫秒时间戳会撞、系统时钟还能回拨）。
+  printf("\n[T5] 外部线程狂打 setParams + end(flush=true) → 不丢最后一笔（E20 回归）\n");
+  {
+    edit::EditSessionManager sessions(&xmp, &photos);
+    rpc::RpcError e;
+    json::JsonValue began = sessions.begin(photoD, &e);
+    const int64_t sid = began.get("sessionId").asInt(-1);
+    check(sid > 0, "begin(photoD) 返回 sessionId（err=" + e.message + "）");
+    const std::string sidecar = sidecarOf(photoD);
+    check(!fileExists(sidecar), "photoD 初始无 sidecar（" + sidecar + "）");
+
+    std::atomic<bool> keepGoing{true};
+    std::atomic<int64_t> lastSet{0};
+    std::thread writer([&]() {
+      int64_t v = 0;
+      while (keepGoing.load(std::memory_order_relaxed)) {
+        std::string pe;
+        if (putContrast(&sessions, sid, ++v, &pe)) {
+          lastSet.store(v, std::memory_order_relaxed);
+        }
+        std::this_thread::yield();
+      }
+    });
+    sleepMs(400);  // 让写线程先打一阵，与 end() 形成真实竞争窗口
+    keepGoing.store(false, std::memory_order_relaxed);
+    writer.join();  // 停产后 end：changeSeq 不再前进，收尾应能追平
+    const int64_t finalV = lastSet.load(std::memory_order_relaxed);
+
+    json::JsonValue ended = sessions.end(sid, /*flush=*/true, &e);
+    check(!ended.isNull(), "T5 end(flush=true) 成功" + (e.message.empty() ? "" : ": " + e.message));
+    check(ended.get("flushed").asBool(false), "T5 flushed == true（停产后续写应追平）");
+    double ex = -999.0;
+    int64_t ct = -999;
+    std::string loadErr;
+    json::JsonValue loaded;
+    const bool didLoad = xmp.loadParams(photoD, &loaded, &loadErr);
+    if (didLoad) {
+      ex = loaded.get("exposure").asDouble(-999.0);
+      ct = loaded.get("contrast").asInt(-999);
+    } else {
+      printf("  [INFO] T5 loadParams 失败: %s\n", loadErr.c_str());
+    }
+    check(didLoad && ct == finalV,
+          "T5 sidecar == 停产前最后一笔 " + std::to_string(finalV) +
+              "（实际 " + std::to_string(ct) + (didLoad ? "" : "，加载失败") + "）");
+  }
+
+  // ---------------- T6：end(flush=true) 全程持续有变更 → 补刷追平失败 → flushed=false（E24 kPending 覆盖）----------------
+  // 之前的 kPending 分支（flushUntilClean 轮次耗尽仍有 changeSeq>flushedSeq）零覆盖。
+  // 这里让写线程在 end() 全程不停，制造「每轮 flush 都追不上」的局面：end() 必须返回
+  // flushed=false（绝不用 true 掩盖盘上是旧值），且不能返回 null（那代表写失败，含义不同）。
+  printf("\n[T6] end 期间持续有变更 → 补刷未追平 → flushed=false（E24 kPending）\n");
+  {
+    edit::EditSessionManager sessions(&xmp, &photos);
+    rpc::RpcError e;
+    json::JsonValue began = sessions.begin(photoE, &e);
+    const int64_t sid = began.get("sessionId").asInt(-1);
+    check(sid > 0, "begin(photoE) 返回 sessionId（err=" + e.message + "）");
+    const std::string sidecar = sidecarOf(photoE);
+    check(!fileExists(sidecar), "photoE 初始无 sidecar（" + sidecar + "）");
+
+    std::atomic<bool> keepGoing{true};
+    std::atomic<int64_t> writerCalls{0};
+    std::atomic<int64_t> writerOk{0};
+    std::thread writer([&]() {
+      int64_t v = 0;
+      // 忙等（不 yield）：确保 end() 的 3 轮 flush 期间 changeSeq 持续前进。否则在快写
+      // 的exe上，主线程 3 轮毫秒级完成、写线程让出时间片后抢不到，会误判成 kClean。
+      while (keepGoing.load(std::memory_order_relaxed)) {
+        std::string pe;
+        ++writerCalls;
+        if (putContrast(&sessions, sid, ++v, &pe)) ++writerOk;
+      }
+    });
+    // 先让写线程真正起来并开始狂打 setParams：否则 end() 微秒级返回，写线程还没被调度就
+    // 已被 join，changeSeq 永远停在 0 → 误判 kClean（实测「调用 0 次」就是这个原因）。
+    sleepMs(30);
+    json::JsonValue ended = sessions.end(sid, /*flush=*/true, &e);
+    keepGoing.store(false, std::memory_order_relaxed);
+    writer.join();
+    printf("  [INFO] T6 写线程：调用 %lld 次，成功 %lld 次\n", writerCalls.load(), writerOk.load());
+    // kPending：end() 返回带 flushed=false 的正常对象（非 null）。null 只在 kWriteFailed 时出现。
+    check(!ended.isNull(), "T6 end 不因 kPending 返回 null（null 仅代表写失败，语义不同）");
+    check(!ended.get("flushed").asBool(true),
+          "T6 flushed == false（补刷未追平，绝不谎报 true）");
+    printf("  [INFO] T6 end 返回 flushed=%s（kPending 路径已覆盖）\n",
+           ended.get("flushed").asBool(false) ? "true" : "false");
   }
 
   printf("\n=== 结果：%s（失败 %d 项）===\n", gFailures == 0 ? "PASS" : "FAIL", gFailures);

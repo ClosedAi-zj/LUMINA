@@ -576,6 +576,8 @@ export interface BracketGroup {
   exposureStops: number;
 }
 
+export interface StackGroup { groupId: number; photoIds: number[]; frameCount: number; }
+
 export interface MapLocation {
   locationId?: number;
   name: string;

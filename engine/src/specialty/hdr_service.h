@@ -25,14 +25,9 @@
 namespace lumina {
 namespace specialty {
 
-// ---- 图像落盘（HDR 产物与降噪缓存共用，禁止各处自己拼文件头）----
-// baseline TIFF：RGB8、未压缩、小端、单条 strip（与 export 的 TIFF 写出同一布局）
-bool writeRgb8Tiff(const std::string& path, const imaging::Image& image, std::string* err);
-// 线性 DNG：TIFF-EP 容器 + DNGVersion 1.4 + PhotometricInterpretation=LinearRaw(34892)，
-// 内嵌 JPEG 预览 SubIFD，使图库缩略图 / raw.getProxy 能直接出图（CFA 已在上游融合为 RGB，
-// 这里不再伪造马赛克，所以是「线性 RGB DNG」而非 CFA DNG）。
-bool writeLinearRgbDng(const std::string& path, const imaging::Image& image,
-                       const std::string& dateTime, std::string* err);
+// ---- 图像落盘（HDR / 景深堆栈产物共用，禁止各处自己拼文件头）----
+// 实现已集中到 specialty/compositing_common.{h,cpp}（命名空间 lumina::compositing），
+// 由 HDR 与景深堆栈同时复用，见 compositing::writeRgb8Tiff / compositing::writeLinearRgbDng。
 
 // 一个包围组（ipc-protocol §5.12 hdr.detectBracketGroups）
 struct BracketGroup {

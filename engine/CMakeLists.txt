@@ -122,6 +122,8 @@ set(LUMINA_SOURCES
   src/gallery/gallery_service.cpp
   src/specialty/hdr_service.cpp
   src/specialty/denoise_service.cpp
+  src/specialty/compositing_common.cpp
+  src/specialty/focus_stack_service.cpp
   src/timelapse/timelapse_service.cpp
 )
 
@@ -413,6 +415,13 @@ add_executable(test_edit_flush_on_tick tests/test_edit_flush_on_tick.cpp)
 target_link_libraries(test_edit_flush_on_tick PRIVATE lumina_core)
 set_target_properties(test_edit_flush_on_tick PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
 add_test(NAME edit_flush_on_tick COMMAND test_edit_flush_on_tick)
+
+# v1.3.0 风光专项：景深堆栈（focus stacking）纯函数回归 ——
+# 不依赖 DB/RPC：直接断言 compositing::focusStackFrames 的区域选择正确性与 estimateShift 的对齐精度。
+add_executable(test_focus_stack tests/test_focus_stack.cpp)
+target_link_libraries(test_focus_stack PRIVATE lumina_core)
+set_target_properties(test_focus_stack PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
+add_test(NAME focus_stack COMMAND test_focus_stack)
 
 # E4/E5：空数组筛选不得生成 `col IN ()`；Database::open 的 PRAGMA foreign_keys 必须真为 1
 add_executable(test_db_invariants tests/test_db_invariants.cpp)

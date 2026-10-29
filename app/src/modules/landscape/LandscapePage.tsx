@@ -9,6 +9,7 @@ import { useLandscape } from './store/landscapeStore';
 import { Button } from '../../components/primitives';
 import { EmptyState } from '../../components/shell';
 import HdrCard from './HdrCard';
+import StackCard from './StackCard';
 import DenoiseCard from './DenoiseCard';
 
 /** v1.1 能力占位卡：按 PRD 版本定位显式标注，不报错。
@@ -41,12 +42,13 @@ function PlannedCard({ icon, title, desc, meta }: { icon: string; title: string;
 }
 
 const ROADMAP: { version: string; label: string; current?: boolean }[] = [
-  { version: 'v1.2.3', label: '稳定性修复批次（编辑落盘 / 退出 / 竞态）', current: true },
+  { version: 'v1.3.0', label: '焦点堆栈合成 + 编辑落盘验证加固', current: true },
+  { version: 'v1.2.3', label: '稳定性修复批次（编辑落盘 / 退出 / 竞态）' },
   { version: 'v1.2.2', label: 'lensfun 镜头库 12 支 + 导出确定性回归' },
   { version: 'v1.2.1', label: 'PNG iCCP + 确定性色彩 profile' },
   { version: 'v1.2.0', label: 'LR 闭环 + PSD 分层导出' },
   { version: 'v1.1.1', label: '核心闭环' },
-  { version: 'v1.1', label: '全景 / 堆栈 / AI 降噪' },
+  { version: 'v1.1', label: '全景 / AI 降噪' },
   { version: 'v1.2', label: '星空 / 打印 / 移动端' },
   { version: 'v2.0', label: '插件市场 / 协作审阅' },
 ];
@@ -54,6 +56,8 @@ const ROADMAP: { version: string; label: string; current?: boolean }[] = [
 export default function LandscapePage() {
   const groupsLoading = useLandscape((s) => s.groupsLoading);
   const groups = useLandscape((s) => s.groups);
+  const stackGroupsLoading = useLandscape((s) => s.stackGroupsLoading);
+  const stackGroups = useLandscape((s) => s.stackGroups);
 
   useEffect(() => {
     void useLandscape.getState().load();
@@ -77,15 +81,17 @@ export default function LandscapePage() {
         <span className="text-2xs text-txt3">COMPOSITE · 合成 / 降噪</span>
         <div className="flex-1" />
         {groupsLoading && <span className="text-2xs text-txt3">检测包围组中…</span>}
+        {stackGroupsLoading && <span className="text-2xs text-txt3">检测堆栈组中…</span>}
         {!groupsLoading && <span className="num text-2xs text-txt3">{groups.length} 个包围组</span>}
+        {!stackGroupsLoading && <span className="num text-2xs text-txt3">· {stackGroups.length} 个堆栈组</span>}
       </div>
 
       <div className="grid grid-cols-3 gap-3">
         <HdrCard />
         {/* 未实装能力的卡片不再报「12 组待拼接 · 每组 6~9 张」这类假统计
-            （引擎没有全景/堆栈检测接口，数字无从得来 → 整行不渲染） */}
+            （引擎没有全景检测接口，数字无从得来 → 整行不渲染） */}
         <PlannedCard icon="⛰" title="全景拼接" desc="柱形 / 球形投影 · 接缝融合 · 自动裁剪" />
-        <PlannedCard icon="◫" title="焦点堆栈" desc="焦点堆栈合成 · 深度图合成 · 半径蒙版" />
+        <StackCard />
         <DenoiseCard />
       </div>
 

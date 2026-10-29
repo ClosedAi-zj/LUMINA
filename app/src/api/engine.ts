@@ -41,6 +41,7 @@ import type {
   SmartCollection,
   SnapshotInfo,
   Sort,
+  StackGroup,
   ThumbItem,
   ThumbSize,
   TimelineBucket,
@@ -213,6 +214,11 @@ export const api = {
     detectBracketGroups: () => rpc.request<BracketGroup[]>('hdr.detectBracketGroups', {}),
     composite: (groupId: number, options: { deghost: boolean; outputFormat: 'tiff' | 'dng'; autoAlign: boolean }) =>
       rpc.request<{ jobId: number }>('hdr.composite', { groupId, options }),
+  },
+  stack: {
+    detectStackGroups: () => rpc.request<StackGroup[]>('stack.detectStackGroups', {}),
+    composite: (groupId: number, options: { autoAlign: boolean; outputFormat: 'tiff' | 'dng'; smoothness: number }) =>
+      rpc.request<{ jobId: number }>('stack.composite', { groupId, options }),
   },
   denoise: {
     apply: (photoId: number, strength: number, luminanceMask: boolean) =>

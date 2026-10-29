@@ -1,7 +1,9 @@
 // 风光专项 · HDR 实现：包围组识别 + 曝光融合 + 线性 DNG / TIFF 落盘 + 产物入库
 // 红线：原片零写入（只读 file_path）；解码失败 / 组失效 / 编码失败一律抛异常让 job 变 failed，
 //      绝不返回一张空图或空 result 假装成功。
+// 共享合成辅助（灰度对齐 / 帧采样 / TIFF·DNG 写出）已迁至 compositing_common。
 #include "specialty/hdr_service.h"
+#include "specialty/compositing_common.h"
 
 #include <algorithm>
 #include <cmath>
@@ -22,37 +24,10 @@ namespace specialty {
 
 namespace {
 
-// ============================ 基础工具 ============================
+// ============================ HDR 专用常量 ============================
 
-constexpr int kOutputMaxShift = 32;      // autoAlign 平移搜索上限（像素）
 constexpr double kGhostLumDelta = 0.15;  // deghost：与中位亮度偏离超过该值即降权
 constexpr double kGhostWeight = 0.15;    // 降权系数
-
-int clampInt(int v, int lo, int hi) {
-  if (v < lo) return lo;
-  if (v > hi) return hi;
-  return v;
-}
-
-double clampDouble(double v, double lo, double hi) {
-  if (v < lo) return lo;
-  if (v > hi) return hi;
-  return v;
-}
-
-void put16(std::string* out, uint16_t v) {
-  out->push_back(static_cast<char>(v & 0xFF));
-  out->push_back(static_cast<char>((v >> 8) & 0xFF));
-}
-
-void put32(std::string* out, uint32_t v) {
-  out->push_back(static_cast<char>(v & 0xFF));
-  out->push_back(static_cast<char>((v >> 8) & 0xFF));
-  out->push_back(static_cast<char>((v >> 16) & 0xFF));
-  out->push_back(static_cast<char>((v >> 24) & 0xFF));
-}
-
-size_t align2(size_t v) { return (v + 1) & ~static_cast<size_t>(1); }
 
 // "2026-10-22 15:47:01.123" → "20261022-154701"（产物文件名用，避免中文与冒号）
 std::string compactStamp(int64_t ms) {
@@ -141,172 +116,11 @@ bool nameParts(const std::string& fileName, std::string* prefix, int64_t* number
   return true;
 }
 
-// ============================ 灰度金字塔（autoAlign）============================
-
-struct GrayImage {
-  int width = 0;
-  int height = 0;
-  std::vector<uint8_t> pixels;
-};
-
-GrayImage toGray(const imaging::Image& image) {
-  GrayImage gray;
-  gray.width = image.width;
-  gray.height = image.height;
-  const size_t count = static_cast<size_t>(image.width) * static_cast<size_t>(image.height);
-  gray.pixels.resize(count);
-  for (size_t i = 0; i < count; ++i) {
-    const uint8_t* px = &image.pixels[i * 3];
-    gray.pixels[i] = static_cast<uint8_t>((77 * px[0] + 150 * px[1] + 29 * px[2]) >> 8);
-  }
-  return gray;
-}
-
-GrayImage halfScale(const GrayImage& src) {
-  GrayImage dst;
-  dst.width = std::max(1, src.width / 2);
-  dst.height = std::max(1, src.height / 2);
-  dst.pixels.assign(static_cast<size_t>(dst.width) * static_cast<size_t>(dst.height), 0);
-  for (int y = 0; y < dst.height; ++y) {
-    for (int x = 0; x < dst.width; ++x) {
-      int sum = 0;
-      int n = 0;
-      for (int oy = 0; oy < 2; ++oy) {
-        const int sy = y * 2 + oy;
-        if (sy >= src.height) continue;
-        for (int ox = 0; ox < 2; ++ox) {
-          const int sx = x * 2 + ox;
-          if (sx >= src.width) continue;
-          sum += src.pixels[static_cast<size_t>(sy) * src.width + sx];
-          ++n;
-        }
-      }
-      dst.pixels[static_cast<size_t>(y) * dst.width + x] =
-          static_cast<uint8_t>(n > 0 ? sum / n : 0);
-    }
-  }
-  return dst;
-}
-
-// 平均绝对差：ref(x,y) 与 tgt(x+dx,y+dy) 的差异。重叠不足 1/3 视为无效匹配。
-double shiftScore(const GrayImage& ref, const GrayImage& tgt, int dx, int dy) {
-  double sum = 0.0;
-  size_t count = 0;
-  for (int y = 0; y < ref.height; ++y) {
-    const int ty = y + dy;
-    if (ty < 0 || ty >= tgt.height) continue;
-    const uint8_t* a = &ref.pixels[static_cast<size_t>(y) * ref.width];
-    const uint8_t* b = &tgt.pixels[static_cast<size_t>(ty) * tgt.width];
-    for (int x = 0; x < ref.width; ++x) {
-      const int tx = x + dx;
-      if (tx < 0 || tx >= tgt.width) continue;
-      const int d = static_cast<int>(a[x]) - static_cast<int>(b[tx]);
-      sum += d < 0 ? -d : d;
-      ++count;
-    }
-  }
-  if (count < ref.pixels.size() / 3 || count == 0) return 1e9;
-  return sum / static_cast<double>(count);
-}
-
-// 曝光归一化：包围曝光各帧整体亮度差好几档，直接比灰度会把「曝光差」误当成「位移」。
-// 所以先做零均值/单位方差拉伸，只保留结构信息（这正是平移搜索需要的）。
-GrayImage normalizeContrast(const GrayImage& src) {
-  const size_t n = src.pixels.size();
-  GrayImage out;
-  out.width = src.width;
-  out.height = src.height;
-  out.pixels.resize(n);
-  if (n == 0) return out;
-  double sum = 0.0;
-  double sum2 = 0.0;
-  for (uint8_t v : src.pixels) {
-    sum += v;
-    sum2 += static_cast<double>(v) * v;
-  }
-  const double mean = sum / static_cast<double>(n);
-  double variance = sum2 / static_cast<double>(n) - mean * mean;
-  if (variance < 1.0) variance = 1.0;
-  const double sd = std::sqrt(variance);
-  for (size_t i = 0; i < n; ++i) {
-    const double v = (static_cast<double>(src.pixels[i]) - mean) / sd * 48.0 + 128.0;
-    out.pixels[i] = static_cast<uint8_t>(clampDouble(v, 0.0, 255.0) + 0.5);
-  }
-  return out;
-}
-
-// 由粗到细的平移搜索：1/8 上 ±(maxShift/8)，逐级细化到全分辨率 ±2，最终钳制到 ±maxShift。
-// 各层都先做曝光归一化；若「不位移」的成绩不比最优差 2% 以上，就判定为无需对齐
-// （宁可不动，也不要把对齐误差当成抖动打进融合结果）。
-void estimateShift(const GrayImage& ref, const GrayImage& target, int maxShift, int* outDx,
-                   int* outDy) {
-  std::vector<GrayImage> refPyr{normalizeContrast(ref)};
-  std::vector<GrayImage> tgtPyr{normalizeContrast(target)};
-  for (int level = 0; level < 3; ++level) {
-    refPyr.push_back(normalizeContrast(halfScale(refPyr.back())));
-    tgtPyr.push_back(normalizeContrast(halfScale(tgtPyr.back())));
-  }
-  int dx = 0;
-  int dy = 0;
-  for (int level = 3; level >= 0; --level) {
-    const int radius = (level == 3) ? std::max(1, maxShift / 8) : 2;
-    const int centerX = (level == 3) ? 0 : dx * 2;
-    const int centerY = (level == 3) ? 0 : dy * 2;
-    double best = 1e18;
-    int bestX = centerX;
-    int bestY = centerY;
-    for (int oy = -radius; oy <= radius; ++oy) {
-      for (int ox = -radius; ox <= radius; ++ox) {
-        const double score = shiftScore(refPyr[level], tgtPyr[level], centerX + ox, centerY + oy);
-        if (score < best) {
-          best = score;
-          bestX = centerX + ox;
-          bestY = centerY + oy;
-        }
-      }
-    }
-    dx = bestX;
-    dy = bestY;
-  }
-  const double scoreZero = shiftScore(refPyr[0], tgtPyr[0], 0, 0);
-  const double scoreBest = shiftScore(refPyr[0], tgtPyr[0], dx, dy);
-  if (scoreZero <= scoreBest * 1.02) {
-    dx = 0;
-    dy = 0;
-  }
-  *outDx = clampInt(dx, -maxShift, maxShift);
-  *outDy = clampInt(dy, -maxShift, maxShift);
-}
-
 // ============================ 曝光融合（Mertens 风格）============================
-
-struct FrameView {
-  const imaging::Image* image = nullptr;
-  int offsetX = 0;
-  int offsetY = 0;
-};
-
-double sampleLum(const FrameView& view, int x, int y) {
-  const imaging::Image& img = *view.image;
-  const int sx = clampInt(x + view.offsetX, 0, img.width - 1);
-  const int sy = clampInt(y + view.offsetY, 0, img.height - 1);
-  const uint8_t* px = &img.pixels[(static_cast<size_t>(sy) * img.width + sx) * 3];
-  return (0.299 * px[0] + 0.587 * px[1] + 0.114 * px[2]) / 255.0;
-}
-
-void sampleRgb(const FrameView& view, int x, int y, double* r, double* g, double* b) {
-  const imaging::Image& img = *view.image;
-  const int sx = clampInt(x + view.offsetX, 0, img.width - 1);
-  const int sy = clampInt(y + view.offsetY, 0, img.height - 1);
-  const uint8_t* px = &img.pixels[(static_cast<size_t>(sy) * img.width + sx) * 3];
-  *r = px[0] / 255.0;
-  *g = px[1] / 255.0;
-  *b = px[2] / 255.0;
-}
-
+// 复用 compositing::FrameView / sampleLum / sampleRgb（同一份采样逻辑，HDR 与景深堆栈共享）。
 // 权重 = 对比度 × 饱和度 × 曝光良好度（Mertens 三要素），deghost 时对偏离中位亮度的帧降权。
 // 亮部帧（过曝）在亮处曝光良好度低、欠曝帧在亮处才接近 0.5，因此自然实现"亮部取欠曝帧"。
-void fuseFrames(const std::vector<FrameView>& frames, bool deghost, JobContext* ctx,
+void fuseFrames(const std::vector<compositing::FrameView>& frames, bool deghost, JobContext* ctx,
                 imaging::Image* out, bool* cancelled) {
   const imaging::Image& ref = *frames[0].image;
   out->width = ref.width;
@@ -331,7 +145,7 @@ void fuseFrames(const std::vector<FrameView>& frames, bool deghost, JobContext* 
         double r = 0.0;
         double g = 0.0;
         double b = 0.0;
-        sampleRgb(frames[i], x, y, &r, &g, &b);
+        compositing::sampleRgb(frames[i], x, y, &r, &g, &b);
         reds[i] = r;
         greens[i] = g;
         blues[i] = b;
@@ -339,9 +153,10 @@ void fuseFrames(const std::vector<FrameView>& frames, bool deghost, JobContext* 
         lums[i] = lum;
 
         // 对比度：四邻域拉普拉斯绝对值（平坦区域权重低 → 纹理区域保留细节）
-        const double lap = std::fabs(sampleLum(frames[i], x - 1, y) + sampleLum(frames[i], x + 1, y) +
-                                     sampleLum(frames[i], x, y - 1) + sampleLum(frames[i], x, y + 1) -
-                                     4.0 * lum);
+        const double lap = std::fabs(compositing::sampleLum(frames[i], x - 1, y) +
+                                     compositing::sampleLum(frames[i], x + 1, y) +
+                                     compositing::sampleLum(frames[i], x, y - 1) +
+                                     compositing::sampleLum(frames[i], x, y + 1) - 4.0 * lum);
         // 饱和度：三通道标准差（色彩饱和处优先，避免灰掉）
         const double mean = (r + g + b) / 3.0;
         const double sat = std::sqrt(((r - mean) * (r - mean) + (g - mean) * (g - mean) +
@@ -382,9 +197,9 @@ void fuseFrames(const std::vector<FrameView>& frames, bool deghost, JobContext* 
         accB = blues[0];
       }
       const size_t di = static_cast<size_t>(x) * 3;
-      dstRow[di + 0] = static_cast<uint8_t>(clampDouble(accR / sumW, 0.0, 1.0) * 255.0 + 0.5);
-      dstRow[di + 1] = static_cast<uint8_t>(clampDouble(accG / sumW, 0.0, 1.0) * 255.0 + 0.5);
-      dstRow[di + 2] = static_cast<uint8_t>(clampDouble(accB / sumW, 0.0, 1.0) * 255.0 + 0.5);
+      dstRow[di + 0] = static_cast<uint8_t>(std::clamp(accR / sumW, 0.0, 1.0) * 255.0 + 0.5);
+      dstRow[di + 1] = static_cast<uint8_t>(std::clamp(accG / sumW, 0.0, 1.0) * 255.0 + 0.5);
+      dstRow[di + 2] = static_cast<uint8_t>(std::clamp(accB / sumW, 0.0, 1.0) * 255.0 + 0.5);
     }
     if (ctx != nullptr && (y % 64) == 0 && ref.height > 0) {
       ctx->progress(45 + static_cast<int>(40LL * (y + 1) / ref.height),
@@ -393,326 +208,7 @@ void fuseFrames(const std::vector<FrameView>& frames, bool deghost, JobContext* 
   }
 }
 
-// ============================ TIFF / DNG 写出 ============================
-
-struct TiffEntry {
-  uint16_t tag = 0;
-  uint16_t type = 0;  // 1=BYTE 2=ASCII 3=SHORT 4=LONG 5=RATIONAL 10=SRATIONAL
-  uint32_t count = 0;
-  uint32_t value = 0;  // 内联值，或值区偏移
-};
-
-void writeEntry(std::string* out, const TiffEntry& e) {
-  put16(out, e.tag);
-  put16(out, e.type);
-  put32(out, e.count);
-  put32(out, e.value);
-}
-
-void sortEntries(std::vector<TiffEntry>* entries) {
-  std::sort(entries->begin(), entries->end(),
-            [](const TiffEntry& a, const TiffEntry& b) { return a.tag < b.tag; });
-}
-
-void appendAsciiBlock(std::string* out, const std::string& text) {
-  out->append(text);
-  out->push_back('\0');
-  if (out->size() % 2 != 0) out->push_back('\0');
-}
-
-void appendShort3(std::string* out, uint16_t a, uint16_t b, uint16_t c) {
-  put16(out, a);
-  put16(out, b);
-  put16(out, c);
-}
-
-void appendRational(std::string* out, uint32_t num, uint32_t den) {
-  put32(out, num);
-  put32(out, den);
-}
-
-void appendSignedRational(std::string* out, int32_t num, int32_t den) {
-  put32(out, static_cast<uint32_t>(num));
-  put32(out, static_cast<uint32_t>(den));
-}
-
-// 线性 DNG 存的是线性光值：sRGB 8bit → 线性 16bit。
-// 若直接把 sRGB 值当线性写，LibRaw 解码时再套一次 sRGB 编码，产物会整体提亮
-// （实测 60 灰会被读回 135 灰），所以必须在这里做逆编码，保证「写进去 == 读回来」。
-const std::vector<uint16_t>& srgbToLinear16Table() {
-  static const std::vector<uint16_t> table = [] {
-    std::vector<uint16_t> values(256, 0);
-    for (int i = 0; i < 256; ++i) {
-      const double v = static_cast<double>(i) / 255.0;
-      const double linear = v <= 0.04045 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4);
-      values[static_cast<size_t>(i)] = static_cast<uint16_t>(linear * 65535.0 + 0.5);
-    }
-    return values;
-  }();
-  return table;
-}
-
 }  // namespace
-
-// baseline RGB8 TIFF（未压缩、小端、单条 strip）：与 export 的 TIFF 布局一致，
-// 保证同一引擎导出的 tif 与 HDR 合成的 tif 用同一套读取假设。
-bool writeRgb8Tiff(const std::string& path, const imaging::Image& image, std::string* err) {
-  if (image.width <= 0 || image.height <= 0) {
-    if (err) *err = "空图像（宽高非法）";
-    return false;
-  }
-  const size_t need = static_cast<size_t>(image.width) * static_cast<size_t>(image.height) * 3;
-  if (image.pixels.size() < need) {
-    if (err) *err = "像素缓冲不足";
-    return false;
-  }
-  if (need > 0xFFFFFFFFu) {
-    if (err) *err = "图像超过 4GB，超出 baseline TIFF 单条 strip 上限";
-    return false;
-  }
-
-  const uint32_t w = static_cast<uint32_t>(image.width);
-  const uint32_t h = static_cast<uint32_t>(image.height);
-  const uint32_t pixelBytes = static_cast<uint32_t>(need);
-
-  std::vector<TiffEntry> ifd;
-  ifd.push_back(TiffEntry{256, 4, 1, w});              // ImageWidth
-  ifd.push_back(TiffEntry{257, 4, 1, h});              // ImageLength
-  ifd.push_back(TiffEntry{258, 3, 3, 0});              // BitsPerSample（值区回填）
-  ifd.push_back(TiffEntry{259, 3, 1, 1});              // Compression = none
-  ifd.push_back(TiffEntry{262, 3, 1, 2});              // Photometric = RGB
-  ifd.push_back(TiffEntry{273, 4, 1, 0});              // StripOffsets（回填）
-  ifd.push_back(TiffEntry{277, 3, 1, 3});              // SamplesPerPixel
-  ifd.push_back(TiffEntry{278, 4, 1, h});              // RowsPerStrip
-  ifd.push_back(TiffEntry{279, 4, 1, pixelBytes});     // StripByteCounts
-  ifd.push_back(TiffEntry{282, 5, 1, 0});              // XResolution（值区回填）
-  ifd.push_back(TiffEntry{283, 5, 1, 0});              // YResolution（值区回填）
-  ifd.push_back(TiffEntry{284, 3, 1, 1});              // PlanarConfiguration = chunky
-  ifd.push_back(TiffEntry{296, 3, 1, 2});              // ResolutionUnit = inch
-  sortEntries(&ifd);
-
-  const size_t ifdOffset = 8;
-  const size_t ifdSize = 2 + ifd.size() * 12 + 4;
-  const size_t bitsOffset = ifdOffset + ifdSize;
-  const size_t xResOffset = bitsOffset + 6;
-  const size_t yResOffset = xResOffset + 8;
-  const size_t dataOffset = align2(yResOffset + 8);
-
-  for (TiffEntry& e : ifd) {
-    if (e.tag == 258) e.value = static_cast<uint32_t>(bitsOffset);
-    if (e.tag == 273) e.value = static_cast<uint32_t>(dataOffset);
-    if (e.tag == 282) e.value = static_cast<uint32_t>(xResOffset);
-    if (e.tag == 283) e.value = static_cast<uint32_t>(yResOffset);
-  }
-
-  std::string out;
-  out.reserve(dataOffset + need);
-  put16(&out, 0x4949);  // "II" 小端
-  put16(&out, 42);
-  put32(&out, static_cast<uint32_t>(ifdOffset));
-  put16(&out, static_cast<uint16_t>(ifd.size()));
-  for (const TiffEntry& e : ifd) writeEntry(&out, e);
-  put32(&out, 0);  // 无下一个 IFD
-  appendShort3(&out, 8, 8, 8);
-  appendRational(&out, 72, 1);
-  appendRational(&out, 72, 1);
-  out.append(reinterpret_cast<const char*>(image.pixels.data()), need);
-  return writeFileBytes(path, out, err);
-}
-
-// 线性 RGB DNG：TIFF-EP + DNG 标签（LinearRaw）。内嵌 JPEG 预览（SubIFD）让图库缩略图、
-// raw.getProxy 与 LibRaw unpack_thumb 能直接出图。
-bool writeLinearRgbDng(const std::string& path, const imaging::Image& image,
-                       const std::string& dateTime, std::string* err) {
-  if (image.width <= 0 || image.height <= 0) {
-    if (err) *err = "空图像（宽高非法）";
-    return false;
-  }
-  const size_t samples = static_cast<size_t>(image.width) * static_cast<size_t>(image.height) * 3;
-  if (image.pixels.size() < samples) {
-    if (err) *err = "像素缓冲不足";
-    return false;
-  }
-  // 线性 DNG 用 16bit 存（8bit 线性在暗部只剩几级，会明显断层）
-  const size_t need = samples * 2;
-  if (need > 0xFFFFFFFFu) {
-    if (err) *err = "图像超过 4GB，超出 DNG 单条 strip 上限";
-    return false;
-  }
-
-  // 内嵌预览：长边 1024（够缩略图与快速预览），编码失败则退化为无预览的 DNG（仍可用）
-  std::string previewJpeg;
-  int previewW = 0;
-  int previewH = 0;
-  {
-    const int longEdge = std::max(image.width, image.height);
-    const int target = std::min(1024, longEdge);
-    double scale = longEdge > 0 ? static_cast<double>(target) / longEdge : 1.0;
-    if (scale > 1.0) scale = 1.0;
-    previewW = std::max(1, static_cast<int>(image.width * scale + 0.5));
-    previewH = std::max(1, static_cast<int>(image.height * scale + 0.5));
-    imaging::Image preview;
-    if (imaging::resizeImage(image, &preview, previewW, previewH)) {
-      std::string jpegErr;
-      if (!core::jpeg::encodeToMemory(preview, 86, &previewJpeg, &jpegErr)) {
-        logWarn("specialty", "dng preview jpeg encode failed: " + jpegErr);
-        previewJpeg.clear();
-      }
-    }
-  }
-
-  const std::string desc = "LUMINA HDR composite - linear RGB DNG";
-  const std::string make = "LUMINA";
-  const std::string model = "LUMINA HDR Composite";
-  const std::string software = "LUMINA 1.1.1";
-  const std::string uniqueModel = "LUMINA HDR Composite";
-
-  const uint32_t w = static_cast<uint32_t>(image.width);
-  const uint32_t h = static_cast<uint32_t>(image.height);
-  const uint32_t pixelBytes = static_cast<uint32_t>(need);
-
-  std::vector<TiffEntry> ifd;  // IFD0
-  ifd.push_back(TiffEntry{0x0100, 4, 1, w});                          // ImageWidth
-  ifd.push_back(TiffEntry{0x0101, 4, 1, h});                          // ImageLength
-  ifd.push_back(TiffEntry{0x0102, 3, 3, 0});                          // BitsPerSample
-  ifd.push_back(TiffEntry{0x0103, 3, 1, 1});                          // Compression = none
-  ifd.push_back(TiffEntry{0x0106, 3, 1, 34892});                      // LinearRaw
-  ifd.push_back(TiffEntry{0x010E, 2, static_cast<uint32_t>(desc.size() + 1), 0});
-  ifd.push_back(TiffEntry{0x010F, 2, static_cast<uint32_t>(make.size() + 1), 0});
-  ifd.push_back(TiffEntry{0x0110, 2, static_cast<uint32_t>(model.size() + 1), 0});
-  ifd.push_back(TiffEntry{0x0111, 4, 1, 0});                          // StripOffsets
-  ifd.push_back(TiffEntry{0x0112, 3, 1, 1});                          // Orientation
-  ifd.push_back(TiffEntry{0x0115, 3, 1, 3});                          // SamplesPerPixel
-  ifd.push_back(TiffEntry{0x0117, 4, 1, pixelBytes});                 // StripByteCounts
-  ifd.push_back(TiffEntry{0x011C, 3, 1, 1});                          // PlanarConfiguration
-  ifd.push_back(TiffEntry{0x0131, 2, static_cast<uint32_t>(software.size() + 1), 0});
-  ifd.push_back(TiffEntry{0x0132, 2, static_cast<uint32_t>(dateTime.size() + 1), 0});
-  const bool hasPreview = !previewJpeg.empty();
-  if (hasPreview) ifd.push_back(TiffEntry{0x014A, 4, 1, 0});           // SubIFDs
-  ifd.push_back(TiffEntry{0xC612, 1, 4, 0x00000401u});                 // DNGVersion 1.4.0.0
-  ifd.push_back(TiffEntry{0xC613, 1, 4, 0x00000101u});                 // DNGBackwardVersion 1.1.0.0
-  ifd.push_back(TiffEntry{0xC614, 2, static_cast<uint32_t>(uniqueModel.size() + 1), 0});
-  ifd.push_back(TiffEntry{0xC61A, 3, 1, 0});                           // BlackLevel
-  ifd.push_back(TiffEntry{0xC61D, 4, 1, 65535});                        // WhiteLevel（16bit）
-  ifd.push_back(TiffEntry{0xC621, 10, 9, 0});                          // ColorMatrix1
-  ifd.push_back(TiffEntry{0xC628, 5, 3, 0});                           // AsShotNeutral
-  ifd.push_back(TiffEntry{0xC65A, 3, 1, 21});                          // CalibrationIlluminant1 = D65
-  sortEntries(&ifd);
-
-  // 值区块（顺序即落盘顺序）
-  std::string blockDesc;
-  appendAsciiBlock(&blockDesc, desc);
-  std::string blockMake;
-  appendAsciiBlock(&blockMake, make);
-  std::string blockModel;
-  appendAsciiBlock(&blockModel, model);
-  std::string blockSoftware;
-  appendAsciiBlock(&blockSoftware, software);
-  std::string blockDateTime;
-  appendAsciiBlock(&blockDateTime, dateTime);
-  std::string blockUnique;
-  appendAsciiBlock(&blockUnique, uniqueModel);
-  std::string blockBits;
-  appendShort3(&blockBits, 16, 16, 16);
-  // XYZ(D65) → 线性 sRGB（Bruce Lindbloom 标准矩阵），×10000 转成有理数
-  std::string blockMatrix;
-  {
-    static const double kColorMatrix[9] = {3.2404542, -1.5371385, -0.4985314,
-                                           -0.9692660, 1.8760108,  0.0415560,
-                                           0.0556434, -0.2040259,  1.0572252};
-    for (double v : kColorMatrix) {
-      appendSignedRational(&blockMatrix, static_cast<int32_t>(std::lround(v * 10000.0)), 10000);
-    }
-  }
-  std::string blockNeutral;
-  appendRational(&blockNeutral, 1, 1);
-  appendRational(&blockNeutral, 1, 1);
-  appendRational(&blockNeutral, 1, 1);
-
-  const std::string* blocks[] = {&blockDesc,     &blockMake,   &blockModel, &blockSoftware,
-                                 &blockDateTime, &blockUnique, &blockBits,  &blockMatrix,
-                                 &blockNeutral};
-  const size_t blockCount = sizeof(blocks) / sizeof(blocks[0]);
-
-  const size_t ifdOffset = 8;
-  const size_t ifdSize = 2 + ifd.size() * 12 + 4;
-  std::vector<uint32_t> blockOffsets(blockCount, 0);
-  size_t cursor = ifdOffset + ifdSize;
-  for (size_t i = 0; i < blockCount; ++i) {
-    blockOffsets[i] = static_cast<uint32_t>(cursor);
-    cursor = align2(cursor + blocks[i]->size());
-  }
-  const size_t dataOffset = align2(cursor);
-  const size_t previewIfdOffset = align2(dataOffset + need);
-
-  const size_t previewEntryCount = hasPreview ? 11 : 0;
-  const size_t previewIfdSize = hasPreview ? (2 + previewEntryCount * 12 + 4) : 0;
-  const size_t previewBitsOffset = previewIfdOffset + previewIfdSize;
-  const size_t previewJpegOffset = align2(previewBitsOffset + 6);
-
-  for (TiffEntry& e : ifd) {
-    if (e.tag == 0x0102) e.value = blockOffsets[6];
-    if (e.tag == 0x010E) e.value = blockOffsets[0];
-    if (e.tag == 0x010F) e.value = blockOffsets[1];
-    if (e.tag == 0x0110) e.value = blockOffsets[2];
-    if (e.tag == 0x0111) e.value = static_cast<uint32_t>(dataOffset);
-    if (e.tag == 0x0131) e.value = blockOffsets[3];
-    if (e.tag == 0x0132) e.value = blockOffsets[4];
-    if (e.tag == 0x014A) e.value = static_cast<uint32_t>(previewIfdOffset);
-    if (e.tag == 0xC614) e.value = blockOffsets[5];
-    if (e.tag == 0xC621) e.value = blockOffsets[7];
-    if (e.tag == 0xC628) e.value = blockOffsets[8];
-  }
-
-  std::string out;
-  out.reserve(previewJpegOffset + previewJpeg.size() + need);
-  put16(&out, 0x4949);
-  put16(&out, 42);
-  put32(&out, static_cast<uint32_t>(ifdOffset));
-  put16(&out, static_cast<uint16_t>(ifd.size()));
-  for (const TiffEntry& e : ifd) writeEntry(&out, e);
-  put32(&out, 0);
-  for (size_t i = 0; i < blockCount; ++i) {
-    out.append(*blocks[i]);
-    if (out.size() % 2 != 0) out.push_back('\0');
-  }
-  if (out.size() < dataOffset) out.append(dataOffset - out.size(), '\0');
-  {
-    // 16bit 线性（小端）写入
-    const std::vector<uint16_t>& table = srgbToLinear16Table();
-    out.reserve(out.size() + need);
-    for (size_t i = 0; i < samples; ++i) {
-      const uint16_t value = table[image.pixels[i]];
-      out.push_back(static_cast<char>(value & 0xFF));
-      out.push_back(static_cast<char>((value >> 8) & 0xFF));
-    }
-  }
-
-  if (hasPreview) {
-    if (out.size() < previewIfdOffset) out.append(previewIfdOffset - out.size(), '\0');
-    std::vector<TiffEntry> sub;
-    sub.push_back(TiffEntry{0x00FE, 4, 1, 1});                       // NewSubFileType = preview
-    sub.push_back(TiffEntry{0x0100, 4, 1, static_cast<uint32_t>(previewW)});
-    sub.push_back(TiffEntry{0x0101, 4, 1, static_cast<uint32_t>(previewH)});
-    sub.push_back(TiffEntry{0x0102, 3, 3, static_cast<uint32_t>(previewBitsOffset)});
-    sub.push_back(TiffEntry{0x0103, 3, 1, 7});                        // Compression = JPEG
-    sub.push_back(TiffEntry{0x0106, 3, 1, 6});                        // Photometric = YCbCr
-    sub.push_back(TiffEntry{0x0111, 4, 1, static_cast<uint32_t>(previewJpegOffset)});
-    sub.push_back(TiffEntry{0x0115, 3, 1, 3});
-    sub.push_back(TiffEntry{0x0117, 4, 1, static_cast<uint32_t>(previewJpeg.size())});
-    sub.push_back(TiffEntry{0x0201, 4, 1, static_cast<uint32_t>(previewJpegOffset)});
-    sub.push_back(TiffEntry{0x0202, 4, 1, static_cast<uint32_t>(previewJpeg.size())});
-    sortEntries(&sub);
-    put16(&out, static_cast<uint16_t>(sub.size()));
-    for (const TiffEntry& e : sub) writeEntry(&out, e);
-    put32(&out, 0);
-    appendShort3(&out, 8, 8, 8);
-    if (out.size() < previewJpegOffset) out.append(previewJpegOffset - out.size(), '\0');
-    out.append(previewJpeg);
-  }
-
-  return writeFileAtomic(path, out, err);
-}
 
 // ============================ HdrService ============================
 
@@ -1064,20 +560,21 @@ void HdrService::runComposite(const std::vector<int64_t>& photoIds, const HdrOpt
   ctx.progress(30, "解码完成");
 
   // ---- 3. 平移对齐（autoAlign）----
-  std::vector<FrameView> views(static_cast<size_t>(total));
+  std::vector<compositing::FrameView> views(static_cast<size_t>(total));
   for (int i = 0; i < total; ++i) {
     views[static_cast<size_t>(i)].image = &frames[static_cast<size_t>(i)];
   }
   if (options.autoAlign) {
-    const GrayImage grayRef = toGray(ref);
+    const compositing::GrayImage grayRef = compositing::toGray(ref);
     int maxShift = 0;
     for (int i = 0; i < total; ++i) {
       if (ctx.isCancelled()) return;
       if (i == refIndex) continue;
-      const GrayImage grayTarget = toGray(frames[static_cast<size_t>(i)]);
+      const compositing::GrayImage grayTarget =
+          compositing::toGray(frames[static_cast<size_t>(i)]);
       int dx = 0;
       int dy = 0;
-      estimateShift(grayRef, grayTarget, kOutputMaxShift, &dx, &dy);
+      compositing::estimateShift(grayRef, grayTarget, compositing::kOutputMaxShift, &dx, &dy);
       views[static_cast<size_t>(i)].offsetX = dx;
       views[static_cast<size_t>(i)].offsetY = dy;
       maxShift = std::max(maxShift, std::max(dx < 0 ? -dx : dx, dy < 0 ? -dy : dy));
@@ -1106,9 +603,10 @@ void HdrService::runComposite(const std::vector<int64_t>& photoIds, const HdrOpt
   std::string encodeErr;
   const bool encoded =
       options.outputFormat == "tiff"
-          ? writeRgb8Tiff(path, fused, &encodeErr)
-          : writeLinearRgbDng(path, fused, dngDateTime(records[static_cast<size_t>(refIndex)].capturedAt),
-                              &encodeErr);
+          ? compositing::writeRgb8Tiff(path, fused, &encodeErr)
+          : compositing::writeLinearRgbDng(
+                path, fused, dngDateTime(records[static_cast<size_t>(refIndex)].capturedAt),
+                &encodeErr);
   if (!encoded) {
     removeFile(path);
     throw std::runtime_error("合成结果编码失败：" + (encodeErr.empty() ? path : encodeErr));
