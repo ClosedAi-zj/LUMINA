@@ -461,3 +461,10 @@ add_executable(test_tone_grade tests/test_tone_grade.cpp)
 target_link_libraries(test_tone_grade PRIVATE lumina_core)
 set_target_properties(test_tone_grade PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
 add_test(NAME tone_grade COMMAND test_tone_grade)
+
+# PERF：develop.render CPU 管线成本基准（仅测量，不改 app/ 与 develop.render 契约）。
+# 复刻 methods.cpp:566-578 的缩放 + displayToPlanBuf/runEditPlan/planBufToDisplay，
+# 在 longEdge=1024/1280/1600 下计时。直接运行二进制即可打印 ms；不进 ctest 门禁。
+add_executable(test_develop_render_perf tests/test_develop_render_perf.cpp)
+target_link_libraries(test_develop_render_perf PRIVATE lumina_core)
+set_target_properties(test_develop_render_perf PROPERTIES LINK_FLAGS "${LUMINA_LINK_FLAGS}")
