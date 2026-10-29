@@ -1,6 +1,7 @@
 /**
- * 右侧渲染输出面板（Phase A）：LR 风格可折叠分区（去闪 / 输出参数 / 渲染队列 / 调色）+
- * 开始渲染。调色（色调曲线 + 颜色分级三色轮）仅存 UI 状态，引擎接入留 Phase B。
+ * 右侧面板（对照 LapseOne/Polarr 参考重排）：
+ * 顶部 RGB 直方图大图（panel 变体）→ 去闪 → 调色（Polarr 风格曲线编辑器 + 彩虹色轮）→
+ * 输出参数 → 开始渲染。调色参数随渲染透传引擎 colorAdjust（不再是 Phase B 占位）。
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -9,11 +10,14 @@ import { useJobProgress } from '../../api/hooks';
 import { Button, Segmented, Slider } from '../../components/primitives';
 import { LrPanel } from '../../components/LrPanel';
 import { formatEta, formatCount } from '../../utils/format';
+import Histogram from './Histogram';
 
 const DEFlicker_STRENGTH_DEFAULT = 50;
 
 export default function RenderPanel() {
   const detail = useTimelapse((s) => s.detail);
+  const selectedSeqId = useTimelapse((s) => s.selectedSeqId);
+  const frameNo = useTimelapse((s) => s.frameNo);
   const resolution = useTimelapse((s) => s.resolution);
   const fps = useTimelapse((s) => s.fps);
   const codec = useTimelapse((s) => s.codec);
@@ -43,14 +47,17 @@ export default function RenderPanel() {
     <aside className="shrink-0 w-[300px] border-l border-line flex flex-col overflow-y-auto" style={{ background: 'var(--Lumina-Tokens-panel)' }}>
       <div className="p-3 flex flex-col gap-3">
         <div className="flex items-center">
-          <span className="text-xs font-medium">渲染输出</span>
+          <span className="text-xs font-medium">调色与修复</span>
           <div className="flex-1" />
           {activeCount > 0 && (
-            <span className="num text-2xs" style={{ color: 'var(--Lumina-Tokens-gold)' }}>
-              {activeCount} 个进行中
+            <span className="num text-2xs" style={{ color: 'var(--Lumina-Tokens-accent)' }}>
+              {activeCount} 个任务进行中
             </span>
           )}
         </div>
+
+        {/* RGB 直方图（右栏顶部大图，对照 LapseOne 参考布局） */}
+        <Histogram seqId={selectedSeqId} frameNo={frameNo} variant="panel" />
 
         {/* 去闪操作 */}
         <LrPanel title="去闪（Deflicker）" right={(analyzeJob?.state === 'running' || deflickerJob?.state === 'running') ? <span className="text-2xs" style={{ color: 'var(--Lumina-Tokens-accent)' }}>进行中…</span> : undefined}>
@@ -103,6 +110,14 @@ export default function RenderPanel() {
           </div>
         </LrPanel>
 
+        {/* 调色：参数随渲染透传引擎 colorAdjust（引擎对零值≈恒等） */}
+        <LrPanel title="调色" right={<span className="text-2xs text-txt3">随渲染生效</span>}>
+          <div className="px-2.5 flex flex-col gap-3">
+            <PolarrCurveEditor />
+            <PolarrColorWheels />
+          </div>
+        </LrPanel>
+
         {/* 输出参数 */}
         <LrPanel title="输出参数">
           <div className="px-2.5 flex flex-col gap-2.5">
@@ -146,53 +161,6 @@ export default function RenderPanel() {
           </div>
         </LrPanel>
 
-        {/* 渲染队列 */}
-        <LrPanel title="渲染队列">
-          <div className="px-2.5">
-            <div className="flex items-center mb-1.5">
-              <div className="flex-1" />
-              <button className="text-2xs text-txt3 hover:text-txt" onClick={() => void useTimelapse.getState().refreshJobs()}>
-                刷新
-              </button>
-            </div>
-            {renderJobs.length === 0 && <div className="text-2xs text-txt3 py-2">暂无渲染任务</div>}
-            <div className="flex flex-col gap-1.5">
-              {renderJobs.slice(0, 4).map((j) => (
-                <div key={j.jobId} className="rounded-md border border-line p-2" style={{ background: 'var(--Lumina-Tokens-card)' }}>
-                  <div className="flex items-center gap-1.5">
-                    <span className="num text-2xs text-txt2 truncate flex-1">任务 {j.jobId}</span>
-                    <span
-                      className="text-2xs shrink-0"
-                      style={{
-                        color:
-                          j.state === 'running' ? 'var(--Lumina-Tokens-accent)' : j.state === 'done' ? 'var(--Lumina-Tokens-success)' : j.state === 'failed' ? 'var(--Lumina-Tokens-danger)' : 'var(--Lumina-Tokens-textMuted)',
-                      }}
-                    >
-                      {j.state === 'running' ? '渲染中' : j.state === 'done' ? '完成' : j.state === 'failed' ? '失败' : j.state === 'queued' ? '排队' : '已取消'}
-                    </span>
-                  </div>
-                  {(j.state === 'running' || j.state === 'queued') && (
-                    <div className="mt-1 h-1 rounded-full overflow-hidden" style={{ background: 'var(--Lumina-Tokens-hover)' }}>
-                      <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${Math.max(2, j.progress)}%` }} />
-                    </div>
-                  )}
-                  {j.state === 'running' && j.etaMs !== null && <div className="num text-2xs text-txt3 mt-0.5">剩余 {formatEta(j.etaMs)}</div>}
-                  {j.state === 'failed' && j.detail && <div className="text-2xs mt-0.5" style={{ color: 'var(--Lumina-Tokens-danger)' }}>{j.detail}</div>}
-                </div>
-              ))}
-            </div>
-          </div>
-        </LrPanel>
-
-        {/* 调色（仅存 UI 状态 · 引擎接入留 Phase B） */}
-        <LrPanel title="调色" right={<span className="text-2xs text-txt3">Phase B 接入</span>}>
-          <div className="px-2.5 flex flex-col gap-2">
-            <div className="text-2xs text-txt3">色调曲线与颜色分级为预览态参数，将于 Phase B 接入渲染。</div>
-            <ToneCurveEditor />
-            <ColorGradeWheels />
-          </div>
-        </LrPanel>
-
         {/* 开始渲染 */}
         <div className="flex flex-col gap-1.5">
           <Button variant="primary" size="lg" disabled={!detail || detail.frameCount === 0} onClick={() => void useTimelapse.getState().render()}>
@@ -209,19 +177,42 @@ export default function RenderPanel() {
   );
 }
 
-// ---------- 色调曲线（参数化 S 曲线：阴影 / 中间调 / 高光 三点可调） ----------
+// ---------- 色调曲线（Polarr 风格：4×4 暗网格 + 白 S 曲线 + 圆形控制点 + 对角参考线 + 黑白渐变轴） ----------
 
 type ToneZone = 'shadow' | 'mid' | 'high';
 
-function ToneCurveEditor() {
+function PolarrCurveEditor() {
   const toneCurve = useTimelapse((s) => s.toneCurve);
   const setToneCurve = useTimelapse((s) => s.setToneCurve);
   const ref = useRef<SVGSVGElement>(null);
   const dragRef = useRef<ToneZone | null>(null);
 
-  const X: Record<ToneZone, number> = { shadow: 15, mid: 50, high: 85 };
-  const yOf = (v: number) => 50 - (v / 100) * 40; // value -100..100 → y 10..90
-  const path = `M0,50 L${X.shadow},${yOf(toneCurve.shadow)} L${X.mid},${yOf(toneCurve.mid)} L${X.high},${yOf(toneCurve.high)} L100,50`;
+  // 控制点锚在 4×4 网格交点上（Polarr 质感的关键之一）
+  const X: Record<ToneZone, number> = { shadow: 25, mid: 50, high: 75 };
+  const yOf = (v: number) => 50 - (v / 100) * 40; // value -100..100 → y 90..10
+  const pts: [number, number][] = [
+    [X.shadow, yOf(toneCurve.shadow)],
+    [X.mid, yOf(toneCurve.mid)],
+    [X.high, yOf(toneCurve.high)],
+  ];
+
+  // Catmull-Rom → 三次贝塞尔：让 S 曲线像 Polarr 一样圆滑而非折线
+  const path = (() => {
+    const anchors: [number, number][] = [[0, 100], ...pts, [100, 0]];
+    let d = `M${anchors[0][0]},${anchors[0][1]}`;
+    for (let i = 0; i < anchors.length - 1; i++) {
+      const p0 = anchors[Math.max(0, i - 1)];
+      const p1 = anchors[i];
+      const p2 = anchors[i + 1];
+      const p3 = anchors[Math.min(anchors.length - 1, i + 2)];
+      const c1x = p1[0] + (p2[0] - p0[0]) / 6;
+      const c1y = p1[1] + (p2[1] - p0[1]) / 6;
+      const c2x = p2[0] - (p3[0] - p1[0]) / 6;
+      const c2y = p2[1] - (p3[1] - p1[1]) / 6;
+      d += ` C${c1x.toFixed(2)},${c1y.toFixed(2)} ${c2x.toFixed(2)},${c2y.toFixed(2)} ${p2[0]},${p2[1]}`;
+    }
+    return d;
+  })();
 
   const update = (zone: ToneZone, clientY: number) => {
     const rect = ref.current?.getBoundingClientRect();
@@ -234,102 +225,152 @@ function ToneCurveEditor() {
   const pickZone = (clientX: number): ToneZone => {
     const rect = ref.current?.getBoundingClientRect();
     const x = rect ? ((clientX - rect.left) / rect.width) * 100 : 50;
-    const dists: [ToneZone, number][] = [
-      ['shadow', X.shadow],
-      ['mid', X.mid],
-      ['high', X.high],
-    ];
-    let best = dists[0];
-    for (const d of dists) if (Math.abs(d[1] - x) < Math.abs(best[1] - x)) best = d;
-    return best[0];
+    let best: ToneZone = 'mid';
+    for (const z of ['shadow', 'mid', 'high'] as ToneZone[]) {
+      if (Math.abs(X[z] - x) < Math.abs(X[best] - x)) best = z;
+    }
+    return best;
   };
 
+  const gridLines = [25, 50, 75];
+
   return (
-    <svg
-      ref={ref}
-      viewBox="0 0 100 100"
-      preserveAspectRatio="none"
-      className="w-full rounded-md border border-line cursor-ns-resize"
-      style={{ height: 120, background: 'var(--Lumina-Tokens-card)', touchAction: 'none' }}
-      role="group"
-      aria-label="色调曲线"
-      onPointerDown={(e) => {
-        const zone = pickZone(e.clientX);
-        dragRef.current = zone;
-        (e.target as Element).setPointerCapture?.(e.pointerId);
-        update(zone, e.clientY);
-      }}
-      onPointerMove={(e) => {
-        if (!dragRef.current) return;
-        update(dragRef.current, e.clientY);
-      }}
-      onPointerUp={() => {
-        dragRef.current = null;
-      }}
-    >
-      <line x1="0" y1="50" x2="100" y2="50" stroke="var(--Lumina-Tokens-border)" strokeWidth="0.5" vectorEffect="non-scaling-stroke" />
-      <path d={path} fill="none" stroke="var(--Lumina-Tokens-gold)" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
-      {(['shadow', 'mid', 'high'] as ToneZone[]).map((z) => (
-        <circle key={z} cx={X[z]} cy={yOf(toneCurve[z])} r="3" fill="var(--Lumina-Tokens-gold)" stroke="var(--Lumina-Tokens-card)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-      ))}
-    </svg>
+    <div className="flex flex-col gap-1.5">
+      <svg
+        ref={ref}
+        viewBox="0 0 100 100"
+        preserveAspectRatio="none"
+        className="w-full rounded-md border border-line cursor-ns-resize"
+        style={{ height: 150, background: 'var(--Lumina-Tokens-viewer)', touchAction: 'none' }}
+        role="group"
+        aria-label="色调曲线"
+        onPointerDown={(e) => {
+          const zone = pickZone(e.clientX);
+          dragRef.current = zone;
+          (e.target as Element).setPointerCapture?.(e.pointerId);
+          update(zone, e.clientY);
+        }}
+        onPointerMove={(e) => {
+          if (!dragRef.current) return;
+          update(dragRef.current, e.clientY);
+        }}
+        onPointerUp={() => {
+          dragRef.current = null;
+        }}
+      >
+        {/* 4×4 暗网格 */}
+        {gridLines.map((g) => (
+          <line key={`v${g}`} x1={g} y1={0} x2={g} y2={100} stroke="var(--Lumina-Tokens-border)" strokeWidth="0.5" vectorEffect="non-scaling-stroke" />
+        ))}
+        {gridLines.map((g) => (
+          <line key={`h${g}`} x1={0} y1={g} x2={100} y2={g} stroke="var(--Lumina-Tokens-border)" strokeWidth="0.5" vectorEffect="non-scaling-stroke" />
+        ))}
+        {/* 对角参考线（恒等曲线） */}
+        <line x1={0} y1={100} x2={100} y2={0} stroke="var(--Lumina-Tokens-textMuted)" strokeWidth="0.6" strokeDasharray="3 3" vectorEffect="non-scaling-stroke" opacity={0.5} />
+        {/* 白色 S 曲线 */}
+        <path d={path} fill="none" stroke="var(--Lumina-Tokens-textStrong)" strokeWidth="1.8" vectorEffect="non-scaling-stroke" />
+        {/* 方形端点（左下 / 右上，Polarr 同款） */}
+        <rect x={0.8} y={97.6} width={4.4} height={4.4} fill="var(--Lumina-Tokens-textStrong)" vectorEffect="non-scaling-stroke" />
+        <rect x={94.8} y={-2} width={4.4} height={4.4} fill="var(--Lumina-Tokens-textStrong)" vectorEffect="non-scaling-stroke" />
+        {/* 圆形控制点（白底深环） */}
+        {pts.map(([cx, cy], i) => (
+          <circle key={i} cx={cx} cy={cy} r={2.6} fill="var(--Lumina-Tokens-textStrong)" stroke="var(--Lumina-Tokens-viewer)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+        ))}
+      </svg>
+      {/* 黑白渐变轴 = 输入色调图例 + 三区数值 */}
+      <div className="h-1.5 rounded-full" style={{ background: 'linear-gradient(to right, #000, #fff)' }} />
+      <div className="flex items-center justify-between num text-2xs text-txt3">
+        <span>阴影 <span className="text-txt2">{toneCurve.shadow > 0 ? '+' : ''}{toneCurve.shadow}</span></span>
+        <span>中间调 <span className="text-txt2">{toneCurve.mid > 0 ? '+' : ''}{toneCurve.mid}</span></span>
+        <span>高光 <span className="text-txt2">{toneCurve.high > 0 ? '+' : ''}{toneCurve.high}</span></span>
+      </div>
+    </div>
   );
 }
 
-// ---------- 颜色分级三色轮（阴影 / 中间调 / 高光） ----------
+// ---------- 颜色分级色轮（Polarr 风格：彩虹色盘 + 白灰中心 + 控制点 + 饱和度滑块） ----------
 
 type GradeZone = 'shadows' | 'mid' | 'high';
 
 const ZONE_LABEL: Record<GradeZone, string> = { shadows: '阴影', mid: '中间调', high: '高光' };
 
-function ColorGradeWheels() {
+/** 彩虹色盘（红在右、品红在下、蓝在左下、绿在左上，Polarr 同向）：外圈彩虹、向心过渡到白灰 */
+const WHEEL_BG =
+  'radial-gradient(circle, rgba(250,250,252,0.95) 0%, rgba(250,250,252,0.55) 42%, rgba(250,250,252,0) 72%), ' +
+  'conic-gradient(from 90deg, #ff3b30, #ff2d92, #af52ff, #5e5ce6, #0a84ff, #64d2ff, #30d158, #ffd60a, #ff9f0a, #ff3b30)';
+
+function PolarrColorWheels() {
   const colorGrade = useTimelapse((s) => s.colorGrade);
   const setColorGrade = useTimelapse((s) => s.setColorGrade);
 
   return (
-    <div className="flex flex-col gap-1.5">
-      {(['shadows', 'mid', 'high'] as GradeZone[]).map((z) => (
-        <ColorWheelRow
-          key={z}
-          label={ZONE_LABEL[z]}
-          hue={colorGrade[z].hue}
-          amount={colorGrade[z].amount}
-          onChange={(hue, amount) => setColorGrade(z, { hue, amount })}
+    <div className="flex flex-col gap-3">
+      {/* 中间调大轮（Polarr 布局：主轮在上居中） */}
+      <ColorWheel
+        label={ZONE_LABEL.mid}
+        size={112}
+        hue={colorGrade.mid.hue}
+        amount={colorGrade.mid.amount}
+        onChange={(hue, amount) => setColorGrade('mid', { hue, amount })}
+      />
+      {/* 阴影 / 高光小轮并排 */}
+      <div className="grid grid-cols-2 gap-2">
+        <ColorWheel
+          label={ZONE_LABEL.shadows}
+          size={84}
+          hue={colorGrade.shadows.hue}
+          amount={colorGrade.shadows.amount}
+          onChange={(hue, amount) => setColorGrade('shadows', { hue, amount })}
         />
-      ))}
+        <ColorWheel
+          label={ZONE_LABEL.high}
+          size={84}
+          hue={colorGrade.high.hue}
+          amount={colorGrade.high.amount}
+          onChange={(hue, amount) => setColorGrade('high', { hue, amount })}
+        />
+      </div>
     </div>
   );
 }
 
-function ColorWheelRow({ label, hue, amount, onChange }: { label: string; hue: number; amount: number; onChange: (hue: number, amount: number) => void }) {
-  const R = 30;
-  const cx = 40;
-  const cy = 40;
-  const rad = (hue * Math.PI) / 180;
-  const dist = (amount / 100) * R * 0.82;
-  const hx = cx + Math.cos(rad) * dist;
-  const hy = cy - Math.sin(rad) * dist;
+function ColorWheel({ label, size, hue, amount, onChange }: { label: string; size: number; hue: number; amount: number; onChange: (hue: number, amount: number) => void }) {
   const dragging = useRef(false);
-  const ref = useRef<SVGSVGElement>(null);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // 控制点位置：角度 = hue（0°=正右、逆时针增大，与色盘同向），距离 ∝ amount
+  const rad = (hue * Math.PI) / 180;
+  const R = size / 2;
+  const dist = (amount / 100) * R * 0.78;
+  const dx = Math.cos(rad) * dist;
+  const dy = -Math.sin(rad) * dist;
 
   const update = (clientX: number, clientY: number) => {
     const rect = ref.current?.getBoundingClientRect();
     if (!rect) return;
-    const x = ((clientX - rect.left) / rect.width) * 80 - cx;
-    const y = ((clientY - rect.top) / rect.height) * 80 - cy;
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const x = clientX - cx;
+    const y = clientY - cy;
     let ang = (Math.atan2(-y, x) * 180) / Math.PI;
     if (ang < 0) ang += 360;
-    const amt = Math.max(0, Math.min(100, Math.round((Math.hypot(x, y) / (R * 0.82)) * 100)));
+    const maxDist = (rect.width / 2) * 0.78;
+    const amt = Math.max(0, Math.min(100, Math.round((Math.hypot(x, y) / maxDist) * 100)));
     onChange(Math.round(ang), amt);
   };
 
   return (
-    <div className="flex items-center gap-2">
-      <svg
+    <div className="flex flex-col items-center gap-1.5">
+      <div
         ref={ref}
-        viewBox="0 0 80 80"
-        className="cursor-crosshair shrink-0"
-        style={{ width: 56, height: 56, touchAction: 'none' }}
+        className="relative rounded-full cursor-crosshair select-none"
+        style={{
+          width: size,
+          height: size,
+          background: WHEEL_BG,
+          boxShadow: 'inset 0 0 0 1px var(--Lumina-Tokens-borderStrong)',
+          touchAction: 'none',
+        }}
         role="slider"
         aria-label={`${label} 颜色分级`}
         aria-valuenow={hue}
@@ -348,22 +389,24 @@ function ColorWheelRow({ label, hue, amount, onChange }: { label: string; hue: n
           dragging.current = false;
         }}
       >
-        <circle cx={cx} cy={cy} r={R} fill="var(--Lumina-Tokens-card)" stroke="var(--Lumina-Tokens-border)" strokeWidth="1" />
-        {/* 色相环（颜色分级色轮本质需展示色相，hsl 为领域固有而非 UI 色值） */}
-        {Array.from({ length: 60 }, (_, i) => i * 6).map((a) => {
-          const rr = (a * Math.PI) / 180;
-          const x1 = cx + Math.cos(rr) * R;
-          const y1 = cy - Math.sin(rr) * R;
-          const x2 = cx + Math.cos(rr) * (R - 6);
-          const y2 = cy - Math.sin(rr) * (R - 6);
-          return <line key={a} x1={x1} y1={y1} x2={x2} y2={y2} stroke={`hsl(${a},65%,55%)`} strokeWidth="1.2" />;
-        })}
-        <line x1={cx} y1={cy} x2={hx} y2={hy} stroke="var(--Lumina-Tokens-gold)" strokeWidth="1.5" />
-        <circle cx={hx} cy={hy} r="4" fill="var(--Lumina-Tokens-gold)" stroke="var(--Lumina-Tokens-card)" strokeWidth="1" />
-      </svg>
-      <div className="flex-1 min-w-0">
-        <div className="text-2xs text-txt2 mb-1">{label}</div>
-        <Slider label="强度" value={amount} min={0} max={100} defaultValue={0} onChange={(v) => onChange(hue, v)} format={(v) => `${v}%`} />
+        {/* 控制点（白底深环，Polarr 同款灰白点） */}
+        <span
+          className="absolute w-3 h-3 rounded-full pointer-events-none"
+          style={{
+            left: `calc(50% + ${dx}px - 6px)`,
+            top: `calc(50% + ${dy}px - 6px)`,
+            background: '#f2f2f5',
+            border: '1.5px solid rgba(40,42,48,0.85)',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.4)',
+          }}
+        />
+      </div>
+      <div className="w-full px-1">
+        <div className="flex items-center justify-between mb-0.5">
+          <span className="text-2xs text-txt2">{label}</span>
+          <span className="num text-2xs text-txt3">{amount}%</span>
+        </div>
+        <Slider label={`${label} 强度`} value={amount} min={0} max={100} defaultValue={0} onChange={(v) => onChange(hue, v)} format={(v) => `${v}%`} />
       </div>
     </div>
   );

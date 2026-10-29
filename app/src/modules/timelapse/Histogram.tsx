@@ -10,14 +10,19 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api/engine';
 import type { TimelapseFrameHistogram } from '../../api/protocol';
 
-const W = 132;
-const H = 64;
 const BARS = 256;
+
+/** overlay = 观察区角标小图（旧位）；panel = 右栏顶部大图（对照 LapseOne 参考布局） */
+const SIZES = {
+  overlay: { W: 132, H: 64 },
+  panel: { W: 268, H: 108 },
+} as const;
 
 // 模块级缓存：key = `${seqId}_${frameNo}`，避免同一帧重复 RPC
 const histogramCache = new Map<string, TimelapseFrameHistogram>();
 
-export default function Histogram({ seqId, frameNo }: { seqId: number | null; frameNo: number }) {
+export default function Histogram({ seqId, frameNo, variant = 'overlay' }: { seqId: number | null; frameNo: number; variant?: 'overlay' | 'panel' }) {
+  const { W, H } = SIZES[variant];
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [data, setData] = useState<TimelapseFrameHistogram | null>(null);
   const [unavailable, setUnavailable] = useState(false);
@@ -100,6 +105,35 @@ export default function Histogram({ seqId, frameNo }: { seqId: number | null; fr
 
   if (seqId === null) return null;
 
+  // panel 变体：右栏顶部大图 + 通道图例（对照 LapseOne 参考的 RGB 直方图位）
+  if (variant === 'panel') {
+    return (
+      <div className="rounded-lgC border border-line overflow-hidden" style={{ background: 'var(--Lumina-Tokens-card)' }} role="img" aria-label="RGB 直方图">
+        <div className="flex items-center gap-2.5 px-2.5 h-6 border-b border-line">
+          {unavailable || !data ? (
+            <span className="text-2xs" style={{ color: 'var(--Lumina-Tokens-textMuted)' }}>直方图暂不可用</span>
+          ) : (
+            <>
+              <LegendDot color="rgba(255,69,58,0.9)" label="R" />
+              <LegendDot color="rgba(48,209,88,0.9)" label="G" />
+              <LegendDot color="rgba(10,132,255,0.9)" label="B" />
+              <LegendDot color="rgba(167,173,183,0.8)" label="亮度" />
+            </>
+          )}
+          <div className="flex-1" />
+          <span className="num text-2xs text-txt3">帧 {frameNo}</span>
+        </div>
+        {unavailable || !data ? (
+          <div className="flex items-center justify-center" style={{ height: H }}>
+            <span className="text-2xs" style={{ color: 'var(--Lumina-Tokens-textMuted)' }}>引擎直方图接口不可用（不影响其他功能）</span>
+          </div>
+        ) : (
+          <canvas ref={canvasRef} style={{ width: W, height: H, display: 'block' }} />
+        )}
+      </div>
+    );
+  }
+
   return (
     <div
       className="absolute bottom-2 left-2 rounded-md border border-line overflow-hidden pointer-events-none"
@@ -115,5 +149,14 @@ export default function Histogram({ seqId, frameNo }: { seqId: number | null; fr
         <canvas ref={canvasRef} style={{ width: W, height: H, display: 'block' }} />
       )}
     </div>
+  );
+}
+
+function LegendDot({ color, label }: { color: string; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />
+      <span className="text-2xs text-txt3">{label}</span>
+    </span>
   );
 }

@@ -1,7 +1,7 @@
 /**
- * 中央帧播放器（Phase A）：走带工具条（播放 / 入点 / 出点 / 循环 / 加关键帧）+
- * 帧预览（恒 #08090B 观察区）+ RGB 直方图 + 进度刷（含关键帧 / 入出点标记）+
- * 底部曝光过渡曲线（可拖关键帧纵向微调）+ 胶片条。画面区恒 #08090B（红线 R5）。
+ * 中央帧播放器（对照 LapseOne 参考重排）：走带工具条（播放[绿] / 入点 / 出点 / 循环[蓝] /
+ * 加关键帧[金]）+ 帧预览（恒 #08090B 观察区）+ 进度刷（含关键帧 / 入出点标记）+
+ * 底部曝光过渡曲线（可拖关键帧纵向微调）+ 胶片条。直方图迁移至右栏顶部。
  */
 
 import { useEffect, useMemo, useRef } from 'react';
@@ -9,17 +9,30 @@ import { useTimelapse } from './store/timelapseStore';
 import { fileUrl } from '../../api/rpc-client';
 import { Icon } from '../../components/shell';
 import { Spinner } from '../../components/primitives';
-import Histogram from './Histogram';
 import Filmstrip from './Filmstrip';
 
+/**
+ * 走带条配色（对照 LapseOne 参考）：蓝 = 区间/循环激活，绿 = 播放，金 = 关键帧。
+ * 蓝 accent 用 macOS systemBlue 令牌，与全局交互强调一致。
+ */
+const ACTIVE_BLUE = {
+  borderColor: 'var(--Lumina-Tokens-accent)',
+  color: 'var(--Lumina-Tokens-accent)',
+  background: 'var(--Lumina-Tokens-accentSoft)',
+} as const;
+const IDLE_BTN = {
+  borderColor: 'var(--Lumina-Tokens-border)',
+  color: 'var(--Lumina-Tokens-textSecondary)',
+  background: 'var(--Lumina-Tokens-card)',
+} as const;
 const ACTIVE_GOLD = {
   borderColor: 'var(--Lumina-Tokens-gold)',
   color: 'var(--Lumina-Tokens-gold)',
   background: 'var(--Lumina-Tokens-goldSoft)',
 } as const;
-const IDLE_GOLD = {
-  borderColor: 'var(--Lumina-Tokens-border)',
-  color: 'var(--Lumina-Tokens-textSecondary)',
+const IDLE_GOLD_KEYFRAME = {
+  borderColor: 'var(--Lumina-Tokens-gold)',
+  color: 'var(--Lumina-Tokens-gold)',
   background: 'var(--Lumina-Tokens-card)',
 } as const;
 
@@ -98,8 +111,8 @@ export default function FramePlayer() {
         <button
           type="button"
           onClick={() => useTimelapse.getState().setPlaying(!playing)}
-          className="relative w-8 h-8 rounded-full border flex items-center justify-center transition-colors"
-          style={{ borderColor: 'var(--Lumina-Tokens-accent)', background: 'var(--Lumina-Tokens-panel)', color: 'var(--Lumina-Tokens-accent)' }}
+          className="w-8 h-8 rounded-full flex items-center justify-center transition-colors border"
+          style={{ borderColor: 'transparent', background: 'var(--Lumina-Tokens-success)', color: '#ffffff' }}
           aria-label={playing ? '暂停' : '播放'}
         >
           <Icon name={playing ? 'pause' : 'play'} size={16} />
@@ -109,7 +122,7 @@ export default function FramePlayer() {
           type="button"
           onClick={() => useTimelapse.getState().setInPoint(inPoint === frameNo ? null : frameNo)}
           className="h-6 px-2 rounded-md border text-2xs transition-colors"
-          style={inPoint !== null ? ACTIVE_GOLD : IDLE_GOLD}
+          style={inPoint !== null ? ACTIVE_BLUE : IDLE_BTN}
           aria-pressed={inPoint !== null}
           title="入点（预览播放起点 · 渲染区间随 Phase B）"
         >
@@ -119,7 +132,7 @@ export default function FramePlayer() {
           type="button"
           onClick={() => useTimelapse.getState().setOutPoint(outPoint === frameNo ? null : frameNo)}
           className="h-6 px-2 rounded-md border text-2xs transition-colors"
-          style={outPoint !== null ? ACTIVE_GOLD : IDLE_GOLD}
+          style={outPoint !== null ? ACTIVE_BLUE : IDLE_BTN}
           aria-pressed={outPoint !== null}
           title="出点（预览播放终点 · 渲染区间随 Phase B）"
         >
@@ -129,7 +142,7 @@ export default function FramePlayer() {
           type="button"
           onClick={() => useTimelapse.getState().setLoop(!loop)}
           className="h-6 px-2 rounded-md border text-2xs transition-colors"
-          style={loop ? ACTIVE_GOLD : IDLE_GOLD}
+          style={loop ? ACTIVE_BLUE : IDLE_BTN}
           aria-pressed={loop}
           title="循环（在入出点区间内循环，无入出点则全程循环）"
         >
@@ -139,7 +152,7 @@ export default function FramePlayer() {
           type="button"
           onClick={() => useTimelapse.getState().addKeyframeAtCurrent()}
           className="inline-flex items-center gap-1 h-6 px-2 rounded-md border text-2xs transition-colors"
-          style={IDLE_GOLD}
+          style={IDLE_GOLD_KEYFRAME}
           title="在当前帧插入曝光坡度关键帧"
         >
           <Icon name="plus" size={13} />
@@ -156,8 +169,7 @@ export default function FramePlayer() {
         ) : (
           <Spinner size={22} />
         )}
-        {/* 客户端 RGB 直方图叠加（半透明 LR 风格，Phase B 走引擎 frameHistogram RPC） */}
-        <Histogram seqId={selectedSeqId} frameNo={frameNo} />
+        {/* 直方图已迁移至右栏顶部（对照 LapseOne 参考布局，RenderPanel 内 panel 变体） */}
         <span
           className="absolute top-2 right-3 num text-2xs px-1.5 py-0.5 rounded-sm bg-card border border-line"
           style={{ color: 'var(--Lumina-Tokens-gold)' }}
