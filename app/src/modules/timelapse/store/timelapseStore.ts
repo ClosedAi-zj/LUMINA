@@ -8,7 +8,7 @@ import { create } from 'zustand';
 import { api } from '../../../api/engine';
 import { rpc, errText } from '../../../api/rpc-client';
 import { useJobStore } from '../../../store/jobStore';
-import type { JobInfo, RampKeyframe, TimelapseSequenceDetail, TimelapseSequenceSummary } from '../../../api/protocol';
+import type { JobInfo, RampKeyframe, TimelapseColorAdjust, TimelapseSequenceDetail, TimelapseSequenceSummary } from '../../../api/protocol';
 
 /** 去闪分析完成结果（引擎 result：{brightnessGainPct, flickerIndex, warnings?}） */
 export interface FlickerAnalysisResult {
@@ -278,7 +278,20 @@ export const useTimelapse = create<TimelapseStore>((set, get) => ({
     const st = get();
     if (st.selectedSeqId === null) return;
     try {
-      const { jobId } = await api.timelapse.render(st.selectedSeqId, st.resolution, st.fps, st.codec);
+      // 透传调色参数：store 内部 UI 形状（shadow/mid/high、hue/amount）映射为引擎 colorAdjust 契约
+      // （引擎对零值≈恒等，故恒传，无需前端判空）
+      const colorAdjust: TimelapseColorAdjust = {
+        toneCurve: { shadows: st.toneCurve.shadow, midtone: st.toneCurve.mid, highlight: st.toneCurve.high },
+        colorGrade: {
+          shadowHue: st.colorGrade.shadows.hue,
+          shadowSat: st.colorGrade.shadows.amount,
+          midtoneHue: st.colorGrade.mid.hue,
+          midtoneSat: st.colorGrade.mid.amount,
+          highlightHue: st.colorGrade.high.hue,
+          highlightSat: st.colorGrade.high.amount,
+        },
+      };
+      const { jobId } = await api.timelapse.render(st.selectedSeqId, st.resolution, st.fps, st.codec, colorAdjust);
       set({ renderJobId: jobId });
       useJobStore.getState().toast(`渲染任务已创建（任务 ${jobId}）`, 'success');
       await get().refreshJobs();
