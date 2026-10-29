@@ -149,16 +149,24 @@ bool encodePng(const std::string& path, const Image& image, std::string* err) {
   return true;
 }
 
-void computeHistogram(const Image& image, int64_t r[256], int64_t g[256], int64_t b[256]) {
+void computeHistogram(const Image& image, int64_t r[256], int64_t g[256], int64_t b[256],
+                     int64_t* luma) {
   std::memset(r, 0, sizeof(int64_t) * 256);
   std::memset(g, 0, sizeof(int64_t) * 256);
   std::memset(b, 0, sizeof(int64_t) * 256);
+  if (luma) std::memset(luma, 0, sizeof(int64_t) * 256);
   const uint8_t* p = image.pixels.data();
   size_t n = static_cast<size_t>(image.width) * image.height;
   for (size_t i = 0; i < n; ++i) {
-    ++r[p[0]];
-    ++g[p[1]];
-    ++b[p[2]];
+    const uint8_t R = p[0], G = p[1], B = p[2];
+    ++r[R];
+    ++g[G];
+    ++b[B];
+    if (luma) {
+      // Rec.709 亮度（与 timelapse_service.cpp 的 meanLuma 一致），落在 0..255 → 合法桶下标
+      const uint8_t lumaIdx = static_cast<uint8_t>(0.2126 * R + 0.7152 * G + 0.0722 * B);
+      ++luma[lumaIdx];
+    }
     p += 3;
   }
 }
@@ -205,6 +213,21 @@ int HslBands::bandIndex(const std::string& name) {
 }
 
 namespace {
+
+// 平滑过渡（smoothstep 形：0→0, 0.5→0.5, 1→1），用于 applyToneCurve 的三分区权重
+double smooth01(double x) {
+  if (x <= 0.0) return 0.0;
+  if (x >= 1.0) return 1.0;
+  return x * x * (3.0 - 2.0 * x);
+}
+// 平滑衰减（smoothstep 版，与 plan/ops/ops.h 的 smooth01 同义）：edge0→0，edge1→1（applyColorGrade 分区权重）
+double smooth01(double x, double edge0, double edge1) {
+  if (edge1 <= edge0) return x >= edge1 ? 1.0 : 0.0;
+  double t = (x - edge0) / (edge1 - edge0);
+  if (t < 0.0) t = 0.0;
+  if (t > 1.0) t = 1.0;
+  return t * t * (3.0 - 2.0 * t);
+}
 
 // 色相环形距离（0..180 度）
 double hueDistance(double a, double b) {
@@ -301,6 +324,92 @@ void applyHslApprox(Image* image, const HslBands& bands) {
     image->pixels[i] = static_cast<uint8_t>(r * 255.0 + 0.5);
     image->pixels[i + 1] = static_cast<uint8_t>(g * 255.0 + 0.5);
     image->pixels[i + 2] = static_cast<uint8_t>(b * 255.0 + 0.5);
+  }
+}
+
+// ---- 延时 Phase B：3 区参数化 S 曲线 + 颜色分级三色轮 ----
+
+void applyToneCurve(Image* img, const ToneCurve& c) {
+  if (img->pixels.empty()) return;
+  // 全零 → 恒等变换（提前返回，避免无谓的 HSL 往返量化）
+  if (c.shadows == 0.0 && c.midtone == 0.0 && c.highlight == 0.0) return;
+
+  // 各分区位移量（量级与 plan/ops/curve.cpp 的 ParametricOp 一致）
+  const double dSh = c.shadows / 100.0 * (60.0 / 255.0);
+  const double dMid = c.midtone / 100.0 * (60.0 / 255.0);
+  const double dHigh = c.highlight / 100.0 * (60.0 / 255.0);
+
+  // 三分区权重：smooth01 分界 0.25/0.5/0.75，分区归一（权重和 ≡ 1），yNew 始终贴近 y
+  for (size_t i = 0; i + 2 < img->pixels.size(); i += 3) {
+    const double r0 = img->pixels[i] / 255.0;
+    const double g0 = img->pixels[i + 1] / 255.0;
+    const double b0 = img->pixels[i + 2] / 255.0;
+    double h = 0.0, s = 0.0, l = 0.0;
+    rgbToHslDeg(r0, g0, b0, &h, &s, &l);  // h∈[0,360)，l∈[0,1]
+    const double y = l;
+    const double wSh = 1.0 - smooth01((y - 0.25) / 0.25);
+    const double wHigh = smooth01((y - 0.75) / 0.25);
+    const double wMid = smooth01((y - 0.25) / 0.25) - smooth01((y - 0.75) / 0.25);
+    double yNew = y + wSh * dSh + wMid * dMid + wHigh * dHigh;
+    if (yNew < 0.0) yNew = 0.0;
+    if (yNew > 1.0) yNew = 1.0;
+    // 按亮度曲线调整每像素亮度：保持色相/饱和度，只改 L（HSL-L 重组）
+    double r = r0, g = g0, b = b0;
+    hslToRgb(h, s, yNew, &r, &g, &b);
+    img->pixels[i] = static_cast<uint8_t>(std::clamp(r, 0.0, 1.0) * 255.0 + 0.5);
+    img->pixels[i + 1] = static_cast<uint8_t>(std::clamp(g, 0.0, 1.0) * 255.0 + 0.5);
+    img->pixels[i + 2] = static_cast<uint8_t>(std::clamp(b, 0.0, 1.0) * 255.0 + 0.5);
+  }
+}
+
+void applyColorGrade(Image* img, const ColorGrade& g) {
+  if (img->pixels.empty()) return;
+  // 全零 → 恒等（含 blend/balance 都为 0）
+  if (g.shadowHue == 0.0 && g.shadowSat == 0.0 && g.midtoneHue == 0.0 && g.midtoneSat == 0.0 &&
+      g.highlightHue == 0.0 && g.highlightSat == 0.0 && g.blend == 0.0 && g.balance == 0.0) {
+    return;
+  }
+  // 照搬 plan/ops/color.cpp 的 ColorGradeOp（line 72-128）3 色轮数学：
+  // balance 移动分区边界（0..1 → ±0.15），blend 展宽分区（0..1 → 0..0.25）。
+  const double b = g.balance * 0.15;
+  const double spread = 0.25 + g.blend * 0.25;
+  for (size_t i = 0; i + 2 < img->pixels.size(); i += 3) {
+    const double r0 = img->pixels[i] / 255.0;
+    const double g0 = img->pixels[i + 1] / 255.0;
+    const double b0 = img->pixels[i + 2] / 255.0;
+    double h = 0.0, s = 0.0, l = 0.0;
+    rgbToHslDeg(r0, g0, b0, &h, &s, &l);  // h∈[0,360)
+    double r = r0, gg = g0, bb = b0;
+    if (s > 1e-6 || g.shadowSat != 0.0 || g.midtoneSat != 0.0 || g.highlightSat != 0.0) {
+      // 三分区权重（balance 上移高光边界，blend 展宽交叠），与 color.cpp 一致
+      const double wHi = smooth01(l, 0.5 - b - spread / 2.0, 0.5 - b + spread / 2.0);
+      const double wSh = 1.0 - smooth01(l, 0.35 - b - spread / 2.0, 0.35 - b + spread / 2.0);
+      const double wMid = std::max(0.0, 1.0 - wHi - wSh);
+      struct Zone { double hue; double sat; double w; };
+      const Zone zones[3] = {{g.shadowHue, g.shadowSat, wSh},
+                             {g.midtoneHue, g.midtoneSat, wMid},
+                             {g.highlightHue, g.highlightSat, wHi}};
+      double dHue = 0.0, dSat = 0.0;
+      for (const Zone& z : zones) {
+        if (z.w <= 0.0 || z.sat == 0.0) continue;  // 仅 sat 影响位移（与 color.cpp 一致）
+        // 色相域：本模块用角度制 [0,360)，目标角 - 当前角，取最短弧
+        double d = z.hue - h;
+        if (d > 180.0) d -= 360.0;
+        if (d < -180.0) d += 360.0;
+        const double strength = std::min(1.0, std::fabs(z.sat) / 100.0) * z.w;
+        dHue += d * strength * 0.5;
+        dSat += (z.sat / 100.0) * z.w * 0.3;
+      }
+      if (h != h) h = 0.0;  // NaN 兜底（理论上 rgbToHslDeg 不会产出）
+      h += dHue;
+      while (h < 0.0) h += 360.0;
+      while (h >= 360.0) h -= 360.0;
+      s = std::clamp(s * (1.0 + dSat), 0.0, 1.0);
+      hslToRgb(h, s, l, &r, &gg, &bb);
+    }
+    img->pixels[i] = static_cast<uint8_t>(std::clamp(r, 0.0, 1.0) * 255.0 + 0.5);
+    img->pixels[i + 1] = static_cast<uint8_t>(std::clamp(gg, 0.0, 1.0) * 255.0 + 0.5);
+    img->pixels[i + 2] = static_cast<uint8_t>(std::clamp(bb, 0.0, 1.0) * 255.0 + 0.5);
   }
 }
 
