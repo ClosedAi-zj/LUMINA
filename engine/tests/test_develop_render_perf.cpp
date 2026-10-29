@@ -102,7 +102,7 @@ int main() {
       "/d/LUMINA/samples or /d/LUMINA/engine; using in-memory 4000x6000)\n",
       NATIVE_W, NATIVE_H);
 
-  const int sizes[] = {1024, 1280, 1600};
+  const int sizes[] = {640, 1024, 1280, 1600};
   const int kIters = 15;
 
   for (int longEdge : sizes) {
