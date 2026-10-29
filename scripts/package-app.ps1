@@ -98,7 +98,7 @@ $pkgJson = @'
 {
   "name": "lumina-app",
   "productName": "LUMINA",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "LUMINA photography workspace",
   "main": "electron/main.cjs"
 }
@@ -155,7 +155,7 @@ Write-Host ("[pkg] done -> {0}  ({1:N1} MB)" -f $pkgDir, ($size / 1MB))
 Write-Host "[pkg] exe = $renamedExe"
 
 if ($Zip) {
-    $zipPath = Join-Path $outRoot 'LUMINA-1.3.0-portable.zip'
+    $zipPath = Join-Path $outRoot 'LUMINA-1.3.1-portable.zip'
     if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
     Write-Host "[pkg] compressing -> $zipPath ..."
     Compress-Archive -Path (Join-Path $pkgDir '*') -DestinationPath $zipPath -CompressionLevel Optimal
