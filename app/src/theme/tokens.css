@@ -36,6 +36,9 @@
   /* —— 品牌金（保留给精选/星级/作品集等品牌语境，不再承担交互强调） —— */
   --Lumina-Tokens-brand: #e8c268;
   --Lumina-Tokens-brandSoft: rgba(232, 194, 104, 0.14);
+  /* —— 克制金（Phase A 延时工作台：关键数值 EV / 增益% / 帧号 / 激活态点缀；蓝 accent 降级为次级强调） —— */
+  --Lumina-Tokens-gold: #e8c268;
+  --Lumina-Tokens-goldSoft: rgba(232, 194, 104, 0.16);
   /* 图表通道色 */
   --Lumina-Tokens-chartRed: rgba(255, 69, 58, 0.55);
   --Lumina-Tokens-chartGreen: rgba(48, 209, 88, 0.5);
@@ -108,6 +111,9 @@
   --Lumina-Tokens-danger: #d70015;
   --Lumina-Tokens-brand: #b98a2e;
   --Lumina-Tokens-brandSoft: rgba(185, 138, 46, 0.12);
+  /* 克制金（浅色下取深一档金，保证关键数值对比度 ≥4.5:1） */
+  --Lumina-Tokens-gold: #b98a2e;
+  --Lumina-Tokens-goldSoft: rgba(185, 138, 46, 0.14);
   --Lumina-Tokens-chartRed: rgba(215, 0, 21, 0.5);
   --Lumina-Tokens-chartGreen: rgba(40, 167, 69, 0.45);
   --Lumina-Tokens-chartBlue: rgba(0, 122, 255, 0.5);

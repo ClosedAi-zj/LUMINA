@@ -24,6 +24,8 @@ export default {
         onaccent: 'var(--Lumina-Tokens-onAccent)',
         success: 'var(--Lumina-Tokens-success)',
         danger: 'var(--Lumina-Tokens-danger)',
+        gold: 'var(--Lumina-Tokens-gold)',
+        goldSoft: 'var(--Lumina-Tokens-goldSoft)',
         reject: 'var(--Lumina-Tokens-rejectOverlay)',
         // v1.2.0：顶栏玻璃底（模糊在组件侧 backdrop-blur 提供）
         glass: 'var(--Lumina-Tokens-glass)',
