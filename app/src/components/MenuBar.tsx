@@ -180,7 +180,7 @@ export function MenuBar() {
             {open && (
               <div
                 role="menu"
-                className="rounded-lgC border border-line animate-float-in absolute left-0 top-full mt-1 z-50 py-1 min-w-[190px]"
+                className="rounded-lgC border border-line animate-float-in absolute left-0 top-full mt-1 z-[100] py-1 min-w-[200px] max-h-[calc(100vh-72px)] overflow-y-auto"
                 style={{ background: 'var(--Lumina-Tokens-panel)', boxShadow: 'var(--Lumina-Tokens-shadow2)' }}
               >
                 {m.entries.map((en, j) =>

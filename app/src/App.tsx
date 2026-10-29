@@ -168,7 +168,7 @@ function TopBar({
   return (
     <>
       <header
-        className="app-drag glass-titlebar relative flex items-center h-11 gap-2 border-b border-line shrink-0 select-none"
+        className="app-drag glass-titlebar relative flex items-center h-11 gap-2 border-b border-line shrink-0 select-none z-50"
         data-theme-surface={theme}
         onDoubleClick={(e) => {
           // 拖拽区双击 = 最大化/还原（Windows 惯例）；点在交互元素上不触发
@@ -177,16 +177,17 @@ function TopBar({
         }}
       >
         {/* 左：产品标识 + 全局菜单 */}
-        <div className="app-no-drag flex items-center gap-2 pl-3 shrink-0">
+        <div className="app-no-drag relative z-10 flex items-center gap-2 pl-3 shrink-0">
           <span className="w-5 h-5 rounded-smC bg-accent flex items-center justify-center text-onaccent text-xs font-bold">L</span>
-          <span className="text-sm font-semibold tracking-wide">Lumina</span>
+          <span className="text-sm font-semibold tracking-wide shrink-0">Lumina</span>
         </div>
-        <div className="app-no-drag shrink-0">
+        <div className="app-no-drag relative z-10 shrink-0">
           <MenuBar />
         </div>
 
-        {/* 中：分段导航（绝对居中，macOS SegmentedControl） */}
-        <div className="app-no-drag absolute left-1/2 -translate-x-1/2 flex items-center">
+        {/* 中：分段导航（绝对居中，macOS SegmentedControl；z-0 让左右集群（logo/搜索/窗口键）在窄窗下压在其上方，
+            避免与顶栏右侧搜索框/窗口键重叠） */}
+        <div className="app-no-drag absolute left-1/2 -translate-x-1/2 flex items-center z-0">
           <div
             className="flex items-center gap-0.5 p-0.5 rounded-mdC"
             style={{
@@ -226,7 +227,7 @@ function TopBar({
         </div>
 
         {/* 右：引擎状态 + 搜索 + 导出 + 主题 */}
-        <div className="ml-auto app-no-drag flex items-center gap-1.5 shrink-0">
+        <div className="ml-auto app-no-drag relative z-10 flex items-center gap-1.5 shrink-0">
           <span className="flex items-center gap-1.5 text-2xs text-txt3 shrink-0 px-1" title={engineStatus === 'mock' ? '演示模式' : `引擎 ${engineVersion || '1.2.3'}`}>
             <span
               className="w-1.5 h-1.5 rounded-full"
@@ -243,7 +244,7 @@ function TopBar({
               {stats ? formatCount(stats.totalPhotos) : ''}
             </span>
           </span>
-          <div className="flex items-center h-7 gap-1.5 px-2.5 rounded-pill border border-line bg-card" style={{ width: 170 }}>
+          <div className="flex items-center h-7 gap-1.5 px-2.5 rounded-pill border border-line bg-card w-44 max-w-[38vw]">
             <Icon name="search" size={12} className="text-txt3 shrink-0" />
             <input
               ref={(el) => {

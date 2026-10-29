@@ -44,7 +44,7 @@ export function PanelCard({
     >
       <button
         onClick={() => setOpen((v) => !v)}
-        className="section-head w-full h-[30px] px-2.5 flex items-center gap-1.5 text-left transition-colors"
+        className="section-head w-full h-[32px] px-2.5 flex items-center gap-1.5 text-left transition-colors"
         style={{ transitionTimingFunction: EASE }}
         aria-expanded={open}
       >
@@ -137,7 +137,7 @@ export function ParamSlider({ label, value, min, max, step = 1, defaultValue = 0
       // v1.4.1 排版修正：参数行单行三段式（标签 68px | 轨道 flex-1 | 数值胶囊 44px），
       // 与已批准设计稿 b-lr-airy-dark.html 的 .roomy 一致。此前的「标签行 + 轨道行」两段堆叠
       // 在 28px 行高内互相挤压，导致轨道横穿标签文字、胶囊与标签基线错位。
-      className="h-[28px] mx-1 px-2 flex items-center gap-[10px] rounded-smC hover:bg-hover transition-colors select-none"
+      className="h-[30px] mx-1 px-2 flex items-center gap-[10px] rounded-smC hover:bg-hover transition-colors select-none"
       style={{ transitionTimingFunction: EASE }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
