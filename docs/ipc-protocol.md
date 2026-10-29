@@ -275,7 +275,7 @@ JobInfo { jobId: int64, kind: string, state: "queued"|"running"|"done"|"failed"|
 | `export.listPresets` | `{}` → `[{id, name, spec}]` |
 | `export.savePreset` | `{name, spec}` → `{id}` |
 
-### 5.11 延时工作台（8 个）
+### 5.11 延时工作台（9 个）
 
 | 方法 | 参数 → 返回 |
 |---|---|
@@ -285,8 +285,9 @@ JobInfo { jobId: int64, kind: string, state: "queued"|"running"|"done"|"failed"|
 | `timelapse.applyDeflicker` | `{seqId, strength}` → `{jobId}`（写各帧 sidecar 参数） |
 | `timelapse.setExposureRamp` | `{seqId, keyframes:[{frameNo, ev, temperatureK}]}` → `{}`（写 lumina:ExposureRamp + 尽力 lrt: 回写） |
 | `timelapse.previewFrame` | `{seqId, frameNo, size}` → `{path}` |
-| `timelapse.render` | `{seqId, resolution:"1080p"|"4K"|"6K", fps: 25|30|60, codec:"h264"|"h265"|"prores"}` → `{jobId}`；ProRes 不可达 → **5001** + `data.alternative:"h264"`，UI 置灰不静默（§9-Q3） |
+| `timelapse.render` | `{seqId, resolution:"1080p"|"4K"|"6K", fps: 25|30|60, codec:"h264"|"h265"|"prores", colorAdjust?:{toneCurve:{shadows,midtone,highlight}, colorGrade:{shadowHue,shadowSat,midtoneHue,midtoneSat,highlightHue,highlightSat,blend,balance}}}` → `{jobId}`；`colorAdjust` 缺省或不恒等时≈不调色；ProRes 不可达 → **5001** + `data.alternative:"h264"`，UI 置灰不静默（§9-Q3） |
 | `timelapse.getRenderJobs` | `{}` → `[JobInfo]` |
+| `timelapse.frameHistogram` | `{seqId, frameNo, size?}` → `{r:[256], g:[256], b:[256], luma:[256]}`（引擎侧直方图，规避前端 canvas 因 `lumina-file://` 污染无法读像素） |
 
 ### 5.12 风光专项（4 个）
 

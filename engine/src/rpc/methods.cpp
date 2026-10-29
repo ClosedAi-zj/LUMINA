@@ -1936,6 +1936,10 @@ void registerMethods(Dispatcher* d, EngineServices* s) {
                     [timelapseSvc, s](const json::JsonValue& params, RpcError* err) -> json::JsonValue {
                       return timelapseSvc->getRenderJobs(params, s->jobs, err);
                     });
+  d->registerMethod("timelapse.frameHistogram",
+                    [timelapseSvc](const json::JsonValue& params, RpcError* err) -> json::JsonValue {
+                      return timelapseSvc->frameHistogram(params, err);
+                    });
 
   // ================= 5.13 风光专项（已实现）：HDR 包围合成 + NLM 降噪 =================
   auto hdrSvc = std::make_shared<specialty::HdrService>(s->config, s->db, s->photos, s->decoder);

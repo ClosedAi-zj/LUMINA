@@ -25,6 +25,7 @@
 #include "json/json_value.h"
 #include "raw/raw_decoder.h"
 #include "rpc/dispatcher.h"
+#include "imaging/imaging.h"
 #include "xmp/xmp_service.h"
 
 namespace lumina {
@@ -58,6 +59,9 @@ struct RenderSpec {
   std::string resolution = "4K";  // 1080p|4K|6K
   int fps = 30;                   // 25|30|60
   std::string codec = "h264";     // h264|h265|prores
+  // 延时 Phase B：逐帧调色（零值 ≈ 不调色）
+  imaging::ToneCurve toneCurve;    // 阴影/中间调/高光 3 区 S 曲线
+  imaging::ColorGrade colorGrade;  // 颜色分级三色轮
 };
 
 class TimelapseService {
@@ -83,6 +87,9 @@ class TimelapseService {
   json::JsonValue setExposureRamp(const json::JsonValue& params, rpc::RpcError* err);
   // {seqId, frameNo, size} → {path}（size = 长边像素，UI 传 320/640/1080）
   json::JsonValue previewFrame(const json::JsonValue& params, rpc::RpcError* err);
+  // {seqId, frameNo, size?} → {r:[256], g:[256], b:[256], luma:[256]}
+  // 引擎侧直方图，规避前端 canvas 因 lumina-file:// 污染无法读像素的问题
+  json::JsonValue frameHistogram(const json::JsonValue& params, rpc::RpcError* err);
   // {seqId, resolution, fps, codec} → {jobId}；ProRes 一律 5001 + data.alternative
   json::JsonValue render(const json::JsonValue& params, JobManager* jobs, rpc::RpcError* err);
   // {} → [JobInfo]（仅 timelapse.render 任务）

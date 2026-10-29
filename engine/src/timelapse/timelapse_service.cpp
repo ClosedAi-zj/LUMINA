@@ -1576,6 +1576,69 @@ json::JsonValue TimelapseService::previewFrame(const json::JsonValue& params, rp
   return out;
 }
 
+// ============================== 5.11.8 frameHistogram ==============================
+
+json::JsonValue TimelapseService::frameHistogram(const json::JsonValue& params, rpc::RpcError* err) {
+  const int64_t seqId = params.get("seqId").asInt(0);
+  const int64_t frameNo = params.get("frameNo").asInt(0);
+  if (seqId <= 0 || frameNo <= 0) {
+    *err = rpc::RpcError(rpc::kInvalidParams, "params.seqId / params.frameNo 必须为正整数");
+    return json::JsonValue::nullValue();
+  }
+  // 直方图尺度无关：取小值解码更快（与 previewFrame 的 decodeFrameForSize 同口径）
+  int size = static_cast<int>(params.get("size").asInt(512));
+  if (size < 64) size = 64;
+  if (size > 4096) size = 4096;
+
+  SequenceInfo info;
+  std::vector<SeqFrame> frames;
+  std::string loadErr;
+  const int rc = loadSequence(seqId, &info, &frames, &loadErr);
+  if (rc == 1) {
+    *err = rpc::RpcError(rpc::kFileNotFound, loadErr);
+    return json::JsonValue::nullValue();
+  }
+  if (rc == 2) {
+    *err = rpc::RpcError(rpc::kDbError, "读取序列失败: " + loadErr);
+    return json::JsonValue::nullValue();
+  }
+
+  const SeqFrame* target = nullptr;
+  for (const SeqFrame& f : frames) {
+    if (f.frameNo == frameNo) {
+      target = &f;
+      break;
+    }
+  }
+  if (!target) {
+    *err = rpc::RpcError(rpc::kFileNotFound,
+                         "序列 " + std::to_string(seqId) + " 中没有第 " + std::to_string(frameNo) +
+                             " 帧");
+    return json::JsonValue::nullValue();
+  }
+
+  imaging::Image image;
+  std::string source;
+  std::string decodeErr;
+  if (!decodeFrameForSize(*target, size, &image, &source, &decodeErr)) {
+    *err = rpc::RpcError(rpc::kRawDecodeFailed, decodeErr);
+    return json::JsonValue::nullValue();
+  }
+  int64_t r[256], g[256], b[256], luma[256];
+  imaging::computeHistogram(image, r, g, b, luma);
+  auto toArray = [](const int64_t* v) {
+    json::JsonValue out = json::JsonValue::arrayValue();
+    for (int i = 0; i < 256; ++i) out.addItem(v[i]);
+    return out;
+  };
+  json::JsonValue out = json::JsonValue::objectValue();
+  out.setItem("r", toArray(r));
+  out.setItem("g", toArray(g));
+  out.setItem("b", toArray(b));
+  out.setItem("luma", toArray(luma));
+  return out;
+}
+
 // ============================== 5.11.7 render ==============================
 
 json::JsonValue TimelapseService::render(const json::JsonValue& params, JobManager* jobs,
@@ -1589,6 +1652,24 @@ json::JsonValue TimelapseService::render(const json::JsonValue& params, JobManag
   spec.resolution = params.get("resolution").asString("4K");
   spec.fps = static_cast<int>(params.get("fps").asInt(30));
   spec.codec = params.get("codec").asString("h264");
+
+  // 延时 Phase B：逐帧调色（色调曲线 + 颜色分级），零值近似恒等
+  const json::JsonValue colorAdjust = params.get("colorAdjust");
+  if (!colorAdjust.isNull()) {
+    const json::JsonValue tc = colorAdjust.get("toneCurve");
+    spec.toneCurve.shadows = tc.get("shadows").asDouble(0.0);
+    spec.toneCurve.midtone = tc.get("midtone").asDouble(0.0);
+    spec.toneCurve.highlight = tc.get("highlight").asDouble(0.0);
+    const json::JsonValue cg = colorAdjust.get("colorGrade");
+    spec.colorGrade.shadowHue = cg.get("shadowHue").asDouble(0.0);
+    spec.colorGrade.shadowSat = cg.get("shadowSat").asDouble(0.0);
+    spec.colorGrade.midtoneHue = cg.get("midtoneHue").asDouble(0.0);
+    spec.colorGrade.midtoneSat = cg.get("midtoneSat").asDouble(0.0);
+    spec.colorGrade.highlightHue = cg.get("highlightHue").asDouble(0.0);
+    spec.colorGrade.highlightSat = cg.get("highlightSat").asDouble(0.0);
+    spec.colorGrade.blend = cg.get("blend").asDouble(0.0);
+    spec.colorGrade.balance = cg.get("balance").asDouble(0.0);
+  }
 
   if (resolutionWidth(spec.resolution) == 0) {
     *err = rpc::RpcError(rpc::kInvalidParams,
@@ -1758,6 +1839,10 @@ void TimelapseService::runRender(int64_t seqId, std::vector<SeqFrame> frames,
                      paramErr);
       }
     }
+    // 延时 Phase B：逐帧调色（色调曲线 → 颜色分级），在全分辨率像素上施加，
+    // 不被后续 scaleToWidth 缩放模糊；与「曝光→对比→饱和」顺序一致（在 tone approx 之后）
+    imaging::applyToneCurve(&image, spec.toneCurve);
+    imaging::applyColorGrade(&image, spec.colorGrade);
     imaging::Image scaled;
     std::string scaleErr;
     if (!scaleToWidth(image, targetWidth, &scaled, &scaleErr)) {
