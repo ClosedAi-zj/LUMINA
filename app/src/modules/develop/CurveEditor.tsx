@@ -24,6 +24,7 @@ export default function CurveEditor({
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
+  const [resizeTick, setResizeTick] = useState(0);
   const size = 200;
   /** 最近一次派发的曲线：拖动中 onChange 是异步落 store，松手时要用它提交而不是旧的 props */
   const latestRef = useRef<CurvePoint[]>(points);
@@ -38,24 +39,37 @@ export default function CurveEditor({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = size * dpr;
-    canvas.height = size * dpr;
-    ctx.scale(dpr, dpr);
+    // 缓冲尺寸必须等于显示尺寸（× dpr）：旧实现固定 200×200 缓冲 + w-full CSS 拉伸，
+    // 面板宽度 ≠ 200 时整幅被非等比拉伸——网格错位、曲线变形（用户实测"线条有问题"）。
+    const cssW = Math.max(60, Math.round(canvas.getBoundingClientRect().width || size));
+    const cssH = size;
+    if (canvas.width !== Math.round(cssW * dpr) || canvas.height !== Math.round(cssH * dpr)) {
+      canvas.width = Math.round(cssW * dpr);
+      canvas.height = Math.round(cssH * dpr);
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const W = cssW;
+    const H = cssH;
 
     // 网格 / 曲线颜色一律读设计令牌（浅色主题随 data-theme 翻转）
     const css = getComputedStyle(canvas);
     ctx.fillStyle = css.getPropertyValue('--Lumina-Tokens-card').trim() || 'transparent';
-    ctx.fillRect(0, 0, size, size);
+    ctx.fillRect(0, 0, W, H);
     const accent = css.getPropertyValue('--Lumina-Tokens-accent').trim() || 'currentColor';
     ctx.strokeStyle = 'rgba(128,128,128,0.18)';
     ctx.lineWidth = 1;
     for (let i = 1; i < 4; i++) {
-      const p = (size / 4) * i;
+      const p = (W / 4) * i;
       ctx.beginPath();
       ctx.moveTo(p, 0);
-      ctx.lineTo(p, size);
+      ctx.lineTo(p, H);
+      ctx.stroke();
+    }
+    for (let i = 1; i < 4; i++) {
+      const p = (H / 4) * i;
+      ctx.beginPath();
       ctx.moveTo(0, p);
-      ctx.lineTo(size, p);
+      ctx.lineTo(W, p);
       ctx.stroke();
     }
 
@@ -76,8 +90,8 @@ export default function CurveEditor({
         const t = (x - a.x) / Math.max(1, b.x - a.x);
         y = a.y + (b.y - a.y) * t;
       }
-      const px = (x / 255) * size;
-      const py = size - (y / 255) * size;
+      const px = (x / 255) * W;
+      const py = H - (y / 255) * H;
       if (x === 0) ctx.moveTo(px, py);
       else ctx.lineTo(px, py);
     }
@@ -87,10 +101,19 @@ export default function CurveEditor({
     for (const p of pts) {
       ctx.fillStyle = accent;
       ctx.beginPath();
-      ctx.arc((p.x / 255) * size, size - (p.y / 255) * size, 4, 0, Math.PI * 2);
+      ctx.arc((p.x / 255) * W, H - (p.y / 255) * H, 4, 0, Math.PI * 2);
       ctx.fill();
     }
-  }, [points]);
+  }, [points, size, resizeTick]);
+
+  // 面板宽度变化（折叠/换主题/窗口缩放）→ 重绘，缓冲与显示永远一致
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => setResizeTick((t) => t + 1));
+    ro.observe(canvas);
+    return () => ro.disconnect();
+  }, []);
 
   const toCurve = (e: React.PointerEvent | React.MouseEvent): { x: number; y: number } => {
     const rect = canvasRef.current!.getBoundingClientRect();

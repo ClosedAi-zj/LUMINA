@@ -17,20 +17,28 @@ import type { EditParams } from '../../api/protocol';
 /** C1 基线诊断开关（?baseline=1）：修图台画布在基线走查中纯黑（px=0,0,0），需要链路日志定位 */
 const IS_BASELINE = new URLSearchParams(window.location.search).get('baseline') === '1';
 
-/** 兜底：WebGL 不可用/渲染失败时用 2D 画布至少把底图画出来（参数调整不生效，但不黑屏） */
+/** 兜底：WebGL 不可用/渲染失败时用 2D 画布至少把底图画出来（参数调整不生效，但不黑屏）。
+ *  尺寸必须 contain 适配宿主容器（与 GPU/CPU 路径同口径）——旧实现按宿主矩形填满绘制，
+ *  竖图被横向拉伸填满 16:9 画布（用户实测"竖屏变横批"的直接成因之一）。 */
 function drawFallback2d(canvas: HTMLCanvasElement, img: HTMLImageElement): boolean {
   const ctx = canvas.getContext('2d');
   if (!ctx || !img.naturalWidth || !img.naturalHeight) return false;
-  const rect = canvas.getBoundingClientRect();
-  const cssW = rect.width > 0 ? rect.width : img.naturalWidth;
-  const ratio = img.naturalHeight / img.naturalWidth;
-  const cssH = Math.min(rect.height > 0 ? rect.height : cssW * ratio, cssW * ratio);
+  const host = (canvas.closest('[data-viewer-host]') as HTMLElement | null) ?? canvas.parentElement;
+  const hostRect = host ? host.getBoundingClientRect() : canvas.getBoundingClientRect();
+  const availW = Math.max(64, hostRect.width || img.naturalWidth);
+  const availH = Math.max(64, hostRect.height || img.naturalHeight);
+  let cssW = availW;
+  let cssH = cssW * (img.naturalHeight / img.naturalWidth);
+  if (cssH > availH) {
+    cssH = availH;
+    cssW = cssH * (img.naturalWidth / img.naturalHeight);
+  }
   const w = Math.max(64, Math.round(cssW));
   const h = Math.max(36, Math.round(cssH));
-  if (canvas.width !== w || canvas.height !== h) {
-    canvas.width = w;
-    canvas.height = h;
-  }
+  canvas.style.width = `${w}px`;
+  canvas.style.height = `${h}px`;
+  if (canvas.width !== w) canvas.width = w;
+  if (canvas.height !== h) canvas.height = h;
   ctx.clearRect(0, 0, w, h);
   ctx.drawImage(img, 0, 0, w, h);
   return true;
@@ -245,76 +253,152 @@ export default function ViewerCanvas({ onHistogram }: { onHistogram?: (h: { r: n
     if (!canvas || !params || !imgRef.current) return;
     // 底图解码失败且已 2D 直出：不要再用空纹理把它刷黑（v1.4.1）
     if (r && !imageOkRef.current) return;
-    if (r) {
-      const ok = r.render(canvas, {
-        params,
-        split: effectiveCompare ? split : null,
-        beforeParams: beforeParams ?? undefined,
-      });
-      if (!ok) {
-        // GPU 渲染失败：降级引擎 Plan CPU 渲染并显式告知（不允许静默黑屏）
-        setRenderNotice('软件渲染模式：参数已生效（引擎 Plan 求值，与导出同实现）');
+
+    // 渲染调度（调色卡顿修复）：拖动滑杆时 store 连续更新，GPU 路径按帧合并
+    // （一帧只渲一次）；CPU 降级路径（引擎 RPC 整图重渲）120ms 防抖 + 只保留
+    // 最新参数 —— 否则一次拖动会排几十个 RPC，预览滞后数秒。
+    const doRender = () => {
+      if (r) {
+        const ok = r.render(canvas, {
+          params,
+          split: effectiveCompare ? split : null,
+          beforeParams: beforeParams ?? undefined,
+        });
+        if (!ok) {
+          // GPU 渲染失败：降级引擎 Plan CPU 渲染并显式告知（不允许静默黑屏）
+          setRenderNotice('软件渲染模式：参数已生效（引擎 Plan 求值，与导出同实现）');
+          void renderViaEngine(canvas, engineRenderSeq, {
+            params,
+            split: effectiveCompare ? split : null,
+            beforeParams: beforeParams ?? undefined,
+          }).then((ok2) => {
+            cpuMsRef.current = ok2 ? 0 : null;
+            logCpuOnce(cpuMsRef.current);
+          });
+        } else {
+          setRenderNotice(null);
+          // 直方图 150ms 防抖（架构 §8 性能要点）
+          if (histTimer.current) clearTimeout(histTimer.current);
+          histTimer.current = setTimeout(() => {
+            const h = r.sampleHistogram(canvas);
+            if (h && onHistogram) onHistogram(h);
+          }, 150);
+        }
+      } else {
+        // 无 WebGL：引擎 Plan CPU 渲染（与导出同一实现，T1.5）
         void renderViaEngine(canvas, engineRenderSeq, {
           params,
           split: effectiveCompare ? split : null,
           beforeParams: beforeParams ?? undefined,
-        }).then((ok2) => {
-          cpuMsRef.current = ok2 ? 0 : null;
+        }).then((ok) => {
+          cpuMsRef.current = ok ? 0 : null;
           logCpuOnce(cpuMsRef.current);
+          if (!ok && imgRef.current) drawFallback2d(canvas, imgRef.current);
         });
-      } else {
-        setRenderNotice(null);
-        // 直方图 150ms 防抖（架构 §8 性能要点）
-        if (histTimer.current) clearTimeout(histTimer.current);
-        histTimer.current = setTimeout(() => {
-          const h = r.sampleHistogram(canvas);
-          if (h && onHistogram) onHistogram(h);
-        }, 150);
       }
-    } else {
-      // 无 WebGL：引擎 Plan CPU 渲染（与导出同一实现，T1.5）
-      void renderViaEngine(canvas, engineRenderSeq, {
-        params,
-        split: effectiveCompare ? split : null,
-        beforeParams: beforeParams ?? undefined,
-      }).then((ok) => {
-        cpuMsRef.current = ok ? 0 : null;
-        logCpuOnce(cpuMsRef.current);
-        if (!ok && imgRef.current) drawFallback2d(canvas, imgRef.current);
-      });
+    };
+    if (r) {
+      const raf = requestAnimationFrame(doRender);
+      return () => cancelAnimationFrame(raf);
     }
+    const t = setTimeout(doRender, 120);
+    return () => clearTimeout(t);
   }, [params, effectiveCompare, split, beforeParams, renderTick, onHistogram]);
 
-  // 画笔蒙版红色浮层（WP-B5）：与 GPU/CPU 共用同一个 buildBrushField 因子场，
-  // 浮层边界与实际渲染边界一致靠"同一份数据"保证，不是两套近似。
+  // 画笔笔画：仅选中画笔蒙版时绘制红场（与渲染同一场数据）
   const overlayStrokes = brushSelected ? selectedMask!.strokes ?? [] : null;
+  // 蒙版叠加层（PS/LR 风格鲜明指示）：
+  //  - 画笔：红色因子场（与 GPU/CPU 共用同一份 buildBrushField，边界零近似）
+  //  - 线性渐变：虚线渐变轴线 + 两端垂直把手（LR 同款语言）
+  //  - 径向：虚线椭圆框（半径 × 比例）
+  // 指示随「选中的蒙版」显示——此前只有画笔有红场且其余类型零指示，用户看到"蒙版无效果"。
   useEffect(() => {
     const oc = maskOverlayRef.current;
     if (!oc) return;
     const ctx = oc.getContext('2d');
     if (!ctx) return;
-    if (!overlayStrokes || overlayStrokes.length === 0) {
-      ctx.clearRect(0, 0, oc.width, oc.height);
-      return;
+    // 缓冲对齐显示分辨率（框线清晰；旧实现固定 FIELD_CELL 拉伸，线是糊的）
+    const rect = oc.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const W = Math.max(1, Math.round((rect.width || 1) * dpr));
+    const H = Math.max(1, Math.round((rect.height || 1) * dpr));
+    if (oc.width !== W) oc.width = W;
+    if (oc.height !== H) oc.height = H;
+    ctx.clearRect(0, 0, W, H);
+
+    // 画笔红场
+    if (overlayStrokes && overlayStrokes.length > 0) {
+      const field = buildBrushField(overlayStrokes);
+      const off = document.createElement('canvas');
+      off.width = FIELD_CELL;
+      off.height = FIELD_CELL;
+      const octx = off.getContext('2d');
+      if (octx) {
+        const imgData = octx.createImageData(FIELD_CELL, FIELD_CELL);
+        for (let i = 0; i < field.length; i++) {
+          imgData.data[i * 4] = 255;
+          imgData.data[i * 4 + 1] = 40;
+          imgData.data[i * 4 + 2] = 40;
+          imgData.data[i * 4 + 3] = Math.round(field[i] * 110);
+        }
+        octx.putImageData(imgData, 0, 0);
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(off, 0, 0, W, H);
+      }
     }
-    const field = buildBrushField(overlayStrokes);
-    const off = document.createElement('canvas');
-    off.width = FIELD_CELL;
-    off.height = FIELD_CELL;
-    const octx = off.getContext('2d');
-    if (!octx) return;
-    const imgData = octx.createImageData(FIELD_CELL, FIELD_CELL);
-    for (let i = 0; i < field.length; i++) {
-      imgData.data[i * 4] = 255;
-      imgData.data[i * 4 + 1] = 40;
-      imgData.data[i * 4 + 2] = 40;
-      imgData.data[i * 4 + 3] = Math.round(field[i] * 110);
+
+    // 几何指示（仅选中的蒙版；LR/PS 同款白色虚线 + 把手）
+    const m = selectedMask;
+    if (!m || !m.geometry || !m.enabled) return;
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+    ctx.setLineDash([6 * dpr, 4 * dpr]);
+    const g = m.geometry;
+    if (m.type === 'linear' && 'x1' in g) {
+      const ax = g.x1 * W;
+      const ay = g.y1 * H;
+      const bx = g.x2 * W;
+      const by = g.y2 * H;
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(bx, by);
+      ctx.stroke();
+      // 两端垂直把手（实线，短横杠）
+      ctx.setLineDash([]);
+      const dx = bx - ax;
+      const dy = by - ay;
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len;
+      const ny = dx / len;
+      const arm = 10 * dpr;
+      for (const [px, py] of [
+        [ax, ay],
+        [bx, by],
+      ]) {
+        ctx.beginPath();
+        ctx.moveTo(px - nx * arm, py - ny * arm);
+        ctx.lineTo(px + nx * arm, py + ny * arm);
+        ctx.stroke();
+      }
+      // 中心控制点
+      ctx.beginPath();
+      ctx.arc((ax + bx) / 2, (ay + by) / 2, 3.5 * dpr, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.95)';
+      ctx.fill();
+    } else if (m.type === 'radial' && 'cx' in g) {
+      const rx = g.radius * W;
+      const ry = g.radius * (g.ratio || 1) * H;
+      ctx.beginPath();
+      ctx.ellipse(g.cx * W, g.cy * H, Math.max(2, rx), Math.max(2, ry), 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // 中心点
+      ctx.beginPath();
+      ctx.arc(g.cx * W, g.cy * H, 3.5 * dpr, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.95)';
+      ctx.fill();
     }
-    octx.putImageData(imgData, 0, 0);
-    ctx.clearRect(0, 0, oc.width, oc.height);
-    ctx.imageSmoothingEnabled = true;
-    ctx.drawImage(off, 0, 0, oc.width, oc.height);
-  }, [overlayStrokes, brushSelected]);
+  }, [selectedMask, overlayStrokes, brushSelected, renderTick]);
 
   // 画笔落点：拖动中 commit=false 不刷历史，抬笔补一个同点印记并 commit=true 记一次「画笔」
   const uvFromEvent = (e: React.PointerEvent): { x: number; y: number } | null => {
@@ -415,17 +499,15 @@ export default function ViewerCanvas({ onHistogram }: { onHistogram?: (h: { r: n
               move(e.nativeEvent);
             }}
           />
-          {/* 画笔蒙版浮层：红色 = 因子>0 区域，软边 = 因子衰减（与渲染同一场数据） */}
+          {/* 蒙版叠加层：画笔红场 + 线性/径向的框/圈/线指示（选中即显示） */}
           <canvas
             ref={maskOverlayRef}
-            width={FIELD_CELL}
-            height={FIELD_CELL}
             className="absolute inset-0 w-full h-full rounded-md"
             style={{
               cursor: painting ? 'crosshair' : 'default',
               pointerEvents: painting ? 'auto' : 'none',
               touchAction: 'none',
-              opacity: brushSelected ? 1 : 0,
+              opacity: selectedMask ? 1 : 0,
             }}
             onPointerDown={onOverlayPointerDown}
             onPointerMove={onOverlayPointerMove}
