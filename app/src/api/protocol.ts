@@ -493,7 +493,7 @@ export interface CheckTargetResult {
 }
 
 export interface ImportOptions {
-  source: { kind: 'volume' | 'folder'; path: string };
+  source: { kind: 'volume' | 'folder' | 'file'; path: string };
   target: string;
   backup: { enabled: boolean; targetPath: string; timing: 'onImport' | 'nightly' };
   verifyMd5: boolean;

@@ -21,10 +21,17 @@ import type { ScanSourceResult, VolumeInfo } from '../../api/protocol';
 type Step = 1 | 2 | 3 | 4 | 'executing';
 
 interface SourcePick {
-  kind: 'volume' | 'folder';
+  kind: 'volume' | 'folder' | 'file';
   path: string;
   label: string;
 }
+
+/** 文件选择器过滤：RAW / JPG / PNG / TIFF / 视频（与引擎导入白名单同一套） */
+const IMPORT_FILE_EXTENSIONS = [
+  'rw2', 'dng', 'arw', 'cr2', 'cr3', 'nef', 'nrw', 'orf', 'raf', 'pef', 'ptx', 'r3d', 'srw', 'x3f', 'erf', 'kdc', 'dcr', 'raw',
+  'jpg', 'jpeg', 'png', 'tif', 'tiff',
+  'mp4', 'mov', 'm4v', 'avi', 'mpg', 'mpeg', 'mkv', 'webm',
+];
 
 /**
  * 重命名模板：`label` 给用户看，`template` 才是发给引擎的 token 串（协议 §5.8）。
@@ -56,9 +63,10 @@ export default function IngestWizard() {
   const [scanResult, setScanResult] = useState<ScanSourceResult | null>(null);
   const [missingFolder, setMissingFolder] = useState<string | null>(null);
 
-  // 目标与备份
+  // 目标与备份（备份完全可选：默认仅导入主库，不强迫任何第二位置）
   const [target, setTarget] = useState('D:/Lumina/Photos/2026');
-  const [backupEnabled, setBackupEnabled] = useState(true);
+  const [backupEnabled, setBackupEnabled] = useState(false);
+  const [backupTarget, setBackupTarget] = useState('N:/NAS-Photos/Lumina');
   const [backupTiming, setBackupTiming] = useState<'onImport' | 'nightly'>('onImport');
   const [verifyMd5, setVerifyMd5] = useState(true);
   const [targetCheck, setTargetCheck] = useState<{ freeBytes: number; warning: boolean } | null>(null);
@@ -134,7 +142,7 @@ export default function IngestWizard() {
       const { jobId } = await api.importApi.start({
         source: { kind: source.kind, path: source.path },
         target,
-        backup: { enabled: backupEnabled, targetPath: 'N:/NAS-Photos/Lumina', timing: backupTiming },
+        backup: { enabled: backupEnabled, targetPath: backupTarget, timing: backupTiming },
         verifyMd5,
         renameTemplate: template,
         dedupe: 'skip',
@@ -164,12 +172,12 @@ export default function IngestWizard() {
       {/* 步骤导航 */}
       <aside className="w-56 shrink-0 border-r border-line p-4 flex flex-col">
         <div className="text-sm font-medium mb-1">导入照片</div>
-        <div className="text-2xs text-txt3 mb-4">从相机或文件夹导入 · 自动备份到 NAS</div>
+        <div className="text-2xs text-txt3 mb-4">从相机、文件夹或单个文件导入 · 备份可选</div>
         {(
           [
-            [1, '选择来源', 'SD 卡 · 相机 · 文件夹'],
+            [1, '选择来源', 'SD 卡 · 文件夹 · 单个文件'],
             [2, '检测摘要', '文件数 · 配对 · 重复'],
-            [3, '备份目标', '主库 + NAS 双备份'],
+            [3, '目标与备份', '主库路径 · 备份可选'],
             [4, '命名与去重', '模板 · 去重 · 配对'],
             ['executing', '执行', '进度 · 校验 · 汇总'],
           ] as const
@@ -226,6 +234,8 @@ export default function IngestWizard() {
             setTarget={setTarget}
             backupEnabled={backupEnabled}
             setBackupEnabled={setBackupEnabled}
+            backupTarget={backupTarget}
+            setBackupTarget={setBackupTarget}
             backupTiming={backupTiming}
             setBackupTiming={setBackupTiming}
             verifyMd5={verifyMd5}
@@ -238,8 +248,8 @@ export default function IngestWizard() {
         {step === 'executing' && importJobId !== null && <ExecutingBar jobId={importJobId} progress={importJob?.progress ?? 0} eta={importJob?.etaMs ?? null} events={jobEvents} />}
       </section>
 
-      {/* 右侧常驻设置面板（B2）：NAS 双备份 / 去重策略 / 预览胶片条，跨步骤常驻 */}
-      <PersistentSettings backupEnabled={backupEnabled} backupTiming={backupTiming} verifyMd5={verifyMd5} />
+      {/* 右侧常驻设置面板（B2）：备份状态 / 去重策略 / 预览胶片条，跨步骤常驻 */}
+      <PersistentSettings backupEnabled={backupEnabled} backupTarget={backupTarget} backupTiming={backupTiming} verifyMd5={verifyMd5} />
 
       {/* 底部按钮 */}
       <footer className="absolute bottom-0 left-0 right-0 h-12 px-4 flex items-center justify-end gap-2 border-t border-line" style={{ background: 'var(--Lumina-Tokens-panel)' }}>
@@ -418,17 +428,17 @@ function SummaryStep({ scanResult }: { scanResult: ScanSourceResult | null }) {
 
 // ---------- 右侧常驻设置（B2） ----------
 
-function PersistentSettings({ backupEnabled, backupTiming, verifyMd5 }: { backupEnabled: boolean; backupTiming: 'onImport' | 'nightly'; verifyMd5: boolean }) {
+function PersistentSettings({ backupEnabled, backupTarget, backupTiming, verifyMd5 }: { backupEnabled: boolean; backupTarget: string; backupTiming: 'onImport' | 'nightly'; verifyMd5: boolean }) {
   // 预览胶片条：真实数据 = 图库首页缓存（导入完成后 refresh 即显示新入库照片）
   const firstPage = useLibrary((s) => s.pages[0] ?? []);
   return (
     <aside className="w-72 shrink-0 border-l border-line p-3 flex flex-col gap-3 overflow-y-auto" style={{ background: 'var(--Lumina-Tokens-panel)' }}>
       <div>
-        <div className="text-2xs text-txt2 font-medium mb-1.5">NAS 双备份</div>
+        <div className="text-2xs text-txt2 font-medium mb-1.5">备份（可选）</div>
         <div className="rounded-md border border-line bg-card p-2.5 text-2xs flex flex-col gap-1">
-          <span className={backupEnabled ? 'text-success' : 'text-txt3'}>{backupEnabled ? '✓ 已启用' : '未启用（仅写入主库）'}</span>
-          <span className="num text-txt3">目标：N:/NAS-Photos/Lumina</span>
-          <span className="text-txt3">时机：{backupTiming === 'onImport' ? '导入时逐文件' : '每晚 03:00 定时'}</span>
+          <span className={backupEnabled ? 'text-success' : 'text-txt3'}>{backupEnabled ? '✓ 已启用第二位置备份' : '未启用（仅导入主库）'}</span>
+          {backupEnabled && <span className="num text-txt3">目标：{backupTarget || '（未填写）'}</span>}
+          <span className="text-txt3">{backupEnabled ? `时机：${backupTiming === 'onImport' ? '导入时逐文件' : '每晚 03:00 定时'}` : '是否备份、备份到哪，由你在「目标与备份」步骤决定'}</span>
           <span className="text-txt3">MD5 校验：{verifyMd5 ? '导入即校验' : '关闭'}</span>
         </div>
       </div>
@@ -504,6 +514,23 @@ function SourceStep({
           <span className="flex-1">
             <span className="block text-xs text-txt">选择文件夹…</span>
             <span className="block text-2xs text-txt3">从本机任意目录导入照片（RAW / JPG 等）</span>
+          </span>
+          <span className="text-2xs text-accent">浏览 →</span>
+        </button>
+        <button
+          onClick={async () => {
+            const picked = await window.lumina.pickFile({
+              title: '选择要导入的照片或视频',
+              extensions: IMPORT_FILE_EXTENSIONS,
+            });
+            if (picked) onPick({ kind: 'file', path: picked, label: picked });
+          }}
+          className="flex items-center gap-3 p-3 rounded-lg border text-left border-line bg-card hover:bg-hover"
+        >
+          <span className="w-9 h-6 rounded bg-hover flex items-center justify-center text-txt2 text-2xs font-bold">文件</span>
+          <span className="flex-1">
+            <span className="block text-xs text-txt">选择单个文件…</span>
+            <span className="block text-2xs text-txt3">只导一张照片或一个视频也可以（RAW / JPG / MP4 等）</span>
           </span>
           <span className="text-2xs text-accent">浏览 →</span>
         </button>
@@ -597,6 +624,8 @@ function TargetStep(props: {
   setTarget: (v: string) => void;
   backupEnabled: boolean;
   setBackupEnabled: (v: boolean) => void;
+  backupTarget: string;
+  setBackupTarget: (v: string) => void;
   backupTiming: 'onImport' | 'nightly';
   setBackupTiming: (v: 'onImport' | 'nightly') => void;
   verifyMd5: boolean;
@@ -607,8 +636,8 @@ function TargetStep(props: {
   return (
     <div className="max-w-xl flex flex-col gap-4">
       <div className="rounded-lg border border-line bg-card p-4">
-        <div className="text-xs text-txt mb-2">目标与备份</div>
-        <label className="text-2xs text-txt3 block mb-1">主库路径</label>
+        <div className="text-xs text-txt mb-2">目标与备份（备份完全可选）</div>
+        <label className="text-2xs text-txt3 block mb-1">主库路径（照片将复制到这里进入图库）</label>
         <input
           value={props.target}
           onChange={(e) => props.setTarget(e.target.value)}
@@ -616,16 +645,25 @@ function TargetStep(props: {
         />
         <div className="mt-3 flex items-center justify-between">
           <div>
-            <div className="text-xs text-txt">NAS 双备份 + MD5 校验</div>
-            <div className="text-2xs text-txt3">第二目标：N:/NAS-Photos/Lumina · 导入后逐文件校验</div>
+            <div className="text-xs text-txt">备份到第二位置（NAS / 移动硬盘…）</div>
+            <div className="text-2xs text-txt3">关闭 = 仅导入主库；开启 = 导入时额外复制一份，路径任填</div>
           </div>
           <Toggle checked={props.backupEnabled} onChange={props.setBackupEnabled} label="启用" />
         </div>
         {props.backupEnabled && (
-          <div className="mt-2 flex items-center gap-2">
-            <Chip label="导入时" active={props.backupTiming === 'onImport'} onClick={() => props.setBackupTiming('onImport')} />
-            <Chip label="每晚 03:00" active={props.backupTiming === 'nightly'} onClick={() => props.setBackupTiming('nightly')} />
-            <Toggle checked={props.verifyMd5} onChange={props.setVerifyMd5} label="导入即 MD5 校验" />
+          <div className="mt-2.5 flex flex-col gap-2">
+            <label className="text-2xs text-txt3 block">备份目标路径（NAS、移动硬盘等任意可写位置）</label>
+            <input
+              value={props.backupTarget}
+              onChange={(e) => props.setBackupTarget(e.target.value)}
+              placeholder="例如 N:/NAS-Photos/Lumina 或 E:/Backup/Photos"
+              className="w-full h-8 px-2.5 rounded-md border border-line bg-panel text-xs text-txt focus:outline-none focus:border-accent num"
+            />
+            <div className="flex items-center gap-2">
+              <Chip label="导入时" active={props.backupTiming === 'onImport'} onClick={() => props.setBackupTiming('onImport')} />
+              <Chip label="每晚 03:00" active={props.backupTiming === 'nightly'} onClick={() => props.setBackupTiming('nightly')} />
+              <Toggle checked={props.verifyMd5} onChange={props.setVerifyMd5} label="导入即 MD5 校验" />
+            </div>
           </div>
         )}
         {props.check && (

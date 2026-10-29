@@ -166,7 +166,7 @@ export const api = {
     getExposedRange: (id: number) => rpc.request<{ underexposedPct: number; overexposedPct: number }>('analysis.getExposedRange', { id }),
   },
   importApi: {
-    scanSource: (source: { kind: 'volume' | 'folder'; path: string }) => rpc.request<{ jobId: number }>('import.scanSource', { source }),
+    scanSource: (source: { kind: 'volume' | 'folder' | 'file'; path: string }) => rpc.request<{ jobId: number }>('import.scanSource', { source }),
     checkTarget: (targetPath: string, requiredBytes: number) => rpc.request<CheckTargetResult>('import.checkTarget', { targetPath, requiredBytes }),
     start: (opts: Record<string, unknown>) => rpc.request<{ jobId: number }>('import.start', opts),
     cancel: (jobId: number) => rpc.request<Record<string, never>>('import.cancel', { jobId }),
