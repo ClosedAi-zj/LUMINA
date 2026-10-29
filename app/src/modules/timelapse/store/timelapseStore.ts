@@ -46,6 +46,20 @@ interface TimelapseStore {
   renderJobId: number | null;
   /** 去闪分析量化结果（完成后回填，RenderPanel 展示 + warnings 零静默） */
   analyzeResult: FlickerAnalysisResult | null;
+  /** 走带区间（仅影响预览播放区间；渲染区间随 Phase B） */
+  inPoint: number | null;
+  outPoint: number | null;
+  loop: boolean;
+  /** 调色状态（仅存 UI，引擎接入留 Phase B） */
+  toneCurve: { shadow: number; mid: number; high: number };
+  colorGrade: { shadows: { hue: number; amount: number }; mid: { hue: number; amount: number }; high: { hue: number; amount: number } };
+
+  setInPoint: (n: number | null) => void;
+  setOutPoint: (n: number | null) => void;
+  setLoop: (v: boolean) => void;
+  addKeyframeAtCurrent: () => void;
+  setToneCurve: (patch: Partial<{ shadow: number; mid: number; high: number }>) => void;
+  setColorGrade: (zone: 'shadows' | 'mid' | 'high', patch: Partial<{ hue: number; amount: number }>) => void;
 
   load: () => Promise<void>;
   select: (seqId: number) => Promise<void>;
@@ -53,7 +67,7 @@ interface TimelapseStore {
   setFrameNo: (n: number) => void;
   stepFrame: (delta: number) => void;
   setPlaying: (v: boolean) => void;
-  ensureFramePreview: (seqId: number, frameNo: number) => Promise<void>;
+  ensureFramePreview: (seqId: number, frameNo: number, size?: 320 | 640 | 1080) => Promise<void>;
   moveKeyframe: (index: number, ev: number, temperatureK?: number) => void;
   commitRamp: () => Promise<void>;
   resetRamp: () => void;
@@ -87,6 +101,15 @@ export const useTimelapse = create<TimelapseStore>((set, get) => ({
   deflickerJobId: null,
   renderJobId: null,
   analyzeResult: null,
+  inPoint: null,
+  outPoint: null,
+  loop: true,
+  toneCurve: { shadow: 0, mid: 0, high: 0 },
+  colorGrade: {
+    shadows: { hue: 0, amount: 0 },
+    mid: { hue: 0, amount: 0 },
+    high: { hue: 0, amount: 0 },
+  },
 
   load: async () => {
     if (get().loading) return;
@@ -104,7 +127,7 @@ export const useTimelapse = create<TimelapseStore>((set, get) => ({
 
   select: async (seqId) => {
     if (get().selectedSeqId === seqId && get().detail) return;
-    set({ selectedSeqId: seqId, detail: null, detailLoading: true, frameNo: 1, playing: false, rampDirty: false });
+    set({ selectedSeqId: seqId, detail: null, detailLoading: true, frameNo: 1, playing: false, rampDirty: false, inPoint: null, outPoint: null });
     await get().refreshDetail();
   },
 
@@ -138,16 +161,31 @@ export const useTimelapse = create<TimelapseStore>((set, get) => ({
   stepFrame: (delta) => {
     const st = get();
     const total = st.detail?.frameCount ?? 1;
+    // 预览播放区间：in/out 任一设置则以此为界，否则全程 [1,total]
+    const lo = st.inPoint !== null && st.outPoint !== null ? Math.min(st.inPoint, st.outPoint) : st.inPoint !== null ? st.inPoint : 1;
+    const hi = st.inPoint !== null && st.outPoint !== null ? Math.max(st.inPoint, st.outPoint) : st.outPoint !== null ? st.outPoint : total;
     let next = st.frameNo + delta;
-    if (next > total) next = 1; // 循环播放
-    if (next < 1) next = total;
-    set({ frameNo: next });
+    if (st.loop) {
+      // 区间内循环回绕
+      if (next > hi) next = lo;
+      else if (next < lo) next = hi;
+    } else {
+      // 非循环：到边界停住并暂停播放
+      if (next > hi) {
+        next = hi;
+        set({ playing: false });
+      } else if (next < lo) {
+        next = lo;
+        set({ playing: false });
+      }
+    }
+    set({ frameNo: Math.max(lo, Math.min(hi, next)) });
   },
 
   setPlaying: (v) => set({ playing: v }),
 
-  ensureFramePreview: async (seqId, frameNo) => {
-    const key = `${seqId}_${frameNo}`;
+  ensureFramePreview: async (seqId, frameNo, size = 1080) => {
+    const key = `${seqId}_${frameNo}_${size}`;
     const st = get();
     if (st.framePreviews[key] || st.framePreviewsRequested.has(key)) return;
     set((s) => {
@@ -156,7 +194,7 @@ export const useTimelapse = create<TimelapseStore>((set, get) => ({
       return { framePreviewsRequested: next };
     });
     try {
-      const res = await api.timelapse.previewFrame(seqId, frameNo, 1080);
+      const res = await api.timelapse.previewFrame(seqId, frameNo, size);
       set((s) => ({ framePreviews: { ...s.framePreviews, [key]: res.path } }));
     } catch (err) {
       useJobStore.getState().toast(`帧预览加载失败：${errText(err)}`, 'error', 6000);
@@ -188,6 +226,25 @@ export const useTimelapse = create<TimelapseStore>((set, get) => ({
     const detail = get().detail;
     if (detail) set({ ramp: detail.exposureRamp.keyframes.map((k) => ({ ...k })), rampDirty: false });
   },
+
+  setInPoint: (n) => set({ inPoint: n }),
+  setOutPoint: (n) => set({ outPoint: n }),
+  setLoop: (v) => set({ loop: v }),
+
+  addKeyframeAtCurrent: () => {
+    const st = get();
+    if (st.selectedSeqId === null) return;
+    const frameNo = st.frameNo;
+    // 同帧已有关键帧则跳过（避免重复），保留既有 EV / 色温
+    if (st.ramp.some((k) => k.frameNo === frameNo)) return;
+    const { ev, temperatureK } = interpolateRamp(st.ramp, frameNo);
+    const ramp = [...st.ramp, { frameNo, ev, temperatureK }].sort((a, b) => a.frameNo - b.frameNo);
+    set({ ramp, rampDirty: true });
+  },
+
+  setToneCurve: (patch) => set((s) => ({ toneCurve: { ...s.toneCurve, ...patch } })),
+  setColorGrade: (zone, patch) =>
+    set((s) => ({ colorGrade: { ...s.colorGrade, [zone]: { ...s.colorGrade[zone], ...patch } } })),
 
   setResolution: (r) => set({ resolution: r }),
   setFps: (f) => set({ fps: f }),
@@ -246,6 +303,32 @@ export const useTimelapse = create<TimelapseStore>((set, get) => ({
     }
   },
 }));
+
+/**
+ * 在当前帧处推断坡度关键帧的 EV / 色温：取相邻关键帧线性插值；
+ * 无关键帧则默认 EV 0 / 5500K（addKeyframeAtCurrent 使用）。
+ */
+function interpolateRamp(ramp: RampKeyframe[], frameNo: number): { ev: number; temperatureK: number } {
+  if (ramp.length === 0) return { ev: 0, temperatureK: 5500 };
+  const sorted = [...ramp].sort((a, b) => a.frameNo - b.frameNo);
+  let lo: RampKeyframe | null = null;
+  let hi: RampKeyframe | null = null;
+  for (const k of sorted) {
+    if (k.frameNo <= frameNo) lo = k;
+    if (k.frameNo >= frameNo && hi === null) hi = k;
+  }
+  if (lo && hi) {
+    if (lo.frameNo === hi.frameNo) return { ev: lo.ev, temperatureK: lo.temperatureK };
+    const t = (frameNo - lo.frameNo) / Math.max(1, hi.frameNo - lo.frameNo);
+    return {
+      ev: lo.ev + (hi.ev - lo.ev) * t,
+      temperatureK: Math.round(lo.temperatureK + (hi.temperatureK - lo.temperatureK) * t),
+    };
+  }
+  if (lo) return { ev: lo.ev, temperatureK: lo.temperatureK };
+  if (hi) return { ev: hi.ev, temperatureK: hi.temperatureK };
+  return { ev: 0, temperatureK: 5500 };
+}
 
 /**
  * 引擎 listSequences 返回形状兼容：数组或 { items: [...] } 二者皆收
