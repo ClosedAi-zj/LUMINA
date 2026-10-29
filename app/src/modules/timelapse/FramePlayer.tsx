@@ -156,8 +156,8 @@ export default function FramePlayer() {
         ) : (
           <Spinner size={22} />
         )}
-        {/* 客户端 RGB 直方图叠加（半透明 LR 风格） */}
-        <Histogram src={previewPath ? fileUrl(previewPath) : null} />
+        {/* 客户端 RGB 直方图叠加（半透明 LR 风格，Phase B 走引擎 frameHistogram RPC） */}
+        <Histogram seqId={selectedSeqId} frameNo={frameNo} />
         <span
           className="absolute top-2 right-3 num text-2xs px-1.5 py-0.5 rounded-sm bg-card border border-line"
           style={{ color: 'var(--Lumina-Tokens-gold)' }}
