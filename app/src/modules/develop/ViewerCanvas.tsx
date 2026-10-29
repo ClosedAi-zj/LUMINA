@@ -17,6 +17,17 @@ import type { EditParams } from '../../api/protocol';
 /** C1 基线诊断开关（?baseline=1）：修图台画布在基线走查中纯黑（px=0,0,0），需要链路日志定位 */
 const IS_BASELINE = new URLSearchParams(window.location.search).get('baseline') === '1';
 
+/** 实时预览分辨率策略（调色卡顿修复，2026-10-29）：
+ *  - 拖动/连续调参时只用 LIVE_LONG_EDGE（≤640）求值：软件渲染（无 WebGL 降级路径）下
+ *    引擎 Plan 管线按像素线性开销，1280px 单张需 ~2.5s、1600px ~4s（实测），全尺寸实时求值
+ *    必然卡死；降到 640px 单张 ~0.7s，配合下方"同一时刻只跑一个渲染 + coalesce 最新参数"
+ *    即可在软件渲染下保持可拖动。GPU 路径不使用 longEdge（内部缓冲 ≤1600），不受此影响。
+ *  - 交互停止约 220ms 后自动补一张 SETTLE_LONG_EDGE（≤1024）高清图，静止时更清晰。
+ *  原实现每 120ms 直接发一张 1600px 整图渲染且不等待上一张完成，引擎串行处理 → 一次拖动在
+ *  引擎侧排队十几张，预览滞后数秒，表现为"拖不动 / 卡死"。 */
+const LIVE_LONG_EDGE = 640;
+const SETTLE_LONG_EDGE = 1024;
+
 /** 兜底：WebGL 不可用/渲染失败时用 2D 画布至少把底图画出来（参数调整不生效，但不黑屏）。
  *  尺寸必须 contain 适配宿主容器（与 GPU/CPU 路径同口径）——旧实现按宿主矩形填满绘制，
  *  竖图被横向拉伸填满 16:9 画布（用户实测"竖屏变横批"的直接成因之一）。 */
@@ -52,15 +63,16 @@ function drawFallback2d(canvas: HTMLCanvasElement, img: HTMLImageElement): boole
 async function renderViaEngine(
   canvas: HTMLCanvasElement,
   seqRef: { current: number },
-  opts: { params: EditParams; split?: number | null; beforeParams?: EditParams | null },
+  opts: { params: EditParams; split?: number | null; beforeParams?: EditParams | null; longEdge?: number },
 ): Promise<boolean> {
   const seq = ++seqRef.current;
   const st = useDevelop.getState();
   const inputPath = st.baseImageUrl ?? '';
   if (!inputPath) return false;
   const photoId = st.photoId ?? 0;
+  const longEdge = opts.longEdge ?? 1600;
   const loadImg = async (p: EditParams): Promise<HTMLImageElement | null> => {
-    const r = await api.develop.render({ photoId, inputPath, params: p });
+    const r = await api.develop.render({ photoId, inputPath, params: p, longEdge });
     if (seq !== seqRef.current) return null;
     const im = new Image();
     im.src = fileUrl(r.path);
@@ -110,6 +122,43 @@ async function renderViaEngine(
   }
 }
 
+/**
+ * 软件渲染模式下从已绘制的 2D 画布就地采样直方图（降级路径下引擎不返回直方图，
+ * 否则直方图面板在软件渲染时永远静止）。64px 下采样后按 256 级分通道统计，成本极低。
+ */
+function sampleCanvasHistogram(canvas: HTMLCanvasElement): { r: number[]; g: number[]; b: number[] } | null {
+  try {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    const sw = 64;
+    const sh = Math.max(1, Math.round((64 * canvas.height) / Math.max(1, canvas.width)));
+    const off = document.createElement('canvas');
+    off.width = sw;
+    off.height = sh;
+    const octx = off.getContext('2d');
+    if (!octx) return null;
+    octx.drawImage(canvas, 0,0, sw, sh);
+    const data = octx.getImageData(0, 0, sw, sh).data;
+    const n = sw * sh;
+    const r = new Array<number>(256).fill(0);
+    const g = new Array<number>(256).fill(0);
+    const b = new Array<number>(256).fill(0);
+    for (let i = 0; i < data.length; i += 4) {
+      r[data[i]] += 1;
+      g[data[i + 1]] += 1;
+      b[data[i + 2]] += 1;
+    }
+    for (let i = 0; i < 256; i += 1) {
+      r[i] /= n;
+      g[i] /= n;
+      b[i] /= n;
+    }
+    return { r, g, b };
+  } catch {
+    return null;
+  }
+}
+
 export default function ViewerCanvas({ onHistogram }: { onHistogram?: (h: { r: number[]; g: number[]; b: number[] }) => void }) {
   const photoId = useDevelop((s) => s.photoId);
   const params = useDevelop((s) => s.params);
@@ -141,6 +190,11 @@ export default function ViewerCanvas({ onHistogram }: { onHistogram?: (h: { r: n
   const cpuMsRef = useRef<number | null>(null);
   /** 引擎 CPU 渲染请求序号（防慢请求串台覆盖新渲染） */
   const engineRenderSeq = useRef(0);
+  /** 渲染调度（防积压）：同一时刻只跑一个渲染；新参数只保留最新一份（coalesce），
+   *  避免一次拖动在引擎侧排队十几张整图渲染、预览滞后数秒（调色卡顿修复）。 */
+  const renderBusy = useRef(false);
+  const renderPending = useRef<{ params: EditParams; split: number | null; before: EditParams | null; hiRes: boolean } | null>(null);
+  const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const logCpuOnce = (ms: number | null): void => {
     cpuMsRef.current = ms;
     if (ms !== null && window.lumina?.isSmoke) console.log(`[smoke-scenario] cpu-render: ms=${ms}`);
@@ -254,26 +308,47 @@ export default function ViewerCanvas({ onHistogram }: { onHistogram?: (h: { r: n
     // 底图解码失败且已 2D 直出：不要再用空纹理把它刷黑（v1.4.1）
     if (r && !imageOkRef.current) return;
 
-    // 渲染调度（调色卡顿修复）：拖动滑杆时 store 连续更新，GPU 路径按帧合并
-    // （一帧只渲一次）；CPU 降级路径（引擎 RPC 整图重渲）120ms 防抖 + 只保留
-    // 最新参数 —— 否则一次拖动会排几十个 RPC，预览滞后数秒。
-    const doRender = () => {
+    // 渲染调度（调色卡顿修复，2026-10-29）：
+    //  - 同一时刻只跑一个渲染；拖动中 store 连续更新，新参数只保留最新一份（coalesce），
+    //    不再每 120ms 排队一张整图渲染 → 引擎侧不再积压、预览不再滞后数秒。
+    //  - 拖动中用 LIVE_LONG_EDGE（≤640）求值；交互停止 ~220ms 后补一张 SETTLE_LONG_EDGE（≤1024）高清图。
+    type RenderJob = { params: EditParams; split: number | null; before: EditParams | null; hiRes: boolean };
+    const runRender = (job: RenderJob) => {
+      renderBusy.current = true;
+      const finish = () => {
+        renderBusy.current = false;
+        if (settleTimer.current) {
+          clearTimeout(settleTimer.current);
+          settleTimer.current = null;
+        }
+        if (renderPending.current) {
+          const next = renderPending.current;
+          renderPending.current = null;
+          requestAnimationFrame(() => runRender(next));
+        } else if (!job.hiRes) {
+          // 交互停止后补一张高清定帧
+          settleTimer.current = setTimeout(() => {
+            if (!renderBusy.current && !renderPending.current) {
+              runRender({ params: job.params, split: job.split, before: job.before, hiRes: true });
+            }
+          }, 220);
+        }
+      };
+      const longEdge = job.hiRes ? SETTLE_LONG_EDGE : LIVE_LONG_EDGE;
+      const renderOpts = { params: job.params, split: job.split ?? null, beforeParams: job.before ?? undefined, longEdge };
       if (r) {
-        const ok = r.render(canvas, {
-          params,
-          split: effectiveCompare ? split : null,
-          beforeParams: beforeParams ?? undefined,
-        });
+        const ok = r.render(canvas, { params: job.params, split: job.split ?? null, beforeParams: job.before ?? undefined });
         if (!ok) {
           // GPU 渲染失败：降级引擎 Plan CPU 渲染并显式告知（不允许静默黑屏）
           setRenderNotice('软件渲染模式：参数已生效（引擎 Plan 求值，与导出同实现）');
-          void renderViaEngine(canvas, engineRenderSeq, {
-            params,
-            split: effectiveCompare ? split : null,
-            beforeParams: beforeParams ?? undefined,
-          }).then((ok2) => {
+          void renderViaEngine(canvas, engineRenderSeq, renderOpts).then((ok2) => {
             cpuMsRef.current = ok2 ? 0 : null;
             logCpuOnce(cpuMsRef.current);
+            if (ok2 && onHistogram) {
+              const h = sampleCanvasHistogram(canvas);
+              if (h) onHistogram(h);
+            }
+            finish();
           });
         } else {
           setRenderNotice(null);
@@ -283,26 +358,36 @@ export default function ViewerCanvas({ onHistogram }: { onHistogram?: (h: { r: n
             const h = r.sampleHistogram(canvas);
             if (h && onHistogram) onHistogram(h);
           }, 150);
+          finish();
         }
       } else {
         // 无 WebGL：引擎 Plan CPU 渲染（与导出同一实现，T1.5）
-        void renderViaEngine(canvas, engineRenderSeq, {
-          params,
-          split: effectiveCompare ? split : null,
-          beforeParams: beforeParams ?? undefined,
-        }).then((ok) => {
-          cpuMsRef.current = ok ? 0 : null;
+        void renderViaEngine(canvas, engineRenderSeq, renderOpts).then((ok2) => {
+          cpuMsRef.current = ok2 ? 0 : null;
           logCpuOnce(cpuMsRef.current);
-          if (!ok && imgRef.current) drawFallback2d(canvas, imgRef.current);
+          if (!ok2 && imgRef.current) drawFallback2d(canvas, imgRef.current);
+          if (ok2 && onHistogram) {
+            const h = sampleCanvasHistogram(canvas);
+            if (h) onHistogram(h);
+          }
+          finish();
         });
       }
     };
-    if (r) {
-      const raf = requestAnimationFrame(doRender);
-      return () => cancelAnimationFrame(raf);
-    }
-    const t = setTimeout(doRender, 120);
-    return () => clearTimeout(t);
+    const scheduleRender = (job: RenderJob) => {
+      if (renderBusy.current) {
+        renderPending.current = job; // 只保留最新一份
+      } else {
+        runRender(job);
+      }
+    };
+    scheduleRender({ params, split: effectiveCompare ? split : null, before: beforeParams ?? null, hiRes: false });
+    return () => {
+      if (settleTimer.current) {
+        clearTimeout(settleTimer.current);
+        settleTimer.current = null;
+      }
+    };
   }, [params, effectiveCompare, split, beforeParams, renderTick, onHistogram]);
 
   // 画笔笔画：仅选中画笔蒙版时绘制红场（与渲染同一场数据）
