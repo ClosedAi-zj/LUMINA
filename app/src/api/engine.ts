@@ -47,6 +47,8 @@ import type {
   TimelineBucket,
   TimelapseSequenceDetail,
   TimelapseSequenceSummary,
+  TimelapseColorAdjust,
+  TimelapseFrameHistogram,
   VCopyInfo,
   VolumeInfo,
 } from './protocol';
@@ -235,8 +237,11 @@ export const api = {
       rpc.request<Record<string, never>>('timelapse.setExposureRamp', { seqId, keyframes }),
     previewFrame: (seqId: number, frameNo: number, size: 320 | 640 | 1080) =>
       rpc.request<{ path: string }>('timelapse.previewFrame', { seqId, frameNo, size }),
-    render: (seqId: number, resolution: '1080p' | '4K' | '6K', fps: 25 | 30 | 60, codec: 'h264' | 'h265' | 'prores') =>
-      rpc.request<{ jobId: number }>('timelapse.render', { seqId, resolution, fps, codec }),
+    render: (seqId: number, resolution: '1080p' | '4K' | '6K', fps: 25 | 30 | 60, codec: 'h264' | 'h265' | 'prores', colorAdjust?: TimelapseColorAdjust) =>
+      rpc.request<{ jobId: number }>('timelapse.render', { seqId, resolution, fps, codec, ...(colorAdjust ? { colorAdjust } : {}) }),
+    /** Phase B：取单帧 R/G/B + 亮度 256 桶直方图（替代客户端 canvas 读像素）。 */
+    frameHistogram: (seqId: number, frameNo: number, size?: number) =>
+      rpc.request<TimelapseFrameHistogram>('timelapse.frameHistogram', { seqId, frameNo, size }),
     getRenderJobs: () => rpc.request<JobInfo[]>('timelapse.getRenderJobs'),
   },
   gallery: {

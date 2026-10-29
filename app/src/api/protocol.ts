@@ -570,6 +570,22 @@ export interface TimelapseSequenceDetail {
   lrtCompatible: boolean;
 }
 
+/** Phase B：渲染调色参数（对齐引擎 timelapse.render 第 5 参 colorAdjust）。
+ * 字段均 number；引擎对零值≈恒等变换，故前端无需判空，恒等即传全 0。 */
+export interface TimelapseColorAdjust {
+  toneCurve?: { shadows: number; midtone: number; highlight: number };
+  colorGrade?: { shadowHue: number; shadowSat: number; midtoneHue: number; midtoneSat: number; highlightHue: number; highlightSat: number; blend?: number; balance?: number };
+}
+
+/** Phase B：引擎 timelapse.frameHistogram 返回（R/G/B + Rec.709 亮度，各 256 桶）。
+ * 与既有只含 {r,g,b} 的 Histogram 接口共存，不改动后者以免波及 develop/analysis。 */
+export interface TimelapseFrameHistogram {
+  r: number[];
+  g: number[];
+  b: number[];
+  luma: number[];
+}
+
 export interface BracketGroup {
   groupId: number;
   photoIds: number[];
