@@ -1,7 +1,8 @@
 /**
- * 导入向导（阶段5 B2 重排，帧 06 裁定）：左侧纵向步骤条（选择来源 → 检测摘要 →
- * 备份目标 → 命名/去重 → 执行）+ 右侧常驻设置面板（NAS 双备份 / 去重策略 /
- * 预览胶片条）。执行进度走真实 ingest 事件（importFileResults + job 进度）。
+ * 导入页（单页直导版，替代原 1→2→3→4→执行 分步向导）：
+ * 用户裁定"不要按固定流程走"——来源选择、扫描摘要、导入设置、开始按钮
+ * 全部一屏呈现；扫描完成即可直接开始导入，所有选项随手可改，不设步骤门槛。
+ * 执行进度走真实 ingest 事件（importFileResults + job 进度）。
  * 整夹不可读 → 三选项弹窗（重定位 / 孤儿 / 回填），禁止静默跳过（PRD R3）。
  */
 
@@ -18,8 +19,6 @@ import Filmstrip from '../library/Filmstrip';
 import { formatBytes, formatCount, formatEta } from '../../utils/format';
 import type { ScanSourceResult, VolumeInfo } from '../../api/protocol';
 
-type Step = 1 | 2 | 3 | 4 | 'executing';
-
 interface SourcePick {
   kind: 'volume' | 'folder' | 'file';
   path: string;
@@ -35,7 +34,6 @@ const IMPORT_FILE_EXTENSIONS = [
 
 /**
  * 重命名模板：`label` 给用户看，`template` 才是发给引擎的 token 串（协议 §5.8）。
- *
  * 曾经这里只有中文标签，并且被**原样**当作 renameTemplate 传给引擎：
  * `RenameEngine::validate` 对不含 `{}` 的串直接放行，`apply` 于是把每一张照片都
  * 命名成同一个基名（"YYYY-MM-DD_地点_序号"），同目录内互相覆盖 ——
@@ -57,7 +55,6 @@ interface ImportResultPayload {
 }
 
 export default function IngestWizard() {
-  const [step, setStep] = useState<Step>(1);
   const [source, setSource] = useState<SourcePick | null>(null);
   const [scanJobId, setScanJobId] = useState<number | null>(null);
   const [scanResult, setScanResult] = useState<ScanSourceResult | null>(null);
@@ -86,20 +83,27 @@ export default function IngestWizard() {
   const importJob = useJobProgress(importJobId);
   const importEvents = useJobStore((s) => s.importFileResults);
 
-  // 扫描完成 → 摘要（event.job.completed.result 由 jobStore 捕获）
+  // 扫描完成 → 摘要 + 容量预检（单页直导：不再有"下一步"触发预检，扫描完即查）
   useEffect(() => {
     if (scanJob?.state === 'done' && scanJob.result && !scanResult) {
-      setScanResult(scanJob.result as unknown as ScanSourceResult);
-      // 整夹不可读 → 三选项弹窗（R3）
       const r = scanJob.result as unknown as ScanSourceResult;
+      setScanResult(r);
+      // 整夹不可读 → 三选项弹窗（R3）
       if (r.unreadable && r.unreadable.length > 0) {
         setMissingFolder(r.unreadable[0].path);
       }
+      api.importApi
+        .checkTarget(target, r.totalBytes)
+        .then(setTargetCheck)
+        .catch((err) => {
+          // 零静默：容量预检失败不能装作通过，要显式提示"未预检"
+          setTargetCheck(null);
+          useJobStore.getState().toast(`目标盘容量预检失败：${errText(err)}（将继续，但不会拦截空间不足）`, 'warn', 6000);
+        });
     }
-  }, [scanJob, scanResult]);
+  }, [scanJob, scanResult, target]);
 
-  // 导入完成 → 汇总（字段名必须与引擎 result 对齐：imported / duplicated / failed；
-  // 之前按 added/skipped 读，弹窗永远显示"成功 undefined 张"）
+  // 导入完成 → 汇总（字段名必须与引擎 result 对齐：imported / duplicated / failed）
   useEffect(() => {
     if (importJob?.state === 'done' && importJob.result) {
       const r = importJob.result as unknown as ImportResultPayload;
@@ -115,6 +119,7 @@ export default function IngestWizard() {
   const startScan = async (pick: SourcePick) => {
     setSource(pick);
     setScanResult(null);
+    setTargetCheck(null);
     try {
       const { jobId } = await api.importApi.scanSource({ kind: pick.kind, path: pick.path });
       setScanJobId(jobId);
@@ -123,21 +128,11 @@ export default function IngestWizard() {
     }
   };
 
-  const enterStep2 = async () => {
-    if (!scanResult) return;
-    try {
-      const check = await api.importApi.checkTarget(target, scanResult.totalBytes);
-      setTargetCheck(check);
-    } catch (err) {
-      // 零静默：容量预检失败不能装作通过，步骤 2 里要显式提示"未预检"
-      setTargetCheck(null);
-      useJobStore.getState().toast(`目标盘容量预检失败：${errText(err)}（将继续，但不会拦截空间不足）`, 'warn', 6000);
-    }
-    setStep(2);
-  };
+  const importing = importJob?.state === 'running';
+  const canStart = !!scanResult && scanResult.totalFiles > 0 && !importing;
 
   const startImport = async () => {
-    if (!source) return;
+    if (!source || !canStart) return;
     try {
       const { jobId } = await api.importApi.start({
         source: { kind: source.kind, path: source.path },
@@ -150,7 +145,7 @@ export default function IngestWizard() {
         postActions: { enterCulling, applyPreset },
       });
       setImportJobId(jobId);
-      setStep('executing');
+      setSummary(null);
     } catch (err) {
       useJobStore.getState().toast(`导入启动失败：${errText(err)}`, 'error');
     }
@@ -164,119 +159,193 @@ export default function IngestWizard() {
   const jobEvents = useMemo(() => (importJobId === null ? [] : importEvents.filter((e) => e.jobId === importJobId)), [importEvents, importJobId]);
   // 失败明细（最多 5 条）：汇总弹窗里必须能看到"为什么失败"，不能只给一个数字
   const failedReasons = useMemo(() => jobEvents.filter((e) => e.status === 'failed').slice(-5), [jobEvents]);
+  const removable = volumes.data ?? [];
 
   return (
     // relative：底部 footer 用 absolute bottom-0 贴底，必须有一个已定位的祖先，
     // 否则会按视口定位（在滚动容器里会漂到页面外）
     <div className="relative h-full flex" style={{ background: 'var(--Lumina-Tokens-panel)' }}>
-      {/* 步骤导航 */}
-      <aside className="w-56 shrink-0 border-r border-line p-4 flex flex-col">
-        <div className="text-sm font-medium mb-1">导入照片</div>
-        <div className="text-2xs text-txt3 mb-4">从相机、文件夹或单个文件导入 · 备份可选</div>
-        {(
-          [
-            [1, '选择来源', 'SD 卡 · 文件夹 · 单个文件'],
-            [2, '检测摘要', '文件数 · 配对 · 重复'],
-            [3, '目标与备份', '主库路径 · 备份可选'],
-            [4, '命名与去重', '模板 · 去重 · 配对'],
-            ['executing', '执行', '进度 · 校验 · 汇总'],
-          ] as const
-        ).map(([n, title, desc]) => {
-          const order: (Step)[] = [1, 2, 3, 4, 'executing'];
-          const active = step === n;
-          const done = order.indexOf(step as Step) > order.indexOf(n as Step);
-          return (
-            <div key={String(n)} className={`flex items-start gap-2.5 py-2.5 ${active ? '' : 'opacity-70'}`}>
-              <span
-                className="w-5 h-5 rounded-full text-2xs flex items-center justify-center shrink-0 mt-px"
-                style={{ background: active || done ? 'var(--Lumina-Tokens-accent)' : 'var(--Lumina-Tokens-hover)', color: active || done ? 'var(--Lumina-Tokens-onAccent)' : 'var(--Lumina-Tokens-textMuted)' }}
+      {/* 主区：单页直导 */}
+      <section className="flex-1 min-w-0 p-4 overflow-y-auto flex flex-col gap-3 pb-16">
+        <div>
+          <div className="text-sm font-medium">导入照片</div>
+          <div className="text-2xs text-txt3 mt-0.5">从相机、文件夹或单个文件导入 · 备份可选 · 选好来源即可直接开始</div>
+        </div>
+
+        {/* 来源选择 */}
+        <div className="grid grid-cols-3 gap-2">
+          {removable
+            .filter((v) => v.isRemovable)
+            .map((v: VolumeInfo) => (
+              <button
+                key={v.path}
+                onClick={() => void startScan({ kind: 'volume', path: v.path, label: v.label })}
+                className={`flex items-center gap-3 p-3 rounded-lg border text-left ${
+                  sourceEquals(v.path, source?.path ?? null) ? 'border-accent bg-[var(--Lumina-Tokens-accentSoft)]' : 'border-line bg-card hover:bg-hover'
+                }`}
               >
-                {done && !active ? '✓' : n === 'executing' ? '▶' : n}
-              </span>
-              <div>
-                <div className={`text-xs ${active ? 'text-txt font-medium' : 'text-txt2'}`}>{title}</div>
-                <div className="text-2xs text-txt3">{desc}</div>
-              </div>
-            </div>
-          );
-        })}
-        {scanResult && (
-          <div className="mt-auto rounded-md border border-line p-2.5 text-2xs">
-            <div className="num text-txt">{formatCount(scanResult.totalFiles)} 个文件 · {formatBytes(scanResult.totalBytes)}</div>
-            <div className="text-txt3 mt-1">
-              {Object.entries(scanResult.byFormat).map(([fmt, n]) => `${fmt} ${n}`).join(' · ') || '无支持格式'}
-            </div>
-            {/* 重复数只能来自引擎扫描结果；扫描阶段不统计时显示"—"，绝不写死数字（R3） */}
-            <div className="text-accent mt-1">
-              {scanResult.duplicates > 0 ? `${scanResult.duplicates} 个与库中重复 · 将跳过` : '重复在导入时按 MD5 判定'}
+                <span className="w-9 h-6 rounded bg-accent text-onaccent text-2xs font-bold flex items-center justify-center shrink-0">SD</span>
+                <span className="flex-1 min-w-0">
+                  <span className="block text-xs text-txt truncate">{v.label}</span>
+                  <span className="block text-2xs text-txt3 num">
+                    {formatBytes(v.totalBytes)} · 剩余 {formatBytes(v.freeBytes)}
+                  </span>
+                </span>
+              </button>
+            ))}
+          <button
+            onClick={async () => {
+              const picked = await window.lumina.pickDirectory({ title: '选择要导入的照片文件夹' });
+              if (picked) void startScan({ kind: 'folder', path: picked, label: picked });
+            }}
+            className="flex items-center gap-3 p-3 rounded-lg border text-left border-line bg-card hover:bg-hover"
+          >
+            <span className="w-9 h-6 rounded bg-accent text-onaccent text-2xs font-bold flex items-center justify-center shrink-0">浏览</span>
+            <span className="flex-1 min-w-0">
+              <span className="block text-xs text-txt">选择文件夹…</span>
+              <span className="block text-2xs text-txt3">从本机任意目录导入（RAW / JPG 等）</span>
+            </span>
+          </button>
+          <button
+            onClick={async () => {
+              const picked = await window.lumina.pickFile({ title: '选择要导入的照片或视频', extensions: IMPORT_FILE_EXTENSIONS });
+              if (picked) void startScan({ kind: 'file', path: picked, label: picked });
+            }}
+            className="flex items-center gap-3 p-3 rounded-lg border text-left border-line bg-card hover:bg-hover"
+          >
+            <span className="w-9 h-6 rounded bg-hover flex items-center justify-center text-txt2 text-2xs font-bold shrink-0">文件</span>
+            <span className="flex-1 min-w-0">
+              <span className="block text-xs text-txt">选择单个文件…</span>
+              <span className="block text-2xs text-txt3">只导一张照片或一个视频也可以</span>
+            </span>
+          </button>
+        </div>
+
+        {scanJob?.state === 'running' && (
+          <div className="rounded-md border border-line p-3">
+            <div className="text-2xs text-txt2 mb-1.5">正在扫描（存在性预检 · RAW/JPG 配对 · 与库内 MD5 比重）…</div>
+            <div className="h-1 rounded-full bg-hover overflow-hidden">
+              <div className="h-full bg-accent transition-all" style={{ width: `${scanJob.progress}%` }} />
             </div>
           </div>
         )}
-      </aside>
 
-      {/* 主区 */}
-      <section className="flex-1 min-w-0 flex flex-col p-4 overflow-y-auto">
-        {step === 1 && (
-          <SourceStep
-            volumes={volumes.data ?? []}
-            recent={recent.data ?? []}
-            scanning={scanJob?.state === 'running'}
-            scanProgress={scanJob?.progress ?? 0}
-            scanResult={scanResult}
-            selectedPath={source?.path ?? null}
-            onPick={startScan}
-          />
+        {/* 扫描摘要（真实结果） */}
+        {scanResult && (
+          <div className="rounded-lg border border-line bg-card p-3.5">
+            <div className="flex items-baseline justify-between mb-2">
+              <span className="text-xs text-txt">
+                扫描摘要{source ? <span className="num text-txt3"> · {source.label}</span> : null}
+              </span>
+              <span className="text-2xs text-txt3">来源可随时更改</span>
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-xs mb-2">
+              <Stat label="文件总数" value={formatCount(scanResult.totalFiles)} />
+              <Stat label="总大小" value={formatBytes(scanResult.totalBytes)} />
+              <Stat label="RAW+JPG 配对" value={String(scanResult.rawWithJpg)} />
+              <Stat label="与库内重复" value={String(scanResult.duplicates)} accent />
+              <Stat label="伴随 JPG" value={String(scanResult.rawWithJpg)} />
+              <Stat label="读失败" value={String(scanResult.unreadable.length)} danger={scanResult.unreadable.length > 0} />
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {Object.entries(scanResult.byFormat).map(([fmt, n]) => (
+                <Chip key={fmt} label={`${fmt} ${n}`} />
+              ))}
+            </div>
+            {scanResult.unreadable.length > 0 && (
+              <div className="mt-2 rounded-md p-2 text-2xs" style={{ background: 'rgba(217,96,79,0.12)', color: 'var(--Lumina-Tokens-danger)' }}>
+                ⚠ {scanResult.unreadable.length} 个文件夹/文件读失败（已标红计入摘要，不中断扫描）
+              </div>
+            )}
+          </div>
         )}
-        {step === 2 && <SummaryStep scanResult={scanResult} />}
-        {step === 3 && (
-          <TargetStep
-            target={target}
-            setTarget={setTarget}
-            backupEnabled={backupEnabled}
-            setBackupEnabled={setBackupEnabled}
-            backupTarget={backupTarget}
-            setBackupTarget={setBackupTarget}
-            backupTiming={backupTiming}
-            setBackupTiming={setBackupTiming}
-            verifyMd5={verifyMd5}
-            setVerifyMd5={setVerifyMd5}
-            check={targetCheck}
-            requiredBytes={scanResult?.totalBytes ?? 0}
-          />
+
+        {/* 导入设置（全部随手可改，无步骤门槛） */}
+        <div className="rounded-lg border border-line bg-card p-4 grid grid-cols-2 gap-x-6 gap-y-3">
+          <div>
+            <label className="text-2xs text-txt3 block mb-1">主库路径（照片将复制到这里进入图库）</label>
+            <input
+              value={target}
+              onChange={(e) => setTarget(e.target.value)}
+              className="w-full h-8 px-2.5 rounded-md border border-line bg-panel text-xs text-txt focus:outline-none focus:border-accent num"
+            />
+          </div>
+          <div>
+            <label className="text-2xs text-txt3 block mb-1.5">重命名模板</label>
+            <div className="flex flex-wrap gap-1.5">
+              {TEMPLATES.map((t) => (
+                <Chip key={t.template} label={t.label} active={template === t.template} onClick={() => setTemplate(t.template)} />
+              ))}
+            </div>
+          </div>
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-2xs text-txt2">备份到第二位置（可选）</span>
+              <Toggle checked={backupEnabled} onChange={setBackupEnabled} label="启用" />
+            </div>
+            {backupEnabled ? (
+              <div className="flex flex-col gap-1.5">
+                <input
+                  value={backupTarget}
+                  onChange={(e) => setBackupTarget(e.target.value)}
+                  placeholder="NAS / 移动硬盘等任意可写位置"
+                  className="w-full h-8 px-2.5 rounded-md border border-line bg-panel text-xs text-txt focus:outline-none focus:border-accent num"
+                />
+                <div className="flex items-center gap-2">
+                  <Chip label="导入时" active={backupTiming === 'onImport'} onClick={() => setBackupTiming('onImport')} />
+                  <Chip label="每晚 03:00" active={backupTiming === 'nightly'} onClick={() => setBackupTiming('nightly')} />
+                  <Toggle checked={verifyMd5} onChange={setVerifyMd5} label="MD5 校验" />
+                </div>
+              </div>
+            ) : (
+              <div className="text-2xs text-txt3">关闭 = 仅导入主库；开启后备份路径任填（NAS / 移动硬盘…）</div>
+            )}
+          </div>
+          <div>
+            <div className="text-2xs text-txt2 mb-1.5">导入后动作</div>
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-2xs text-txt2">自动进入精选模式</span>
+              <Toggle checked={enterCulling} onChange={setEnterCulling} />
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-2xs text-txt2">套用「风光 · 基础」预设（只写 sidecar）</span>
+              <Toggle checked={applyPreset !== null} onChange={(v) => setApplyPreset(v ? '风光 · 基础' : null)} />
+            </div>
+          </div>
+        </div>
+
+        {/* 容量预检结果 */}
+        {targetCheck && (
+          <div
+            className="rounded-md p-2.5 text-2xs flex items-center gap-2"
+            style={{
+              background: targetCheck.warning ? 'rgba(232,194,104,0.12)' : 'rgba(125,217,166,0.1)',
+              color: targetCheck.warning ? 'var(--Lumina-Tokens-accent)' : 'var(--Lumina-Tokens-success)',
+            }}
+          >
+            {targetCheck.warning ? '⚠ 主库剩余空间不足需求的 110%：' : '✓ 主库空间充足：'}
+            <span className="num">
+              需求 {formatBytes(scanResult?.totalBytes ?? 0)} · 剩余 {formatBytes(targetCheck.freeBytes)}
+            </span>
+          </div>
         )}
-        {step === 4 && <OptionsStep template={template} setTemplate={setTemplate} enterCulling={enterCulling} setEnterCulling={setEnterCulling} applyPreset={applyPreset} setApplyPreset={setApplyPreset} />}
-        {step === 'executing' && importJobId !== null && <ExecutingBar jobId={importJobId} progress={importJob?.progress ?? 0} eta={importJob?.etaMs ?? null} events={jobEvents} />}
+
+        {/* 执行中进度 */}
+        {importJobId !== null && <ExecutingBar jobId={importJobId} progress={importJob?.progress ?? 0} eta={importJob?.etaMs ?? null} events={jobEvents} />}
       </section>
 
-      {/* 右侧常驻设置面板（B2）：备份状态 / 去重策略 / 预览胶片条，跨步骤常驻 */}
+      {/* 右侧常驻设置：备份状态 / 去重策略 / 预览胶片条 */}
       <PersistentSettings backupEnabled={backupEnabled} backupTarget={backupTarget} backupTiming={backupTiming} verifyMd5={verifyMd5} />
 
-      {/* 底部按钮 */}
-      <footer className="absolute bottom-0 left-0 right-0 h-12 px-4 flex items-center justify-end gap-2 border-t border-line" style={{ background: 'var(--Lumina-Tokens-panel)' }}>
-        {step !== 'executing' && step > 1 && (
-          <Button onClick={() => setStep((step - 1) as Step)}>上一步</Button>
-        )}
-        {step === 1 && (
-          <Button variant="primary" disabled={!scanResult || scanResult.totalFiles === 0} onClick={() => void enterStep2()}>
-            下一步 · 检测摘要
-          </Button>
-        )}
-        {step === 2 && (
-          <Button variant="primary" disabled={!scanResult || scanResult.totalFiles === 0} onClick={() => setStep(3)}>
-            下一步 · 备份目标
-          </Button>
-        )}
-        {step === 3 && (
-          <Button variant="primary" onClick={() => setStep(4)}>
-            下一步 · 命名与去重
-          </Button>
-        )}
-        {step === 4 && (
-          <Button variant="primary" onClick={() => void startImport()}>
-            开始导入
-          </Button>
-        )}
-        {step === 'executing' && importJobId !== null && importJob?.state === 'running' && (
+      {/* 底部：单一动作位 */}
+      <footer className="absolute bottom-0 left-0 right-0 h-12 px-4 flex items-center gap-2 border-t border-line" style={{ background: 'var(--Lumina-Tokens-panel)' }}>
+        <span className="text-2xs text-txt3">
+          {scanResult
+            ? `已选 ${formatCount(scanResult.totalFiles)} 个文件 · ${formatBytes(scanResult.totalBytes)}${source ? ` · 来源 ${source.label}` : ''}`
+            : '未选择来源 —— 点上方任意卡片开始扫描'}
+        </span>
+        <div className="flex-1" />
+        {importJobId !== null && importing && (
           <Button
             variant="danger"
             onClick={async () => {
@@ -287,6 +356,9 @@ export default function IngestWizard() {
             取消导入
           </Button>
         )}
+        <Button variant="primary" disabled={!canStart} onClick={() => void startImport()}>
+          {importing ? '导入中…' : '开始导入'}
+        </Button>
       </footer>
 
       {/* 完成弹窗（成功 N · 跳过重复 N · 失败 N）；失败必须给出可读原因（R3） */}
@@ -314,7 +386,7 @@ export default function IngestWizard() {
           </div>
         )}
         <div className="flex justify-end gap-2 mt-4">
-          <Button onClick={() => setSummary(null)}>留在向导</Button>
+          <Button onClick={() => setSummary(null)}>留在本页</Button>
           <Button variant="primary" onClick={() => void finishImport()}>
             进入图库
           </Button>
@@ -389,44 +461,7 @@ export default function IngestWizard() {
   );
 }
 
-// ---------- Step 2 · 检测摘要（B2 独立步骤） ----------
-
-function SummaryStep({ scanResult }: { scanResult: ScanSourceResult | null }) {
-  if (!scanResult) {
-    return (
-      <div className="text-2xs text-txt3 py-10 text-center">
-        尚无扫描结果 —— 回「选择来源」挑一张卡或文件夹开始扫描。
-      </div>
-    );
-  }
-  return (
-    <div className="max-w-xl rounded-lg border border-line bg-card p-4">
-      <div className="flex items-baseline justify-between mb-3">
-        <span className="text-xs text-txt">检测摘要</span>
-        <span className="text-2xs text-txt3">数据来自扫描任务真实结果</span>
-      </div>
-      <div className="grid grid-cols-3 gap-2 text-xs mb-3">
-        <Stat label="文件总数" value={formatCount(scanResult.totalFiles)} />
-        <Stat label="总大小" value={formatBytes(scanResult.totalBytes)} />
-        <Stat label="RAW+JPG 配对" value={String(scanResult.rawWithJpg)} />
-        <Stat label="与库内重复" value={scanResult.duplicates > 0 ? String(scanResult.duplicates) : '—'} accent />
-        <Stat label="伴随 JPG" value={String(scanResult.rawWithJpg)} />
-        <Stat label="读失败" value={String(scanResult.unreadable.length)} danger={scanResult.unreadable.length > 0} />
-      </div>
-      <div className="flex flex-wrap gap-1.5">
-        {Object.entries(scanResult.byFormat).map(([fmt, n]) => (
-          <Chip key={fmt} label={`${fmt} ${n}`} />
-        ))}
-      </div>
-      <div className="mt-3 text-2xs text-txt3">
-        去重策略：MD5 相同默认跳过并计数（右栏常驻面板可核对）；重复数在导入阶段按 MD5 判定，
-        扫描阶段只统计文件与配对。读失败文件夹将在下一步前弹出三选项处理，不静默跳过。
-      </div>
-    </div>
-  );
-}
-
-// ---------- 右侧常驻设置（B2） ----------
+// ---------- 右侧常驻设置 ----------
 
 function PersistentSettings({ backupEnabled, backupTarget, backupTiming, verifyMd5 }: { backupEnabled: boolean; backupTarget: string; backupTiming: 'onImport' | 'nightly'; verifyMd5: boolean }) {
   // 预览胶片条：真实数据 = 图库首页缓存（导入完成后 refresh 即显示新入库照片）
@@ -438,7 +473,7 @@ function PersistentSettings({ backupEnabled, backupTarget, backupTiming, verifyM
         <div className="rounded-md border border-line bg-card p-2.5 text-2xs flex flex-col gap-1">
           <span className={backupEnabled ? 'text-success' : 'text-txt3'}>{backupEnabled ? '✓ 已启用第二位置备份' : '未启用（仅导入主库）'}</span>
           {backupEnabled && <span className="num text-txt3">目标：{backupTarget || '（未填写）'}</span>}
-          <span className="text-txt3">{backupEnabled ? `时机：${backupTiming === 'onImport' ? '导入时逐文件' : '每晚 03:00 定时'}` : '是否备份、备份到哪，由你在「目标与备份」步骤决定'}</span>
+          <span className="text-txt3">{backupEnabled ? `时机：${backupTiming === 'onImport' ? '导入时逐文件' : '每晚 03:00 定时'}` : '是否备份、备份到哪，随时可在左侧改'}</span>
           <span className="text-txt3">MD5 校验：{verifyMd5 ? '导入即校验' : '关闭'}</span>
         </div>
       </div>
@@ -447,7 +482,7 @@ function PersistentSettings({ backupEnabled, backupTarget, backupTiming, verifyM
         <div className="rounded-md border border-line bg-card p-2.5 text-2xs flex flex-col gap-1">
           <span className="text-txt2">MD5 相同 → 跳过并计数</span>
           <span className="text-txt2">RAW + JPG → 配对为一条目（固定开启）</span>
-          <span className="text-txt3">重命名模板见「命名与去重」步骤</span>
+          <span className="text-txt3">重命名模板在左侧「重命名模板」处改</span>
         </div>
       </div>
       <div className="min-h-0">
@@ -462,142 +497,9 @@ function PersistentSettings({ backupEnabled, backupTarget, backupTiming, verifyM
   );
 }
 
-// ---------- Step 1 · 来源 ----------
-
-function SourceStep({
-  volumes,
-  recent,
-  scanning,
-  scanProgress,
-  scanResult,
-  selectedPath,
-  onPick,
-}: {
-  volumes: VolumeInfo[];
-  recent: string[];
-  scanning: boolean;
-  scanProgress: number;
-  scanResult: ScanSourceResult | null;
-  /** 当前已选来源路径（用于高亮；null = 尚未选择） */
-  selectedPath: string | null;
-  onPick: (p: SourcePick) => void;
-}) {
-  const removable = volumes.filter((v) => v.isRemovable);
-  return (
-    <div className="flex gap-4">
-      <div className="flex-1 flex flex-col gap-3">
-        {removable.map((v) => (
-          <button
-            key={v.path}
-            onClick={() => onPick({ kind: 'volume', path: v.path, label: v.label })}
-            className={`flex items-center gap-3 p-3 rounded-lg border text-left ${sourceEquals(v.path, selectedPath) ? 'border-accent bg-[var(--Lumina-Tokens-accentSoft)]' : 'border-line bg-card hover:bg-hover'}`}
-          >
-            <span className="w-9 h-6 rounded bg-accent text-onaccent text-2xs font-bold flex items-center justify-center">SD</span>
-            <span className="flex-1">
-              <span className="block text-xs text-txt">{v.label}</span>
-              <span className="block text-2xs text-txt3 num">
-                {formatBytes(v.totalBytes)} · 剩余 {formatBytes(v.freeBytes)}
-              </span>
-            </span>
-            <span className="text-2xs text-accent">{scanProgress > 0 && scanProgress < 100 ? `${scanProgress}%` : '扫描 →'}</span>
-          </button>
-        ))}
-
-        <button
-          onClick={async () => {
-            const picked = await window.lumina.pickDirectory({ title: '选择要导入的照片文件夹' });
-            if (picked) onPick({ kind: 'folder', path: picked, label: picked });
-          }}
-          className="flex items-center gap-3 p-3 rounded-lg border text-left border-line bg-card hover:bg-hover"
-        >
-          <span className="w-9 h-6 rounded bg-accent text-onaccent text-2xs font-bold flex items-center justify-center">浏览</span>
-          <span className="flex-1">
-            <span className="block text-xs text-txt">选择文件夹…</span>
-            <span className="block text-2xs text-txt3">从本机任意目录导入照片（RAW / JPG 等）</span>
-          </span>
-          <span className="text-2xs text-accent">浏览 →</span>
-        </button>
-        <button
-          onClick={async () => {
-            const picked = await window.lumina.pickFile({
-              title: '选择要导入的照片或视频',
-              extensions: IMPORT_FILE_EXTENSIONS,
-            });
-            if (picked) onPick({ kind: 'file', path: picked, label: picked });
-          }}
-          className="flex items-center gap-3 p-3 rounded-lg border text-left border-line bg-card hover:bg-hover"
-        >
-          <span className="w-9 h-6 rounded bg-hover flex items-center justify-center text-txt2 text-2xs font-bold">文件</span>
-          <span className="flex-1">
-            <span className="block text-xs text-txt">选择单个文件…</span>
-            <span className="block text-2xs text-txt3">只导一张照片或一个视频也可以（RAW / JPG / MP4 等）</span>
-          </span>
-          <span className="text-2xs text-accent">浏览 →</span>
-        </button>
-        <button
-          disabled={!recent[0]}
-          onClick={() => recent[0] && onPick({ kind: 'folder', path: recent[0], label: recent[0] })}
-          className={`flex items-center gap-3 p-3 rounded-lg border text-left ${
-            recent[0] && sourceEquals(recent[0], selectedPath)
-              ? 'border-accent bg-[var(--Lumina-Tokens-accentSoft)]'
-              : recent[0]
-                ? 'border-line bg-card hover:bg-hover'
-                : 'border-line bg-card opacity-50 cursor-not-allowed'
-          }`}
-        >
-          <span className="w-9 h-6 rounded bg-hover flex items-center justify-center text-txt3">
-            <Icon name="folder" size={14} />
-          </span>
-          <span className="flex-1">
-            <span className="block text-xs text-txt">文件夹 · {recent[0] ?? '（无最近路径）'}</span>
-            <span className="block text-2xs text-txt3">最近使用</span>
-          </span>
-        </button>
-
-        {scanning && (
-          <div className="rounded-md border border-line p-3">
-            <div className="text-2xs text-txt2 mb-1.5">正在扫描（存在性预检 · RAW/JPG 配对 · 与库内 MD5 比重）…</div>
-            <div className="h-1 rounded-full bg-hover overflow-hidden">
-              <div className="h-full bg-accent transition-all" style={{ width: `${scanProgress}%` }} />
-            </div>
-          </div>
-        )}
-
-        {scanResult && (
-          <div className="rounded-lg border border-line bg-card p-3.5">
-            <div className="flex items-baseline justify-between mb-2">
-              <span className="text-xs text-txt">扫描摘要</span>
-              <span className="text-2xs text-txt3">来源可随时更改</span>
-            </div>
-            <div className="grid grid-cols-3 gap-2 text-xs mb-2">
-              <Stat label="文件总数" value={formatCount(scanResult.totalFiles)} />
-              <Stat label="总大小" value={formatBytes(scanResult.totalBytes)} />
-              <Stat label="RAW+JPG 配对" value={String(scanResult.rawWithJpg)} />
-              <Stat label="与库内重复" value={String(scanResult.duplicates)} accent />
-              <Stat label="伴随 JPG" value={String(scanResult.rawWithJpg)} />
-              <Stat label="读失败" value={String(scanResult.unreadable.length)} danger={scanResult.unreadable.length > 0} />
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {Object.entries(scanResult.byFormat).map(([fmt, n]) => (
-                <Chip key={fmt} label={`${fmt} ${n}`} />
-              ))}
-            </div>
-            {scanResult.unreadable.length > 0 && (
-              <div className="mt-2 rounded-md p-2 text-2xs" style={{ background: 'rgba(217,96,79,0.12)', color: 'var(--Lumina-Tokens-danger)' }}>
-                ⚠ {scanResult.unreadable.length} 个文件夹/文件读失败（已标红计入摘要，不中断扫描）
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 /**
  * 路径等价比较（来源卡片高亮用）。
- * 旧实现是 `void path; return false;` —— 来源卡永远不会被选中（永远是「未选」外观）。
- * Windows 上同一目录可能写作 `E:/DCIM`、`E:\DCIM\`、`e:/dcim`，这里统一分隔符/大小写/尾斜杠后比较。
+ * Windows 上同一目录可能写作 `E:/DCIM`、`E:\DCIM\`、`e:/dcim`，统一分隔符/大小写/尾斜杠后比较。
  */
 function normalizePathForCompare(p: string): string {
   return p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
@@ -613,118 +515,6 @@ function Stat({ label, value, accent, danger }: { label: string; value: string; 
     <div className="rounded-md px-2.5 py-2" style={{ background: 'var(--Lumina-Tokens-hover)' }}>
       <div className="text-2xs text-txt3">{label}</div>
       <div className={`num text-sm ${danger ? 'text-danger' : accent ? 'text-accent' : 'text-txt'}`}>{value}</div>
-    </div>
-  );
-}
-
-// ---------- Step 2 · 目标与备份 ----------
-
-function TargetStep(props: {
-  target: string;
-  setTarget: (v: string) => void;
-  backupEnabled: boolean;
-  setBackupEnabled: (v: boolean) => void;
-  backupTarget: string;
-  setBackupTarget: (v: string) => void;
-  backupTiming: 'onImport' | 'nightly';
-  setBackupTiming: (v: 'onImport' | 'nightly') => void;
-  verifyMd5: boolean;
-  setVerifyMd5: (v: boolean) => void;
-  check: { freeBytes: number; warning: boolean } | null;
-  requiredBytes: number;
-}) {
-  return (
-    <div className="max-w-xl flex flex-col gap-4">
-      <div className="rounded-lg border border-line bg-card p-4">
-        <div className="text-xs text-txt mb-2">目标与备份（备份完全可选）</div>
-        <label className="text-2xs text-txt3 block mb-1">主库路径（照片将复制到这里进入图库）</label>
-        <input
-          value={props.target}
-          onChange={(e) => props.setTarget(e.target.value)}
-          className="w-full h-8 px-2.5 rounded-md border border-line bg-panel text-xs text-txt focus:outline-none focus:border-accent num"
-        />
-        <div className="mt-3 flex items-center justify-between">
-          <div>
-            <div className="text-xs text-txt">备份到第二位置（NAS / 移动硬盘…）</div>
-            <div className="text-2xs text-txt3">关闭 = 仅导入主库；开启 = 导入时额外复制一份，路径任填</div>
-          </div>
-          <Toggle checked={props.backupEnabled} onChange={props.setBackupEnabled} label="启用" />
-        </div>
-        {props.backupEnabled && (
-          <div className="mt-2.5 flex flex-col gap-2">
-            <label className="text-2xs text-txt3 block">备份目标路径（NAS、移动硬盘等任意可写位置）</label>
-            <input
-              value={props.backupTarget}
-              onChange={(e) => props.setBackupTarget(e.target.value)}
-              placeholder="例如 N:/NAS-Photos/Lumina 或 E:/Backup/Photos"
-              className="w-full h-8 px-2.5 rounded-md border border-line bg-panel text-xs text-txt focus:outline-none focus:border-accent num"
-            />
-            <div className="flex items-center gap-2">
-              <Chip label="导入时" active={props.backupTiming === 'onImport'} onClick={() => props.setBackupTiming('onImport')} />
-              <Chip label="每晚 03:00" active={props.backupTiming === 'nightly'} onClick={() => props.setBackupTiming('nightly')} />
-              <Toggle checked={props.verifyMd5} onChange={props.setVerifyMd5} label="导入即 MD5 校验" />
-            </div>
-          </div>
-        )}
-        {props.check && (
-          <div
-            className="mt-3 rounded-md p-2.5 text-2xs flex items-center gap-2"
-            style={{
-              background: props.check.warning ? 'rgba(232,194,104,0.12)' : 'rgba(125,217,166,0.1)',
-              color: props.check.warning ? 'var(--Lumina-Tokens-accent)' : 'var(--Lumina-Tokens-success)',
-            }}
-          >
-            {props.check.warning ? '⚠ 剩余空间不足需求的 110%：' : '✓ 空间充足：'}
-            <span className="num">
-              需求 {formatBytes(props.requiredBytes)} · 剩余 {formatBytes(props.check.freeBytes)}
-            </span>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ---------- Step 3 · 选项 ----------
-
-function OptionsStep(props: {
-  template: string;
-  setTemplate: (v: string) => void;
-  enterCulling: boolean;
-  setEnterCulling: (v: boolean) => void;
-  applyPreset: string | null;
-  setApplyPreset: (v: string | null) => void;
-}) {
-  return (
-    <div className="max-w-xl flex flex-col gap-4">
-      <div className="rounded-lg border border-line bg-card p-4">
-        <div className="text-xs text-txt mb-2">重命名模板</div>
-        <div className="flex flex-wrap gap-1.5 mb-2">
-          {TEMPLATES.map((t) => (
-            <Chip key={t.template} label={t.label} active={props.template === t.template} onClick={() => props.setTemplate(t.template)} />
-          ))}
-        </div>
-        <div className="text-2xs text-txt3 num">引擎模板：{props.template}</div>
-        <div className="text-2xs text-txt3 num mt-1">预览：2026-04-25_ILCE-7RM5_DSC00812.RW2（无 EXIF 机型时该段留空）</div>
-      </div>
-      <div className="rounded-lg border border-line bg-card p-4 flex items-center justify-between">
-        <div>
-          <div className="text-xs text-txt">去重与配对</div>
-          <div className="text-2xs text-txt3">MD5 相同默认跳过并计数 · RAW+JPG 配对为一条目（固定开启）</div>
-        </div>
-        <Chip label="去重：跳过" active />
-      </div>
-      <div className="rounded-lg border border-line bg-card p-4">
-        <div className="text-xs text-txt mb-3">导入后动作</div>
-        <div className="flex items-center justify-between mb-2.5">
-          <span className="text-2xs text-txt2">自动进入精选模式</span>
-          <Toggle checked={props.enterCulling} onChange={props.setEnterCulling} />
-        </div>
-        <div className="flex items-center justify-between">
-          <span className="text-2xs text-txt2">套用「风光 · 基础」预设（只写 sidecar）</span>
-          <Toggle checked={props.applyPreset !== null} onChange={(v) => props.setApplyPreset(v ? '风光 · 基础' : null)} />
-        </div>
-      </div>
     </div>
   );
 }
@@ -747,25 +537,23 @@ function ExecutingBar({
   const failed = events.filter((e) => e.status === 'failed');
   const current = events[events.length - 1];
   return (
-    <div className="max-w-xl flex flex-col gap-3">
-      <div className="rounded-lg border border-line bg-card p-4">
-        <div className="flex items-baseline justify-between mb-2">
-          <span className="text-xs text-txt">正在导入…（任务 {jobId}）</span>
-          <span className="num text-xs text-accent">{progress}% · 预计剩余 {formatEta(eta)}</span>
-        </div>
-        <div className="h-1.5 rounded-full bg-hover overflow-hidden mb-2">
-          <div className="h-full bg-accent transition-all" style={{ width: `${progress}%` }} />
-        </div>
-        <div className="text-2xs text-txt3 num truncate">{current ? `${current.status === 'ok' ? '✓' : current.status === 'duplicate' ? '⧉' : '✕'} ${current.path}` : '准备中…'}</div>
-        <div className="flex gap-3 mt-2 text-2xs">
-          <span className="text-success">成功 {ok}</span>
-          <span className="text-txt2">跳过重复 {dup}</span>
-          <span className={failed.length > 0 ? 'text-danger' : 'text-txt3'}>失败 {failed.length}</span>
-        </div>
+    <div className="rounded-lg border border-line bg-card p-4">
+      <div className="flex items-baseline justify-between mb-2">
+        <span className="text-xs text-txt">正在导入…（任务 {jobId}）</span>
+        <span className="num text-xs text-accent">{progress}% · 预计剩余 {formatEta(eta)}</span>
+      </div>
+      <div className="h-1.5 rounded-full bg-hover overflow-hidden mb-2">
+        <div className="h-full bg-accent transition-all" style={{ width: `${progress}%` }} />
+      </div>
+      <div className="text-2xs text-txt3 num truncate">{current ? `${current.status === 'ok' ? '✓' : current.status === 'duplicate' ? '⧉' : '✕'} ${current.path}` : '准备中…'}</div>
+      <div className="flex gap-3 mt-2 text-2xs">
+        <span className="text-success">成功 {ok}</span>
+        <span className="text-txt2">跳过重复 {dup}</span>
+        <span className={failed.length > 0 ? 'text-danger' : 'text-txt3'}>失败 {failed.length}</span>
       </div>
       {failed.length > 0 && (
-        <div className="rounded-lg border border-line bg-card p-3">
-          <div className="text-2xs text-danger mb-1.5">失败清单（单文件失败不中断整批）</div>
+        <div className="mt-2 rounded-md border border-line p-2">
+          <div className="text-2xs text-danger mb-1">失败清单（单文件失败不中断整批）</div>
           {failed.slice(-5).map((f, i) => (
             <div key={i} className="text-2xs text-txt3 num truncate">
               ✕ {f.path} {f.error ? `· ${f.error}` : ''}
