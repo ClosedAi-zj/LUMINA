@@ -29,28 +29,7 @@ import { NavigatorCard, PresetCard, SnapshotCard, LayersCard } from './panels/Le
 import { SubBarPortal } from '../../components/shell';
 import { fileUrl } from '../../api/rpc-client';
 import { useMemo } from 'react';
-import type { EditParams } from '../../api/protocol';
-
-/** WP-B7：复制/粘贴设置的会话级剪贴板（LR 语义：修图设置独立于系统剪贴板） */
-let settingsClipboard: EditParams | null = null;
-
-/** G1 菜单接线：编辑 ▸ 复制设置 与 Ctrl+C 共用同一会话剪贴板（无会话/无参数时为 no-op） */
-export function copyDevelopSettings(): boolean {
-  const params = useDevelop.getState().params;
-  if (!params) return false;
-  settingsClipboard = structuredClone(params);
-  return true;
-}
-
-/** G1 菜单接线：编辑 ▸ 粘贴设置 与 Ctrl+V 共用同一会话剪贴板 */
-export async function pasteDevelopSettings(): Promise<void> {
-  if (!settingsClipboard) {
-    useJobStore.getState().toast('剪贴板里还没有设置：先在任一照片上 Ctrl+C 复制', 'warn', 3000);
-    return;
-  }
-  await useDevelop.getState().applyPatch(structuredClone(settingsClipboard), true, '粘贴设置');
-  useJobStore.getState().toast('已粘贴设置', 'success', 2000);
-}
+import { copyDevelopSettings, pasteDevelopSettings } from './clipboard';
 
 export default function DevelopPage() {
   const photoId = useDevelop((s) => s.photoId);

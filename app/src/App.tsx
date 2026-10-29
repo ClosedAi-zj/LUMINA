@@ -2,7 +2,7 @@
  * LUMINA App 根组件：握手引导、模块路由、全局顶栏、事件泵。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { ThemeProvider, useTheme } from './theme/ThemeProvider';
 import { api } from './api/engine';
 import { errText, fileUrl } from './api/rpc-client';
@@ -18,18 +18,23 @@ import { WindowControls } from './components/WindowControls';
 import ErrorBoundary from './components/ErrorBoundary';
 import BootProgress from './components/BootProgress';
 import { formatCount } from './utils/format';
-import LibraryPage from './modules/library/LibraryPage';
-import DevelopPage from './modules/develop/DevelopPage';
-import IngestWizard from './modules/ingest/IngestWizard';
-import HealthPage from './modules/health/HealthPage';
-import CullingPage from './modules/culling/CullingPage';
-import MapPage from './modules/map/MapPage';
-import ExportPage from './modules/export/ExportPage';
-import TimelapsePage from './modules/timelapse/TimelapsePage';
-import LandscapePage from './modules/landscape/LandscapePage';
-import PortfolioPage from './modules/portfolio/PortfolioPage';
-import GalleryPage from './modules/gallery/GalleryPage';
-import SlideshowPage from './modules/slideshow/SlideshowPage';
+
+// 代码分割（v1.3.0 性能优化）：12 个页面模块改为 React.lazy 动态加载，
+// 首屏只解析「公共代码 + 当前视图」，其余模块在用户导航到对应视图时才按需拉取。
+// 改造前整个 App 被 Vite 打进单一初始 chunk（index-*.js ≈ 612KB）；改造后初始 chunk
+// 只剩公共依赖，各页面各自成 chunk，首屏解析/求值量显著下降。
+const LibraryPage = lazy(() => import('./modules/library/LibraryPage'));
+const DevelopPage = lazy(() => import('./modules/develop/DevelopPage'));
+const IngestWizard = lazy(() => import('./modules/ingest/IngestWizard'));
+const HealthPage = lazy(() => import('./modules/health/HealthPage'));
+const CullingPage = lazy(() => import('./modules/culling/CullingPage'));
+const MapPage = lazy(() => import('./modules/map/MapPage'));
+const ExportPage = lazy(() => import('./modules/export/ExportPage'));
+const TimelapsePage = lazy(() => import('./modules/timelapse/TimelapsePage'));
+const LandscapePage = lazy(() => import('./modules/landscape/LandscapePage'));
+const PortfolioPage = lazy(() => import('./modules/portfolio/PortfolioPage'));
+const GalleryPage = lazy(() => import('./modules/gallery/GalleryPage'));
+const SlideshowPage = lazy(() => import('./modules/slideshow/SlideshowPage'));
 
 /**
  * v1.2.0 外壳信息架构（UI 迭代 ④）：顶部模块切换对齐 LR 七大模块 tab 形态
@@ -356,6 +361,15 @@ function ModulePlaceholder({ module }: { module: ModuleKey }) {
   );
 }
 
+/** 视图按需加载时的轻量占位：不引重依赖，仅一行提示，避免 Suspense 切换时闪烁变重。 */
+function PageFallback() {
+  return (
+    <div className="h-full flex items-center justify-center">
+      <span className="text-2xs text-txt3">加载中…</span>
+    </div>
+  );
+}
+
 function Shell() {
   const view = useUi((s) => s.view);
   const [bootError, setBootError] = useState<string | null>(null);
@@ -569,7 +583,7 @@ function Shell() {
             {modulePlaceholder ? (
               <ModulePlaceholder module={modulePlaceholder} />
             ) : (
-              <>
+              <Suspense fallback={<PageFallback />}>
                 {view === 'library' && <LibraryPage />}
                 {view === 'develop' && <DevelopPage />}
                 {view === 'ingest' && <IngestWizard />}
@@ -582,7 +596,7 @@ function Shell() {
                 {view === 'portfolio' && <PortfolioPage />}
                 {view === 'gallery' && <GalleryPage />}
                 {view === 'slideshow' && <SlideshowPage />}
-              </>
+              </Suspense>
             )}
           </ErrorBoundary>
         </div>

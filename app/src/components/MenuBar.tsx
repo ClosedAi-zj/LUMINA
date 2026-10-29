@@ -13,7 +13,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useUi } from '../store/uiStore';
 import { useDevelop } from '../store/developStore';
 import { useJobStore } from '../store/jobStore';
-import { copyDevelopSettings, pasteDevelopSettings } from '../modules/develop/DevelopPage';
+import { copyDevelopSettings, pasteDevelopSettings } from '../modules/develop/clipboard';
 
 type MenuEntry =
   | { kind: 'item'; label: string; hint?: string; checked?: boolean; disabled?: boolean; action: () => void }
